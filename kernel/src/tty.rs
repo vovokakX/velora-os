@@ -213,6 +213,57 @@ pub fn read(max: usize) -> Vec<u8> {
     bytes
 }
 
+/// Start of a UTF-8 character left incomplete at the end of the last
+/// console write (programs may split output at any byte).
+static PARTIAL: SpinLock<([u8; 4], usize)> = SpinLock::new(([0; 4], 0));
+
+/// Length of an incomplete UTF-8 sequence at the end of `b` (0 if the
+/// data ends on a character boundary).
+fn incomplete_tail(b: &[u8]) -> usize {
+    for back in 1..=b.len().min(3) {
+        let c = b[b.len() - back];
+        if c & 0xc0 == 0x80 {
+            continue;
+        }
+        let need = match c {
+            0xf0..=0xf7 => 4,
+            0xe0..=0xef => 3,
+            0xc0..=0xdf => 2,
+            _ => 1,
+        };
+        return if need > back { back } else { 0 };
+    }
+    0
+}
+
+/// Writes program output to the console. Invalid UTF-8 is shown as
+/// U+FFFD; a character split between two writes is kept until the rest
+/// arrives.
+pub fn write(bytes: &[u8]) {
+    let mut data = Vec::with_capacity(bytes.len() + 4);
+    {
+        let mut p = PARTIAL.lock();
+        let n = p.1;
+        data.extend_from_slice(&p.0[..n]);
+        p.1 = 0;
+    }
+    data.extend_from_slice(bytes);
+    let keep = incomplete_tail(&data);
+    if keep > 0 {
+        let mut p = PARTIAL.lock();
+        let start = data.len() - keep;
+        p.0[..keep].copy_from_slice(&data[start..]);
+        p.1 = keep;
+        data.truncate(start);
+    }
+    for chunk in data.utf8_chunks() {
+        kprint!("{}", chunk.valid());
+        if !chunk.invalid().is_empty() {
+            kprint!("\u{fffd}");
+        }
+    }
+}
+
 /// Console size in characters.
 pub fn size() -> (u64, u64) {
     crate::console::screen_size().map_or((80, 25), |(c, r)| (c as u64, r as u64))

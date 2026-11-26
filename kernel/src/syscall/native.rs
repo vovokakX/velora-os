@@ -5,7 +5,7 @@ use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::exec;
 use crate::mm::PAGE_SIZE;
 use crate::mm::paging::UserKind;
-use crate::{fs, kprint, sched, time, tty};
+use crate::{fs, sched, time, tty};
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_abi::{StrRef, Timespec, clock, errno, map, nr, prot};
@@ -105,13 +105,7 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
     let Some(bytes) = uaccess::read_slice(buf, len) else {
         return -errno::EFAULT;
     };
-    // Invalid UTF-8 is shown as U+FFFD instead of being rejected.
-    for chunk in bytes.utf8_chunks() {
-        kprint!("{}", chunk.valid());
-        if !chunk.invalid().is_empty() {
-            kprint!("\u{fffd}");
-        }
-    }
+    tty::write(bytes);
     len as i64
 }
 
