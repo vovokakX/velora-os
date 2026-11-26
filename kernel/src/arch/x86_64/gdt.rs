@@ -149,3 +149,21 @@ pub fn ist_top(slot: u8) -> u64 {
     let ist = unsafe { (*TSS.get()).ist };
     ist[slot as usize - 1]
 }
+
+/// Sets the stack the CPU switches to on an interrupt from ring 3.
+pub fn set_rsp0(top: u64) {
+    // SAFETY: TSS is a static; single CPU, called with interrupts disabled
+    // during a context switch. Packed fields are copied, not borrowed.
+    unsafe {
+        let tss = &mut *TSS.get();
+        let mut rsp = tss.rsp;
+        rsp[0] = top;
+        tss.rsp = rsp;
+    }
+}
+
+pub fn rsp0() -> u64 {
+    // SAFETY: plain read of a static.
+    let rsp = unsafe { (*TSS.get()).rsp };
+    rsp[0]
+}

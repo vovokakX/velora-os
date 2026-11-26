@@ -91,6 +91,12 @@ isr_stubs:
     .endr
 
 isr_common:
+    # Coming from ring 3 (CS at 24(%rsp) has RPL 3): switch GS to the
+    # kernel's per-CPU data. Returning to ring 3 swaps it back below.
+    testb $3, 24(%rsp)
+    jz 1f
+    swapgs
+1:
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -125,6 +131,10 @@ isr_common:
     popq %rbx
     popq %rax
     addq $16, %rsp
+    testb $3, 8(%rsp)
+    jz 2f
+    swapgs
+2:
     iretq
 "#,
     options(att_syntax)
