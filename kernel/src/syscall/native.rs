@@ -90,10 +90,14 @@ fn read(fd: u64, buf: u64, len: u64) -> i64 {
 }
 
 fn clock_gettime(id: u64, out: u64) -> i64 {
-    if id != clock::MONOTONIC {
-        return -errno::EINVAL;
-    }
-    let ns = time::uptime_ns();
+    let ns = match id {
+        clock::MONOTONIC => time::uptime_ns(),
+        clock::REALTIME => match time::realtime_ns() {
+            Some(ns) => ns,
+            None => return -errno::EAGAIN,
+        },
+        _ => return -errno::EINVAL,
+    };
     let ts = Timespec {
         seconds: ns / 1_000_000_000,
         nanoseconds: ns % 1_000_000_000,
