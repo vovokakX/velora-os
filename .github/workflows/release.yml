@@ -11,16 +11,20 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Same environment as the main CI check (see ci.yml and issue #19).
+    container:
+      image: fedora:41
+      options: --device /dev/kvm
+    env:
+      HOME: /root
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU and UEFI firmware
+      - name: Install QEMU, UEFI firmware, Rust and gh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf unzip
-
-      - name: Install Rust toolchain
-        run: rustup show active-toolchain || rustup toolchain install
+          dnf install -y qemu-system-x86-core edk2-ovmf python3 unzip curl gcc git findutils gh
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "/root/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Test before publishing
         run: ./test.sh
@@ -37,5 +41,5 @@ jobs:
         run: |
           notes="docs/releases/${TAG}.md"
           test -f "$notes" || { echo "missing $notes"; exit 1; }
-          gh release create "$TAG" velora.iso velora.iso.sha256 \
+          gh release create "$TAG" velora.iso velora.iso.sha256 -R "$GITHUB_REPOSITORY" \
             --title "Velora OS ${TAG}" --notes-file "$notes"

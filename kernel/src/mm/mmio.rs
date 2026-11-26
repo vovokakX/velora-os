@@ -42,3 +42,51 @@ pub unsafe fn read32(addr: u64) -> u32 {
 pub unsafe fn write32(addr: u64, value: u32) {
     unsafe { (addr as *mut u32).write_volatile(value) }
 }
+
+/// # Safety
+/// `addr` must be a mapped device register.
+#[inline]
+pub unsafe fn read8(addr: u64) -> u8 {
+    unsafe { (addr as *const u8).read_volatile() }
+}
+
+/// # Safety
+/// `addr` must be a mapped device register.
+#[inline]
+pub unsafe fn write8(addr: u64, value: u8) {
+    unsafe { (addr as *mut u8).write_volatile(value) }
+}
+
+/// # Safety
+/// `addr` must be a mapped device register.
+#[inline]
+pub unsafe fn read16(addr: u64) -> u16 {
+    unsafe { (addr as *const u16).read_volatile() }
+}
+
+/// # Safety
+/// `addr` must be a mapped device register.
+#[inline]
+pub unsafe fn write16(addr: u64, value: u16) {
+    unsafe { (addr as *mut u16).write_volatile(value) }
+}
+
+/// # Safety
+/// `addr` must be a mapped 64-bit device register.
+#[inline]
+pub unsafe fn read64(addr: u64) -> u64 {
+    unsafe { (addr as *const u64).read_volatile() }
+}
+
+/// 64-bit register write as two 32-bit writes (low first), which every
+/// device accepts.
+///
+/// # Safety
+/// `addr` must be a mapped 64-bit device register.
+#[inline]
+pub unsafe fn write64(addr: u64, value: u64) {
+    unsafe {
+        write32(addr, value as u32);
+        write32(addr + 4, (value >> 32) as u32);
+    }
+}

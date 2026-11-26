@@ -1,0 +1,8 @@
+[package]
+name = "velora-rtc"
+description = "Real-time clock helpers: BCD decoding and calendar arithmetic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

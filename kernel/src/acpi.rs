@@ -8,13 +8,16 @@ use crate::mm::phys_to_virt;
 use crate::sync::RacyCell;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
-use velora_acpi::{self as parse, Madt, Rsdp, SdtHeader};
+use velora_acpi::{self as parse, EcamRegion, Fadt, Madt, Rsdp, SdtHeader};
 
 pub struct Acpi {
     pub rsdp: Rsdp,
     /// (signature, physical address) of every table in the RSDT/XSDT.
     pub tables: Vec<([u8; 4], u64)>,
     pub madt: Madt,
+    /// PCI Express configuration regions (empty: use I/O ports).
+    pub mcfg: Vec<EcamRegion>,
+    pub fadt: Fadt,
 }
 
 static ACPI: RacyCell<Option<Acpi>> = RacyCell::new(None);
@@ -50,19 +53,32 @@ pub fn init() -> Result<&'static Acpi, &'static str> {
 
     let mut tables = Vec::new();
     let mut madt = None;
+    let mut mcfg = Vec::new();
+    let mut fadt = Fadt::default();
     for phys in entries {
         let Ok((bytes, h)) = table_at(phys) else {
             crate::kwarn!("acpi: skipping invalid table at {:#x}", phys);
             continue;
         };
         tables.push((h.signature, phys));
-        if &h.signature == b"APIC" {
-            madt = Some(parse::parse_madt(bytes).map_err(|_| "invalid MADT")?);
+        match &h.signature {
+            b"APIC" => madt = Some(parse::parse_madt(bytes).map_err(|_| "invalid MADT")?),
+            b"MCFG" => mcfg = parse::parse_mcfg(bytes).unwrap_or_default(),
+            b"FACP" => fadt = parse::parse_fadt(bytes).unwrap_or_default(),
+            _ => {}
         }
     }
     let madt = madt.ok_or("no MADT (APIC) table")?;
     // SAFETY: written once during single-threaded boot.
-    unsafe { *ACPI.get() = Some(Acpi { rsdp, tables, madt }) };
+    unsafe {
+        *ACPI.get() = Some(Acpi {
+            rsdp,
+            tables,
+            madt,
+            mcfg,
+            fadt,
+        })
+    };
     READY.store(true, Ordering::SeqCst);
     Ok(get())
 }

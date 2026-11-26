@@ -6,6 +6,64 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.6.0] — 2026-11-26
+
+### Что нового
+- PCI: перечисление шины с мостами и многофункциональными устройствами, определение размеров 32- и 64-битных BAR, список capabilities. Доступ через ECAM (таблица MCFG) или порты 0xCF8/0xCFC. Логика вынесена в `velora-pci` и проверяется на имитации шины.
+- Общий интерфейс дисков `BlockDevice`: чтение, запись, сброс кеша, проверка границ.
+- Драйвер virtio-blk (современный virtio 1.x) с прерываниями MSI-X: `vd0`, `vd1`, …
+- Драйвер AHCI для дисков SATA (`sd0`, …). Контроллер сбрасывается перед работой, порты CD/DVD (ATAPI) останавливаются.
+- Драйвер NVMe: очередь администрирования, очередь ввода-вывода, namespace 1, списки PRP (`nvme0n1`, …).
+- Часы реального времени (CMOS RTC) с учётом BCD, 12/24-часового режима и регистра века из FADT. Системное время UTC: `clock_gettime(REALTIME)` и `vlibc::time::realtime()`.
+- Разбор таблиц ACPI MCFG и FADT.
+- При загрузке ядро печатает найденные устройства PCI, диски и текущее время.
+- Тесты: 72 юнит-теста на хосте (10 новых: PCI, RTC, MCFG/FADT), 76 тестов ядра (8 новых), 15 проверок в `vtest`. Тестовый скрипт подключает к QEMU три диска (virtio-blk, AHCI, NVMe). Ядро читает метки, пишет и читает 200 КиБ, проверяет ошибки, а после выхода QEMU скрипт проверяет на хосте, что записи дошли до файлов-образов.
+
+- CI выполняет тесты под KVM с QEMU 9.1 (контейнер Fedora 41).
+
+### Исправления
+- На процессорах AMD первое прерывание в работающей программе останавливало систему с #GP: в регистре STAR не было RPL селектора для `sysret` (ошибка с v0.4.0, #20).
+- Порты AHCI, оставленные прошивкой включёнными (например, порт CD, с которого шла загрузка), могли писать по DMA в память, которую ядро уже использует. Теперь контроллер сбрасывается, а лишние порты останавливаются до освобождения их буферов.
+
+### Известные проблемы
+- С QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов на запросы, и чтение диска завершается по таймауту. С QEMU 9.1 и новее всё работает; причина изучается (#19). Диски AHCI и NVMe на QEMU 8.2 работают.
+- Драйверы дисков ждут окончания команды опросом и выполняют одну команду за раз. Прерывание MSI-X от virtio-blk принимается, но пока только подсчитывается (решение D21).
+- Устаревшие (legacy, до virtio 1.0) устройства virtio-blk не поддерживаются.
+- AHCI: нет передачи управления от BIOS (BOHC); на некоторых реальных машинах это может понадобиться.
+- NVMe: используется только namespace 1.
+- Поддерживается только сегмент PCI 0.
+- Часы RTC только читаются; изменить время нельзя.
+- Файловых систем на дисках пока нет (этап 7), обратиться к дискам из программ нельзя.
+
+---
+
+### What's new
+- PCI: bus enumeration across bridges and multi-function devices, sizing of 32- and 64-bit BARs, capability lists. Access through ECAM (MCFG table) or ports 0xCF8/0xCFC. The logic lives in `velora-pci` and is tested on a simulated bus.
+- A common disk interface `BlockDevice`: read, write, flush, bounds checks.
+- virtio-blk driver (modern virtio 1.x) with MSI-X interrupts: `vd0`, `vd1`, …
+- AHCI driver for SATA disks (`sd0`, …). The controller is reset before use and CD/DVD (ATAPI) ports are stopped.
+- NVMe driver: admin queue, one I/O queue, namespace 1, PRP lists (`nvme0n1`, …).
+- Real-time clock (CMOS RTC) with BCD, 12/24-hour mode and the FADT century register. System UTC time: `clock_gettime(REALTIME)` and `vlibc::time::realtime()`.
+- ACPI MCFG and FADT parsing.
+- At boot the kernel prints the PCI devices, disks and the current time.
+- Tests: 72 host unit tests (10 new: PCI, RTC, MCFG/FADT), 76 kernel tests (8 new), 15 checks in `vtest`. The test runner attaches three disks to QEMU (virtio-blk, AHCI, NVMe); the kernel reads signatures, writes and reads back 200 KiB and checks errors; after QEMU exits the runner verifies on the host that the writes reached the image files.
+
+- CI runs the tests under KVM with QEMU 9.1 (Fedora 41 container).
+
+### Fixes
+- On AMD CPUs the first interrupt in a running program stopped the system with #GP: the STAR register had no RPL in the `sysret` selector (bug since v0.4.0, #20).
+- AHCI ports left running by the firmware (such as the CD port used for booting) could write by DMA into memory the kernel already uses. The controller is now reset and unused ports are stopped before their buffers are freed.
+
+### Known issues
+- With QEMU 8.2 (Ubuntu 24.04) virtio-blk gets no answers to requests and disk reads time out. QEMU 9.1 and newer work; the cause is being investigated (#19). AHCI and NVMe disks work on QEMU 8.2.
+- Disk drivers poll for completion and run one command at a time. The virtio-blk MSI-X interrupt is received but only counted for now (decision D21).
+- Legacy (pre-1.0) virtio-blk devices are not supported.
+- AHCI: no BIOS/OS handoff (BOHC); some real machines may need it.
+- NVMe: only namespace 1 is used.
+- Only PCI segment 0 is supported.
+- The RTC is read-only; the time cannot be set.
+- There are no file systems on disks yet (stage 7); programs cannot access disks.
+
 ## [0.5.0] — 2026-11-26
 
 ### Что нового

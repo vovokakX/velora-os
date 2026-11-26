@@ -47,6 +47,8 @@ pub mod errno {
 
 /// Clock ids for `clock_gettime`.
 pub mod clock {
+    /// Wall-clock time: seconds since 1970-01-01 UTC.
+    pub const REALTIME: u64 = 0;
     /// Time since boot, never goes backwards.
     pub const MONOTONIC: u64 = 1;
 }

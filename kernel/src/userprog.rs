@@ -135,6 +135,22 @@ uprog_selfmod_start:
     .global uprog_selfmod_end
 uprog_selfmod_end:
 
+    // Exits with the RPL of its stack segment after a system call
+    // (expected 3; AMD CPUs take it from STAR on sysret).
+    .balign 16
+    .global uprog_ssrpl_start
+uprog_ssrpl_start:
+    mov eax, 4
+    syscall
+    mov ax, ss
+    movzx edi, ax
+    and edi, 3
+    xor eax, eax
+    syscall
+    ud2
+    .global uprog_ssrpl_end
+uprog_ssrpl_end:
+
     // Spins forever, counting in its data area (preemption test).
     .balign 16
     .global uprog_spin_start
@@ -268,6 +284,7 @@ programs! {
     read_kernel: uprog_kread_start, uprog_kread_end;
     privileged: uprog_cli_start, uprog_cli_end;
     self_modify: uprog_selfmod_start, uprog_selfmod_end;
+    ss_rpl: uprog_ssrpl_start, uprog_ssrpl_end;
     spin: uprog_spin_start, uprog_spin_end;
     sse: uprog_sse_start, uprog_sse_end;
     sleep_yield: uprog_sleepyield_start, uprog_sleepyield_end;

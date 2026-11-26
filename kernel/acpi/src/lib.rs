@@ -318,6 +318,70 @@ pub fn parse_madt(table: &[u8]) -> Result<Madt, Error> {
     Ok(m)
 }
 
+/// One PCI Express ECAM region from the MCFG table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EcamRegion {
+    pub base: u64,
+    pub segment: u16,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
+impl EcamRegion {
+    /// Physical address of the configuration space of a function.
+    pub fn address(&self, bus: u8, device: u8, function: u8) -> Option<u64> {
+        if bus < self.start_bus || bus > self.end_bus || device > 31 || function > 7 {
+            return None;
+        }
+        let b = (bus - self.start_bus) as u64;
+        Some(self.base + (b << 20) + ((device as u64) << 15) + ((function as u64) << 12))
+    }
+}
+
+/// Parses the MCFG table (PCI Express memory-mapped configuration).
+pub fn parse_mcfg(table: &[u8]) -> Result<Vec<EcamRegion>, Error> {
+    let h = validate_table(table)?;
+    if &h.signature != b"MCFG" {
+        return Err(Error::BadSignature);
+    }
+    let len = h.length as usize;
+    if len < HEADER_LEN + 8 || !(len - HEADER_LEN - 8).is_multiple_of(16) {
+        return Err(Error::BadLength);
+    }
+    Ok(table[HEADER_LEN + 8..len]
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|e| EcamRegion {
+            base: u64_at(e, 0),
+            segment: u16_at(e, 8),
+            start_bus: e[10],
+            end_bus: e[11],
+        })
+        .collect())
+}
+
+/// The few FADT fields the kernel uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Fadt {
+    /// CMOS register holding the century, 0 if not provided.
+    pub century_register: u8,
+    /// IA-PC boot architecture flags (bit 1: 8042 present).
+    pub iapc_boot_flags: u16,
+}
+
+pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
+    let h = validate_table(table)?;
+    if &h.signature != b"FACP" {
+        return Err(Error::BadSignature);
+    }
+    let len = h.length as usize;
+    Ok(Fadt {
+        century_register: if len > 108 { table[108] } else { 0 },
+        iapc_boot_flags: if len > 110 { u16_at(table, 109) } else { 0 },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,5 +560,33 @@ mod tests {
             parse_madt(&table(b"FACP", &[0; 8])),
             Err(Error::BadSignature)
         );
+    }
+    #[test]
+    fn mcfg_regions() {
+        let mut body = vec![0u8; 8];
+        body.extend_from_slice(&0xb000_0000u64.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&[0, 255, 0, 0, 0, 0]);
+        let r = parse_mcfg(&table(b"MCFG", &body)).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].address(0, 0, 0), Some(0xb000_0000));
+        assert_eq!(
+            r[0].address(1, 2, 3),
+            Some(0xb000_0000 + (1 << 20) + (2 << 15) + (3 << 12))
+        );
+        assert_eq!(r[0].address(0, 32, 0), None);
+        let mut bad = vec![0u8; 8];
+        bad.extend_from_slice(&[0; 10]);
+        assert_eq!(parse_mcfg(&table(b"MCFG", &bad)), Err(Error::BadLength));
+    }
+
+    #[test]
+    fn fadt_century() {
+        let mut body = vec![0u8; 120 - HEADER_LEN];
+        body[108 - HEADER_LEN] = 0x32;
+        body[109 - HEADER_LEN] = 0x02;
+        let f = parse_fadt(&table(b"FACP", &body)).unwrap();
+        assert_eq!(f.century_register, 0x32);
+        assert_eq!(f.iapc_boot_flags & 2, 2);
     }
 }

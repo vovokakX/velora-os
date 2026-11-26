@@ -356,3 +356,59 @@ needed", so spawning a foreign .exe gives a precise error rather than "unknown
 format". When the Win32 layer exists, `PeFormat::load` will map the sections
 and give the process the Win32 personality without changes elsewhere.
 
+## D21. Драйверы дисков: опрос и промежуточный буфер / Disk drivers: polling and bounce buffers
+
+**2026-11-26**
+
+**RU.** Драйверы virtio-blk, AHCI и NVMe в первой версии ждут окончания
+команды опросом и выполняют одну команду за раз. Данные идут через
+промежуточный буфер DMA размером 64 КиБ. Так драйверы проще и их легче
+проверить: не нужны MSI/MSI-X, очереди ожидания и закрепление
+пользовательских страниц. Цена — процессор занят, пока диск работает, и
+лишнее копирование. В QEMU команда занимает доли миллисекунды. Прерывания
+(MSI-X) и несколько команд одновременно — отдельная задача после этапа 7,
+когда будет понятна нагрузка от файловой системы.
+
+**EN.** The first versions of the virtio-blk, AHCI and NVMe drivers poll for
+completion, run one command at a time and pass data through a 64 KiB DMA
+bounce buffer. This keeps the drivers simple and verifiable: no MSI/MSI-X, no
+wait queues, no pinning of user pages. The cost is a busy CPU while the disk
+works and an extra copy; in QEMU a command takes a fraction of a millisecond.
+Interrupts (MSI-X) and several commands in flight are a separate task after
+stage 7, once the file system load is known.
+
+## D22. PCI через абстрактный доступ / PCI over an abstract config access
+
+**2026-11-26**
+
+**RU.** Перечисление шины, определение размеров BAR и обход capabilities
+вынесены в `velora-pci` и работают через трейт `ConfigAccess`. Ядро даёт
+реализацию через ECAM или порты, тесты — имитацию шины с мостами и
+64-битными BAR. Так самые хрупкие места (размер BAR, мосты, зацикленные
+списки capabilities) проверяются на хосте.
+
+**EN.** Bus enumeration, BAR sizing and capability walking live in
+`velora-pci` behind the `ConfigAccess` trait. The kernel implements it with
+ECAM or ports; tests use a simulated bus with bridges and 64-bit BARs, so the
+fragile parts (BAR sizing, bridges, looping capability lists) are tested on
+the host.
+
+## D23. Основной CI на QEMU 9.1 (Fedora) / Main CI on QEMU 9.1 (Fedora)
+
+**2026-11-26**
+
+**RU.** С QEMU 8.2 из Ubuntu 24.04 драйвер virtio-blk не получает ответов (#19).
+С QEMU 9.1 и 11.1 тот же код проходит все тесты. Пока причина не найдена,
+основная проверка CI и сборка релиза выполняются в контейнере Fedora 41
+(QEMU 9.1, KVM). Проблема записана в известных проблемах. В тестовом
+скрипте есть переменные `VELORA_QEMU_EXTRA` (дополнительные аргументы QEMU,
+например трассировка) и `VELORA_VIRTIO_OPTS` (параметры устройства
+virtio-blk) для таких расследований.
+
+**EN.** With QEMU 8.2 from Ubuntu 24.04 the virtio-blk driver gets no answers
+(#19); with QEMU 9.1 and 11.1 the same code passes every test. Until the cause
+is found, the main CI check and the release build run in a Fedora 41 container
+(QEMU 9.1, KVM), and the problem is listed as a known issue. The test runner
+accepts `VELORA_QEMU_EXTRA` (extra QEMU arguments, e.g. tracing) and
+`VELORA_VIRTIO_OPTS` (virtio-blk device options) for such investigations.
+

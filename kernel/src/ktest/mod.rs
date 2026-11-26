@@ -14,6 +14,7 @@ use core::arch::asm;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+mod drivers;
 mod exec;
 mod irq;
 mod mm;
@@ -86,6 +87,7 @@ static TESTS: &[Test] = tests![
     sched::user_cannot_read_kernel_memory,
     sched::user_cannot_run_privileged_instructions,
     sched::user_code_is_not_writable,
+    sched::user_stack_segment_has_rpl_3_after_syscall,
     sched::user_processes_are_preempted,
     sched::user_sse_registers_are_per_thread,
     sched::user_sleep_and_yield,
@@ -101,6 +103,14 @@ static TESTS: &[Test] = tests![
     exec::broken_elf_is_rejected,
     exec::too_many_arguments_are_refused,
     exec::programs_do_not_leak_memory,
+    // stage 6: PCI, disks, RTC
+    drivers::pci_finds_devices,
+    drivers::three_disks_found,
+    drivers::ahci_read_write,
+    drivers::nvme_read_write,
+    drivers::virtio_blk_read_write,
+    drivers::disks_are_independent,
+    drivers::rtc_matches_bootloader_time,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);

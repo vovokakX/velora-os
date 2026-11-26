@@ -132,6 +132,19 @@
   небольшой C API.
 - `userland/` — отдельный workspace программ, собирается своими флагами.
 
+### Драйверы (этап 6)
+
+- PCI: `velora-pci` перечисляет шину (с мостами), определяет BAR и
+  capabilities через абстрактный `ConfigAccess`. Ядро реализует его через
+  ECAM (таблица MCFG) или порты 0xCF8/0xCFC.
+- Диски реализуют `BlockDevice` (`drivers/block.rs`): virtio-blk (только
+  современный virtio 1.x), AHCI (диски SATA, ATAPI пропускается), NVMe
+  (namespace 1). Имена: `vd0`, `sd0`, `nvme0n1`.
+- Обмен с устройствами идёт через буферы DMA (`drivers/dma.rs`, непрерывная
+  физическая память), окончание команды определяется опросом (решение D21).
+- RTC читается при загрузке, дальше время UTC считается по TSC
+  (`time::realtime_ns`).
+
 ## English
 
 ### Overview
@@ -227,3 +240,13 @@ system calls, output, arguments and environment, a heap using the kernel's
 allocator, processes, a small C API); `userland/` is a separate workspace of
 programs built with their own flags.
 
+### Drivers (stage 6)
+
+PCI: `velora-pci` enumerates the bus (following bridges) and decodes BARs and
+capabilities over an abstract `ConfigAccess`, which the kernel implements with
+ECAM (MCFG table) or ports 0xCF8/0xCFC. Disks implement `BlockDevice`
+(`drivers/block.rs`): virtio-blk (modern virtio 1.x only), AHCI (SATA disks,
+ATAPI skipped), NVMe (namespace 1), named `vd0`, `sd0`, `nvme0n1`. Transfers use
+DMA buffers (`drivers/dma.rs`, physically contiguous memory); completion is
+polled (decision D21). The RTC is read at boot and UTC time then advances with
+the TSC (`time::realtime_ns`).
