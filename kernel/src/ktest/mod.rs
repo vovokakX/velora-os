@@ -14,13 +14,15 @@ use core::arch::asm;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+mod mm;
+
 struct Test {
     name: &'static str,
     run: fn(),
 }
 
 macro_rules! tests {
-    ($($f:ident),* $(,)?) => { &[$(Test { name: stringify!($f), run: $f }),*] };
+    ($($f:path),* $(,)?) => { &[$(Test { name: stringify!($f), run: $f }),*] };
 }
 
 static TESTS: &[Test] = tests![
@@ -40,6 +42,25 @@ static TESTS: &[Test] = tests![
     divide_error_is_caught,
     general_protection_is_caught,
     exception_report_format,
+    // stage 2: memory management
+    mm::frames_alloc_and_free,
+    mm::frames_contiguous_and_aligned,
+    mm::frames_reachable_through_hhdm,
+    mm::kernel_sections_have_wx_permissions,
+    mm::hhdm_maps_usable_memory,
+    mm::write_to_text_faults,
+    mm::write_to_rodata_faults,
+    mm::execute_from_data_faults,
+    mm::null_page_is_unmapped,
+    mm::map_and_unmap_page,
+    mm::heap_collections_work,
+    mm::heap_reuses_freed_pages,
+    mm::heap_stress,
+    mm::kernel_stack_guard_page_faults,
+    mm::running_on_kernel_stack,
+    mm::bootloader_memory_released,
+    mm::back_buffer_scrolls_like_screen,
+    mm::idle_memory_below_64_mib,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
@@ -71,7 +92,7 @@ pub fn on_panic() {
 
 // --- helpers ----------------------------------------------------------------
 
-struct BufWriter<const N: usize> {
+pub(crate) struct BufWriter<const N: usize> {
     buf: [u8; N],
     len: usize,
 }
@@ -83,7 +104,7 @@ impl<const N: usize> BufWriter<N> {
             len: 0,
         }
     }
-    fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap()
     }
 }
@@ -101,11 +122,12 @@ impl<const N: usize> Write for BufWriter<N> {
 }
 
 // A 4x3-cell test screen in ordinary memory.
-const TW: usize = 32;
-const TH: usize = 48;
+pub(crate) const TW: usize = 32;
+pub(crate) const TH: usize = 48;
+pub(crate) const TEST_FB_SIZE: usize = TW * TH;
 static TEST_FB: RacyCell<[u32; TW * TH]> = RacyCell::new([0; TW * TH]);
 
-fn test_console() -> TextConsole {
+pub(crate) fn test_console() -> TextConsole {
     // SAFETY: tests run one at a time; the buffer is static.
     let fb = unsafe { Framebuffer::from_raw(TEST_FB.get().cast(), TW, TH, TW * 4) };
     TextConsole::new(fb)
@@ -118,12 +140,17 @@ fn serial_is_present() {
 }
 
 fn boot_info_is_present() {
-    let m = boot::memory_summary().expect("no memory map");
+    let m = boot::memory_summary();
     assert!(
         m.usable >= 16 * 1024 * 1024,
         "less than 16 MiB usable memory"
     );
-    assert!(boot::limine::HHDM.response().is_some(), "no HHDM response");
+    let info = boot::info();
+    assert!(info.hhdm_offset >= 0xffff_8000_0000_0000, "bad HHDM offset");
+    assert!(
+        info.bootloader().starts_with("Limine"),
+        "bootloader name missing"
+    );
     assert!(
         boot::cmdline_has("velora.test"),
         "test cmdline flag missing"
