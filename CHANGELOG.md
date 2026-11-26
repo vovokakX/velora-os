@@ -6,6 +6,50 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.8.0] — 2026-11-26
+
+### Что нового
+- Вход в систему. После загрузки появляется приглашение `velora login:`. Пользователи `root` и `user` описаны в `/etc/passwd` и `/etc/group`. Пароли хранятся в `/etc/shadow` (права 0600) только как хеши PBKDF2-HMAC-SHA-256 с солью. В Live-образе пароль обоих пользователей — `velora`, его можно задать при сборке. Неверный пароль отклоняется, после выхода из оболочки снова появляется приглашение.
+- Оболочка vsh: редактирование строки, история (стрелки вверх и вниз), дополнение по Tab (команды и пути), цветное приглашение, конвейеры `|`, перенаправления `<`, `>`, `>>`, `2>`, `2>>`, разделители `;`, `&&`, `||`, переменные (`$X`, `${X}`, `$?`, `~`, `export`, `NAME=value cmd`), кавычки, встроенные команды `cd`, `pwd`, `exit`, `export`, `unset`, `history`, `set`. Режимы `vsh -c ЗАДАНИЕ` и `vsh ФАЙЛ`.
+- Команды: `ls` (`-l`, `-a`, цвета), `cat`, `cp` (`-r`), `mv`, `rm` (`-r`, `-f`), `mkdir` (`-p`), `touch`, `echo`, `clear`, `ps`, `kill`, `mem`, `uptime`, `date`, `whoami`, `reboot`, `shutdown`, `help`, `velofetch`.
+- Ядро: терминал консоли со строчным режимом, режимом без эха и «сырым» режимом. Ctrl+C завершает программу переднего плана, даже если она не читает клавиатуру. Добавлены каналы (pipe), `dup`/`dup2`, рабочий каталог и относительные пути, пользователи (`setuid`, `chmod`, `chown`, проверка прав), `kill`, список процессов, `sysinfo`. Выключение по ACPI S5 и перезагрузка.
+- В Live-режиме `/home` и `/root` — файловые системы в памяти; домашний каталог создаётся при первом входе.
+- Новые библиотеки с тестами на хосте: `velora-auth` (SHA-256, PBKDF2, файлы учётных записей) и `velora-shell` (язык vsh, редактор строки).
+- Тесты: 121 юнит-тест на хосте (14 новых), 89 тестов ядра (6 новых), 32 проверки в `vtest` (7 новых). Тест загрузки через эмулированную клавиатуру проверяет: неверный пароль, вход, около двадцати команд с конвейерами и перенаправлениями, Tab, историю, русскую раскладку, Ctrl+C, выход, вход root и выключение командой `shutdown`.
+
+### Исправления
+- Во время разработки найдено и исправлено зависание при завершении процесса с открытым каналом (#24). В выпущенных версиях этой ошибки не было, каналы появились в этой версии.
+
+### Известные проблемы
+- Нет сигналов и фоновых заданий (`&`). Ctrl+C завершает только последнюю программу конвейера, остальные завершаются по концу ввода или ошибке записи.
+- vsh не умеет переносить длинную строку на следующую строку экрана при редактировании: строка длиннее ширины экрана отображается неверно.
+- Пароль нельзя сменить: `/etc/shadow` лежит в initramfs только для чтения (смена пароля — в установщике, этап 9). Файлы в `/home` и `/root` пропадают после перезагрузки.
+- Нет `chmod`/`chown` в виде команд (есть системные вызовы и функции vlibc).
+- Выключение работает через ACPI S5, а значения `_S5` берутся из DSDT простым поиском без интерпретатора AML. На машинах с необычной DSDT выключение может не сработать, тогда система сообщает об этом и останавливается.
+- Ограничения прошлых версий остаются: одна блокировка VFS и опрос дисков, нет разделов GPT и `mount` для программ, virtio-blk не работает с QEMU 8.2 (#19).
+
+---
+
+### What's new
+- Login. After boot the `velora login:` prompt appears. The `root` and `user` accounts are in `/etc/passwd` and `/etc/group`; passwords are stored in `/etc/shadow` (mode 0600) only as salted PBKDF2-HMAC-SHA-256 hashes. In the Live image both passwords are `velora`; they can be set at build time. A wrong password is refused, and the prompt returns after the shell exits.
+- The vsh shell: line editing, history (Up and Down), Tab completion (commands and paths), a coloured prompt, pipes `|`, redirections `<`, `>`, `>>`, `2>`, `2>>`, separators `;`, `&&`, `||`, variables (`$X`, `${X}`, `$?`, `~`, `export`, `NAME=value cmd`), quotes, built-ins `cd`, `pwd`, `exit`, `export`, `unset`, `history`, `set`. `vsh -c LINE` and `vsh FILE` modes.
+- Commands: `ls` (`-l`, `-a`, colours), `cat`, `cp` (`-r`), `mv`, `rm` (`-r`, `-f`), `mkdir` (`-p`), `touch`, `echo`, `clear`, `ps`, `kill`, `mem`, `uptime`, `date`, `whoami`, `reboot`, `shutdown`, `help`, `velofetch`.
+- Kernel: a console terminal with a line mode, a no-echo mode and a raw mode; Ctrl+C ends the foreground program even if it does not read the keyboard. Pipes, `dup`/`dup2`, a working directory and relative paths, users (`setuid`, `chmod`, `chown`, permission checks), `kill`, a process list, `sysinfo`. Power off through ACPI S5 and restart.
+- In the Live system `/home` and `/root` are file systems in memory; the home directory is created at first login.
+- New libraries tested on the host: `velora-auth` (SHA-256, PBKDF2, account files) and `velora-shell` (the vsh language, the line editor).
+- Tests: 121 host unit tests (14 new), 89 kernel tests (6 new), 32 checks in `vtest` (7 new). The boot test uses the emulated keyboard to check a wrong password, logging in, about twenty commands with pipes and redirections, Tab, history, the Russian layout, Ctrl+C, logging out, logging in as root and powering off with `shutdown`.
+
+### Fixes
+- A hang when a process with an open pipe exited was found and fixed during development (#24). Released versions did not have it; pipes are new in this version.
+
+### Known issues
+- No signals or background jobs (`&`). Ctrl+C ends only the last program of a pipeline; the others end at the end of input or on a write error.
+- vsh does not wrap a long line while editing: a line wider than the screen is shown wrongly.
+- Passwords cannot be changed: `/etc/shadow` is in the read-only initramfs (changing passwords comes with the installer, stage 9). Files in `/home` and `/root` are lost on reboot.
+- No `chmod`/`chown` commands (the system calls and vlibc functions exist).
+- Power off uses ACPI S5 with the `_S5` values found in the DSDT by a simple search, without an AML interpreter. On machines with an unusual DSDT it may not work; the system then says so and halts.
+- Earlier limitations remain: one VFS lock and polled disks, no GPT partitions or `mount` for programs, virtio-blk does not work with QEMU 8.2 (#19).
+
 ## [0.7.0] — 2026-11-26
 
 ### Что нового

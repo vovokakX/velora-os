@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–7 (v0.7.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–8 (v0.8.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -26,9 +26,15 @@ Linux и не форк: своё ядро, свои драйверы и своё
 virtio-blk, AHCI и NVMe и часов RTC. Есть VFS и файловые системы: своя
 VeloraFS (права, журнал, контрольные суммы, проверка целостности) и FAT16/FAT32
 для чтения и записи. initramfs смонтирован в `/`, диски — в `/mnt`. После
-загрузки занято 5,7 МиБ (вместе с initramfs). Оболочки пока нет: при загрузке
-запускается `/bin/hello`, а затем временная строка ввода с эхом для проверки
-клавиатуры.
+загрузки появляется приглашение входа; оболочка vsh поддерживает историю,
+Tab-дополнение, конвейеры и перенаправления, есть основные команды (`ls`,
+`cat`, `cp`, `mv`, `rm`, `ps`, `kill`, `velofetch` и другие). После
+загрузки занято 6,4 МиБ (вместе с initramfs).
+
+Вход в Live-образе: пользователь `user` или `root`, пароль `velora`. Пароль
+можно задать при сборке переменными `VELORA_ROOT_PASSWORD` и
+`VELORA_USER_PASSWORD`; в образ попадают только хеши. Список команд —
+`help`.
 План этапов — ниже и в [docs/roadmap.md](docs/roadmap.md).
 
 ### Архитектура
@@ -50,10 +56,10 @@ kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
             kernel/mm, kernel/acpi, kernel/abi — библиотеки
 drivers/    аппаратно-независимые части драйверов (input, pci, rtc)
 fs/         vfs (интерфейс и монтирование), velorafs, fat (FAT16/FAT32), tar (initramfs)
-libc/       vlibc — библиотека для программ
-userland/   программы (hello, vtest); vsh и команды — с этапа 8
+libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh)
+userland/   программы: login, vsh, команды (coreutils), hello, vtest
 installer/  velora-setup (с этапа 9)
-tools/      mkiso (сборка ISO), mkinitrd (initramfs), fsck (проверка образов), fontgen
+tools/      mkiso (сборка ISO), mkinitrd (initramfs), mkpasswd (хеши паролей), fsck (проверка образов), fontgen
 tests/      запуск QEMU и проверки
 docs/       документация
 ```
@@ -93,7 +99,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 5 | Загрузчик ELF, интерфейс для PE, initramfs, vlibc | v0.5.0 (готово) |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 (готово) |
 | 7 | VFS, FAT32, VeloraFS с журналом | v0.7.0 (готово) |
-| 8 | vsh, команды, пользователи и вход, velofetch | v0.8.0 |
+| 8 | vsh, команды, пользователи и вход, velofetch | v0.8.0 (готово) |
 | 9 | Установщик velora-setup | v0.9.0 |
 | 10 | virtio-net, TCP/IP | v0.10.0 |
 
@@ -120,7 +126,7 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–7 (v0.7.0) are done. The kernel boots via UEFI, prints to the screen
+Stages 1–8 (v0.8.0) are done. The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -130,8 +136,16 @@ user mode (ring 3) with memory isolation, and system calls. Programs (ELF) are
 written in Rust with the vlibc library. There are drivers for PCI, virtio-blk,
 AHCI and NVMe disks and the RTC. There is a VFS with file systems: the native
 VeloraFS (permissions, journal, checksums, integrity check) and FAT16/FAT32 with
-read and write. The initramfs is mounted at `/`, disks under `/mnt`. 5.7 MiB
-are in use after boot (initramfs included). There is no shell yet: boot runs
+read and write. The initramfs is mounted at `/`, disks under `/mnt`. Boot ends
+at a login prompt; the vsh shell has history, Tab completion, pipes and
+redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
+`ps`, `kill`, `velofetch` and others). 6.4 MiB are in use after boot
+(initramfs included).
+
+Live image login: user `user` or `root`, password `velora`. The passwords
+can be set at build time with `VELORA_ROOT_PASSWORD` and
+`VELORA_USER_PASSWORD`; only hashes go into the image. `help` lists the
+commands. There is no shell yet: boot runs
 `/bin/hello` and then a temporary echoing line editor to try the keyboard. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
 
 ### Architecture
@@ -183,7 +197,7 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 5 | ELF loader, PE loader interface, initramfs, vlibc | v0.5.0 (done) |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 (done) |
 | 7 | VFS, FAT32, VeloraFS with a journal | v0.7.0 (done) |
-| 8 | vsh, commands, users and login, velofetch | v0.8.0 |
+| 8 | vsh, commands, users and login, velofetch | v0.8.0 (done) |
 | 9 | velora-setup installer | v0.9.0 |
 | 10 | virtio-net, TCP/IP | v0.10.0 |
 
