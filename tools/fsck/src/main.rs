@@ -2,13 +2,14 @@
 //! the host.
 //!
 //! ```text
-//! velora-fsck IMAGE [--offset BYTES] [--size BYTES] [--list]
+//! velora-fsck IMAGE [--offset BYTES] [--size BYTES] [--list] [--cat PATH]
 //! ```
 //!
 //! VeloraFS: mounts the volume (replaying the journal in memory if a
 //! committed transaction is pending) and runs the full consistency check.
 //! FAT: walks every directory and reads every file. `--list` prints the
-//! file tree. The image file is never modified.
+//! file tree. `--cat PATH` writes one file to standard output instead of
+//! checking. The image file is never modified.
 
 use std::process::ExitCode;
 use velora_vfs::{FileSystem, Ino, Kind, MemDisk};
@@ -89,14 +90,18 @@ fn run() -> Result<bool, String> {
     let mut offset = 0u64;
     let mut size = None;
     let mut list = false;
+    let mut cat = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--offset" => offset = parse_size(&it.next().ok_or("--offset needs a value")?)?,
             "--size" => size = Some(parse_size(&it.next().ok_or("--size needs a value")?)?),
             "--list" => list = true,
+            "--cat" => cat = Some(it.next().ok_or("--cat needs a path")?),
             "-h" | "--help" => {
-                println!("usage: velora-fsck IMAGE [--offset BYTES] [--size BYTES] [--list]");
+                println!(
+                    "usage: velora-fsck IMAGE [--offset BYTES] [--size BYTES] [--list] [--cat PATH]"
+                );
                 return Ok(true);
             }
             s if image.is_none() => image = Some(s.to_string()),
@@ -140,6 +145,27 @@ fn run() -> Result<bool, String> {
     } else {
         return Err("no VeloraFS or FAT16/FAT32 volume found".into());
     };
+    if let Some(path) = cat {
+        let mut ino = fs.root();
+        for part in path.split('/').filter(|p| !p.is_empty()) {
+            ino = fs.lookup(ino, part).map_err(|e| format!("{path}: {e}"))?;
+        }
+        let size = fs.stat(ino).map_err(|e| format!("{path}: {e}"))?.size;
+        let mut buf = vec![0u8; size as usize];
+        let mut off = 0;
+        while off < buf.len() {
+            match fs.read(ino, off as u64, &mut buf[off..]) {
+                Ok(0) => break,
+                Ok(n) => off += n,
+                Err(e) => return Err(format!("{path}: {e}")),
+            }
+        }
+        use std::io::Write;
+        std::io::stdout()
+            .write_all(&buf[..off])
+            .map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
     if let Ok(found) = fs.fsck() {
         errors.extend(found);
     }

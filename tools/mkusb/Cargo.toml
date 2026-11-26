@@ -1,0 +1,13 @@
+[package]
+name = "mkusb"
+description = "Builds velora-usb.img: a GPT disk image with a FAT32 EFI system partition"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-vfs = { path = "../../fs/vfs" }
+velora-fat = { path = "../../fs/fat" }
+velora-gpt = { path = "../../fs/gpt" }
