@@ -1,0 +1,8 @@
+[package]
+name = "velora-acpi"
+description = "ACPI table parsing (RSDP, RSDT/XSDT, MADT) over byte slices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
