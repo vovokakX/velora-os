@@ -5,6 +5,7 @@
 pub mod ahci;
 pub mod block;
 pub mod dma;
+pub mod msix;
 pub mod nvme;
 pub mod pci;
 pub mod ps2;

@@ -107,6 +107,11 @@ fn exercise(kind: &str) {
 
 pub fn virtio_blk_read_write() {
     exercise("virtio");
+    // Completion is polled, but the MSI-X interrupt must arrive as well.
+    time::sleep_ms(10);
+    let n = crate::drivers::virtio_blk::interrupt_count();
+    kprint!("({} MSI-X interrupts) ", n);
+    assert!(n > 0, "no MSI-X interrupt from virtio-blk");
 }
 
 pub fn ahci_read_write() {

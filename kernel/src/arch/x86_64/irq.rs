@@ -13,6 +13,8 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub type Handler = fn(&mut InterruptFrame);
 
 pub const VECTOR_KEYBOARD: u8 = 0x21;
+/// First vector handed out to PCI devices (MSI-X).
+pub const VECTOR_DEVICE_BASE: u8 = 0x30;
 
 static HANDLERS: [AtomicUsize; 256] = [const { AtomicUsize::new(0) }; 256];
 static SPURIOUS: AtomicU64 = AtomicU64::new(0);

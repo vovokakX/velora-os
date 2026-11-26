@@ -6,12 +6,15 @@
 
 use super::block::{self, BlockDevice, BlockError};
 use super::dma::DmaBuffer;
+use super::msix::MsiX;
 use super::pci;
+use crate::arch::x86_64::{idt::InterruptFrame, irq};
 use crate::mm::mmio;
 use crate::sync::SpinLock;
 use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::{Ordering, fence};
 use velora_pci::{Address, ConfigAccess, Device};
 
@@ -29,10 +32,13 @@ const DEVICE_FEATURE_SELECT: u64 = 0x00;
 const DEVICE_FEATURE: u64 = 0x04;
 const DRIVER_FEATURE_SELECT: u64 = 0x08;
 const DRIVER_FEATURE: u64 = 0x0c;
+const MSIX_CONFIG: u64 = 0x10;
 const DEVICE_STATUS: u64 = 0x14;
 const QUEUE_SELECT: u64 = 0x16;
 const QUEUE_SIZE: u64 = 0x18;
+const QUEUE_MSIX_VECTOR: u64 = 0x1a;
 const QUEUE_ENABLE: u64 = 0x1c;
+const NO_VECTOR: u16 = 0xffff;
 const QUEUE_NOTIFY_OFF: u64 = 0x1e;
 const QUEUE_DESC: u64 = 0x20;
 const QUEUE_DRIVER: u64 = 0x28;
@@ -82,6 +88,19 @@ pub struct VirtioBlk {
     read_only: bool,
     flush_supported: bool,
     queue: SpinLock<Queue>,
+    _msix: Option<MsiX>,
+}
+
+/// Completion interrupts seen (completion is still polled; the count is
+/// for diagnostics and tests).
+static INTERRUPTS: AtomicU64 = AtomicU64::new(0);
+
+fn on_interrupt(_: &mut InterruptFrame) {
+    INTERRUPTS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn interrupt_count() -> u64 {
+    INTERRUPTS.load(Ordering::Relaxed)
 }
 
 fn find_caps(cfg: &pci::Config, d: &Device) -> Option<(u64, u64, u32, u64)> {
@@ -119,6 +138,16 @@ impl VirtioBlk {
     fn probe(addr: Address, d: &Device, index: usize) -> Result<Self, &'static str> {
         let cfg = pci::config();
         velora_pci::enable_device(cfg, addr);
+        // MSI-X when available: the queue interrupt goes to a vector of
+        // its own (see issue #19 for why this matters under KVM).
+        let msix = match MsiX::enable(d) {
+            Ok(m) => {
+                let vector = irq::VECTOR_DEVICE_BASE + index as u8;
+                irq::set_handler(vector, on_interrupt);
+                m.route(0, vector).ok().map(|_| m)
+            }
+            Err(_) => None,
+        };
         let (common, notify_base, mult, devcfg) =
             find_caps(cfg, d).ok_or("no modern virtio capabilities")?;
         // SAFETY (all register accesses below): the regions were mapped
@@ -163,6 +192,13 @@ impl VirtioBlk {
             mmio::write64(common + QUEUE_DRIVER, ring.phys() + AVAIL_OFF as u64);
             mmio::write64(common + QUEUE_DEVICE, ring.phys() + USED_OFF as u64);
             let notify_off = mmio::read16(common + QUEUE_NOTIFY_OFF) as u64;
+            mmio::write16(common + MSIX_CONFIG, NO_VECTOR);
+            if msix.is_some() {
+                mmio::write16(common + QUEUE_MSIX_VECTOR, 0);
+                if mmio::read16(common + QUEUE_MSIX_VECTOR) != 0 {
+                    return Err("device refused the MSI-X vector");
+                }
+            }
             mmio::write16(common + QUEUE_ENABLE, 1);
             mmio::write8(
                 common + DEVICE_STATUS,
@@ -182,6 +218,7 @@ impl VirtioBlk {
                     avail_idx: 0,
                     used_idx: 0,
                 }),
+                _msix: msix,
             })
         }
     }
@@ -260,9 +297,6 @@ impl VirtioBlk {
             if ring.read::<u16>(USED_OFF + 2) == want {
                 return true;
             }
-            // Experiment for #19: let the CPU leave the guest between checks.
-            crate::arch::cpu::enable_interrupts_and_halt();
-            crate::arch::cpu::disable_interrupts();
             let now = crate::arch::cpu::rdtsc();
             if now - last > tick {
                 last = now;
