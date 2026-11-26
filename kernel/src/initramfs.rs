@@ -1,6 +1,5 @@
-//! The initramfs: a ustar archive the bootloader loads as a module. It is
-//! the read-only root file system of the Live system until the VFS and
-//! disk file systems arrive (stage 7).
+//! The initramfs: a ustar archive the bootloader loads as a module. The VFS
+//! mounts it read-only at `/` (see `fs::tarfs`).
 
 use crate::boot;
 use crate::mm::phys_to_virt;
@@ -30,7 +29,7 @@ pub fn init() -> Result<(usize, u64), &'static str> {
     Ok((files, m.size))
 }
 
-fn data() -> &'static [u8] {
+pub fn data() -> &'static [u8] {
     let base = BASE.load(Ordering::SeqCst);
     if base == 0 {
         return &[];

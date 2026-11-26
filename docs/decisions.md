@@ -431,3 +431,90 @@ numbers, constants) and `kernel/mm` (the heap allocator) is built into vlibc, so
 these crates moved to LGPL-3.0-or-later as well. The LGPL is GPL-compatible, so
 the kernel that uses them stays GPL-3.0-or-later. Nothing else changes.
 
+## D25. Одна блокировка VFS / One VFS lock
+
+**2026-11-26**
+
+**RU.** Вся VFS (таблица монтирования и все файловые системы) защищена одной
+спин-блокировкой, которая выключает прерывания. Операция выполняется
+целиком, драйверы дисков ждут ответа опросом (D21). Ядро однопроцессорное и
+не вытесняется внутри системных вызовов, поэтому этого достаточно и нет
+риска взаимных блокировок между файловыми системами. Цена: пока идёт
+дисковая операция, другие потоки не работают, а таймерные тики
+откладываются. Порядок блокировок: планировщик, затем VFS (закрытие файлов
+завершившегося процесса); обратного порядка нет. С SMP и прерываниями
+дисков (этап SMP) блокировка будет разделена по монтированиям, а ожидание
+диска станет блокирующим.
+
+**EN.** The whole VFS (mount table and every file system) is behind one
+spinlock that disables interrupts; an operation runs to completion and disk
+drivers poll (D21). The kernel is single-CPU and not preempted inside system
+calls, so this is enough and rules out deadlocks between file systems. The
+cost: while a disk operation runs, other threads do not, and timer ticks are
+delayed. Lock order: scheduler, then VFS (closing the files of an exiting
+process), never the reverse. With SMP and disk interrupts the lock will be split
+per mount and disk waits will block.
+
+## D26. VeloraFS: экстенты и журнал метаданных / VeloraFS: extents and a metadata journal
+
+**2026-11-26**
+
+**RU.** Своя файловая система нужна для корня (права, журнал, проверка
+целостности), FAT этого не даёт. Выбрано: блоки 4 КиБ, экстенты (мало
+метаданных для больших файлов), журнал только метаданных в режиме ordered
+(данные пишутся до фиксации транзакции), одна транзакция на операцию,
+CRC32C на всех блоках метаданных. Полный журнал данных удвоил бы запись;
+контрольные суммы данных пока не сделаны. Транзакция на операцию — это
+4 сброса кеша диска на изменение. Это медленнее, чем группировка
+транзакций, зато проще и надёжнее. Группировку можно добавить позже без
+смены формата. Формат описан в [velorafs.md](velorafs.md).
+
+**EN.** A native file system is needed for the root (permissions, journal,
+integrity checks), which FAT cannot provide. Chosen: 4 KiB blocks, extents
+(little metadata for large files), a metadata-only journal in ordered mode
+(data written before the transaction commits), one transaction per operation,
+CRC32C on every metadata block. Full data journaling would double writes;
+data checksums are not done yet. One transaction per operation costs up to
+four disk cache flushes per change: slower than grouped transactions but
+simpler; grouping can come later without a format change. The format is in
+[velorafs.md](velorafs.md).
+
+## D27. Номера inode на FAT / Inode numbers on FAT
+
+**2026-11-26**
+
+**RU.** В FAT нет inode. Номером файла служит байтовая позиция его 8.3-записи
+в каталоге (корень — 1). При переименовании запись переезжает, и номер
+меняется: открытый дескриптор такого файла после переименования
+указывает на старое место. Для раздела EFI и обмена файлами этого
+достаточно; для системы используется VeloraFS.
+
+**EN.** FAT has no inodes. A file's number is the byte position of its 8.3
+directory entry (the root is 1). Renaming moves the entry and changes the
+number, so a descriptor opened before a rename points at the old place. This
+is enough for the EFI partition and file exchange; the system uses VeloraFS.
+
+## D28. Тесты файловых систем: две загрузки / File system tests: two boots
+
+**2026-11-26**
+
+**RU.** Тест «файлы сохраняются после перезагрузки» должен включать
+настоящую перезагрузку. `tests/qemu_run.py` дважды запускает тестовое ядро с
+одним и тем же чистым диском на 128 МиБ. Первая загрузка создаёт VeloraFS и
+FAT32, проверяет их и оставляет в журнале VeloraFS зафиксированную, но не
+записанную на места транзакцию (как при отключении питания). Вторая
+загрузка монтирует том при старте (журнал воспроизводится) и проверяет
+файлы. После каждой загрузки тома проверяются на хосте программой
+`velora-fsck` из этого репозитория, а FAT32 ещё и `fsck.fat` из dosfstools
+(в CI). Обрыв питания после каждой отдельной записи проверяется
+юнит-тестами на хосте: в QEMU так перебирать точки обрыва слишком долго.
+
+**EN.** "Files persist across a reboot" must include a real reboot.
+`tests/qemu_run.py` boots the test kernel twice with the same blank 128 MiB
+disk. The first boot creates VeloraFS and FAT32, checks them and leaves a
+committed but not checkpointed VeloraFS transaction in the journal (as a power
+cut would). The second boot mounts the volume at startup (replaying the
+journal) and checks the files. After each boot the volumes are checked on the
+host by `velora-fsck` from this repository, and FAT32 also by `fsck.fat` from
+dosfstools (in CI). A power cut after every single write is covered by host
+unit tests, where iterating over all cut points is fast.

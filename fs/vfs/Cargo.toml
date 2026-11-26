@@ -1,0 +1,11 @@
+[package]
+name = "velora-vfs"
+description = "Virtual file system layer: file system interface, mount table, paths, permissions, in-memory file system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-abi = { path = "../../kernel/abi" }

@@ -4,10 +4,12 @@ use super::{
     KERNEL_PID, Pid, Priority, Sched, State, Tid, make_ready, mark_dead, new_thread, with,
 };
 use crate::arch::cpu;
+use crate::fs::{FdTable, FileRef};
 use crate::mm::paging::{AddressSpace, UserKind};
 use crate::mm::{PAGE_SIZE, frame, phys_to_virt};
 use alloc::string::String;
 use alloc::vec::Vec;
+use velora_vfs::Cred;
 
 /// Where flat test programs are loaded (until the ELF loader in stage 5).
 pub const FLAT_CODE_BASE: u64 = 0x0000_0000_0040_0000;
@@ -49,6 +51,9 @@ pub(super) struct Process {
     pub detached: bool,
     /// Next address for non-fixed `mmap` requests.
     pub mmap_next: u64,
+    pub files: FdTable,
+    /// User and group the process acts as (root until users arrive).
+    pub cred: Cred,
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +153,7 @@ pub fn spawn_user(
         let pid = s.next_pid;
         s.next_pid += 1;
         let parent = s.threads[&s.current].pid;
+        let cred = s.processes.get(&parent).map_or(Cred::ROOT, |p| p.cred);
         s.processes.insert(
             pid,
             Process {
@@ -161,6 +167,8 @@ pub fn spawn_user(
                 exit_waiters: Vec::new(),
                 detached: false,
                 mmap_next: MMAP_BASE,
+                files: FdTable::standard(),
+                cred,
             },
         );
         match new_thread(
@@ -231,6 +239,8 @@ fn become_zombie(s: &mut Sched, pid: Pid, status: i64) {
         return;
     }
     p.state = ProcState::Zombie(status);
+    // Close its files (the VFS lock may be taken under the scheduler lock).
+    drop(core::mem::take(&mut p.files));
     let waiters = core::mem::take(&mut p.exit_waiters);
     for w in waiters {
         make_ready(s, w);
@@ -313,4 +323,37 @@ pub fn wait_pid(pid: Pid) -> Option<i64> {
     }
     cpu::irq_restore(was);
     status
+}
+
+/// Credentials of the current process (root for kernel threads).
+pub fn current_cred() -> Cred {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        s.processes.get(&pid).map_or(Cred::ROOT, |p| p.cred)
+    })
+}
+
+/// The open file behind descriptor `fd` of the current process.
+pub fn fd_get(fd: u64) -> Option<FileRef> {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        s.processes.get(&pid)?.files.get(fd)
+    })
+}
+
+/// Gives `f` the lowest free descriptor; `None` when the table is full.
+pub fn fd_install(f: FileRef) -> Option<u64> {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        s.processes.get_mut(&pid)?.files.install(f)
+    })
+}
+
+/// Removes descriptor `fd`. The caller drops the result outside the
+/// scheduler lock.
+pub fn fd_remove(fd: u64) -> Option<FileRef> {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        s.processes.get_mut(&pid)?.files.remove(fd)
+    })
 }

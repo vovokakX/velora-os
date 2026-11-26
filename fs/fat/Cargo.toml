@@ -1,6 +1,6 @@
 [package]
 name = "velora-fat"
-description = "FAT filesystem image builder and reader (no_std + alloc)"
+description = "FAT16/FAT32 file system: read and write volumes, FAT32 formatting, FAT16 image builder (no_std + alloc)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,3 +9,6 @@ publish = false
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+velora-vfs = { path = "../vfs" }

@@ -11,10 +11,15 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+/// The 32 MiB signature disk of a kind (the file system tests use a
+/// separate 128 MiB virtio disk).
 fn disk(kind: &str) -> Arc<dyn BlockDevice> {
     block::devices()
         .into_iter()
-        .find(|d| d.description().to_ascii_lowercase().contains(kind))
+        .find(|d| {
+            d.description().to_ascii_lowercase().contains(kind)
+                && d.size_bytes() == 32 * 1024 * 1024
+        })
         .unwrap_or_else(|| panic!("no {} disk found", kind))
 }
 

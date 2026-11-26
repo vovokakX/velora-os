@@ -13,6 +13,7 @@ mod boot;
 mod console;
 mod drivers;
 mod exec;
+mod fs;
 mod initramfs;
 mod input;
 #[cfg(not(feature = "ktest"))]
@@ -108,6 +109,8 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
         Err(e) => kwarn!("initramfs: {}", e),
     }
     drivers::init();
+    fs::init();
+    fs::automount();
     arch::cpu::enable_interrupts();
     kok!(
         "scheduler running (preemptive, {} Hz time slices)",

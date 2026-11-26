@@ -3,6 +3,7 @@
 //! - `_start` entry, argument/environment parsing, `main!` macro
 //! - raw system calls ([`sys`]) and safe wrappers
 //! - console I/O with `print!`/`println!`/`eprintln!`
+//! - files and directories ([`fs`])
 //! - a heap (`alloc` works) on top of `mmap`
 //! - processes: `spawn`, `wait`, `exit`, `getpid`, sleep, time
 //! - optional C API (feature `cabi`, see `include/vlibc.h`)
@@ -14,6 +15,7 @@
 extern crate alloc;
 
 pub mod env;
+pub mod fs;
 pub mod heap;
 pub mod io;
 pub mod mem;
@@ -47,9 +49,22 @@ impl Errno {
             EAGAIN => "EAGAIN",
             ENOMEM => "ENOMEM",
             EFAULT => "EFAULT",
+            EACCES => "EACCES",
+            EBUSY => "EBUSY",
             EEXIST => "EEXIST",
+            EXDEV => "EXDEV",
+            ENOTDIR => "ENOTDIR",
+            EISDIR => "EISDIR",
             EINVAL => "EINVAL",
+            EMFILE => "EMFILE",
+            EFBIG => "EFBIG",
+            ENOSPC => "ENOSPC",
+            ESPIPE => "ESPIPE",
+            EROFS => "EROFS",
+            ENAMETOOLONG => "ENAMETOOLONG",
             ENOSYS => "ENOSYS",
+            ENOTEMPTY => "ENOTEMPTY",
+            EUCLEAN => "EUCLEAN",
             _ => "unknown error",
         }
     }

@@ -1,8 +1,8 @@
 //! C API for programs written in C (feature `cabi`). Declarations are in
 //! `include/vlibc.h`. Only a small subset exists so far; it grows with the
-//! system (files arrive in stage 7).
+//! system.
 
-use crate::{io, process};
+use crate::{fs, io, process};
 use core::alloc::Layout;
 use core::ffi::{CStr, c_char, c_int, c_long, c_void};
 
@@ -112,4 +112,83 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
         }
     }
     new
+}
+
+/// # Safety
+/// `s` must be a NUL-terminated UTF-8 string.
+unsafe fn c_path<'a>(s: *const c_char) -> Option<&'a str> {
+    unsafe { CStr::from_ptr(s) }.to_str().ok()
+}
+
+/// Opens a file; returns the descriptor or -1.
+///
+/// # Safety
+/// `path` must be a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, mode: c_int) -> c_int {
+    let Some(p) = (unsafe { c_path(path) }) else {
+        return -1;
+    };
+    match fs::File::open_with(p, flags as u64, mode as u32) {
+        Ok(f) => {
+            let fd = f.fd();
+            core::mem::forget(f);
+            fd as c_int
+        }
+        Err(_) => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn close(fd: c_int) -> c_int {
+    if fs::close(fd as u64).is_ok() { 0 } else { -1 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn lseek(fd: c_int, offset: c_long, whence: c_int) -> c_long {
+    // SAFETY: no pointers.
+    let r = unsafe {
+        crate::sys::syscall3(
+            velora_abi::nr::SEEK,
+            fd as u64,
+            offset as u64,
+            whence as u64,
+        )
+    };
+    if r < 0 { -1 } else { r as c_long }
+}
+
+/// # Safety
+/// `path` must be a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mkdir(path: *const c_char, mode: c_int) -> c_int {
+    match unsafe { c_path(path) } {
+        Some(p) if fs::mkdir(p, mode as u32).is_ok() => 0,
+        _ => -1,
+    }
+}
+
+/// # Safety
+/// `path` must be a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int {
+    match unsafe { c_path(path) } {
+        Some(p) if fs::remove(p).is_ok() => 0,
+        _ => -1,
+    }
+}
+
+/// # Safety
+/// Both arguments must be NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rename(from: *const c_char, to: *const c_char) -> c_int {
+    match unsafe { (c_path(from), c_path(to)) } {
+        (Some(a), Some(b)) if fs::rename(a, b).is_ok() => 0,
+        _ => -1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sync() {
+    let _ = fs::sync();
 }

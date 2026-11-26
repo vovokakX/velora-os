@@ -1,4 +1,4 @@
-//! Console input and output.
+//! Reading and writing file descriptors; console output macros.
 
 use crate::sys::syscall3;
 use crate::{Errno, check};
@@ -21,8 +21,9 @@ pub fn write_all(fd: u64, mut buf: &[u8]) -> Result<(), Errno> {
     Ok(())
 }
 
-/// Reads from a file descriptor. For the keyboard (fd 0) this waits for
-/// at least one character and returns whole UTF-8 characters.
+/// Reads from a file descriptor. For the console (fd 0) this waits for
+/// at least one character and returns whole UTF-8 characters; for files
+/// 0 means the end of the file.
 pub fn read(fd: u64, buf: &mut [u8]) -> Result<usize, Errno> {
     // SAFETY: the buffer is valid and writable for `len` bytes.
     check(unsafe { syscall3(nr::READ, fd, buf.as_mut_ptr() as u64, buf.len() as u64) })

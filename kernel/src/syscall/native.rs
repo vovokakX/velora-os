@@ -1,11 +1,11 @@
 //! The native Velora system calls.
 
-use super::uaccess;
+use super::{files, uaccess};
 use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::exec;
 use crate::mm::PAGE_SIZE;
 use crate::mm::paging::UserKind;
-use crate::{input, kprint, sched, time};
+use crate::{fs, input, kprint, sched, time};
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_abi::{StrRef, Timespec, clock, errno, map, nr, prot};
@@ -28,6 +28,18 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::WAIT => wait(a0, a1),
         nr::MMAP => mmap(a0, a1, a2, f.r10),
         nr::MUNMAP => munmap(a0, a1),
+        nr::OPEN => files::open(a0, a1, a2, f.r10),
+        nr::CLOSE => files::close(a0),
+        nr::SEEK => files::seek(a0, a1 as i64, a2),
+        nr::STAT => files::stat(a0, a1, a2),
+        nr::FSTAT => files::fstat(a0, a1),
+        nr::READDIR => files::readdir(a0, a1, a2),
+        nr::MKDIR => files::mkdir(a0, a1, a2),
+        nr::UNLINK => files::unlink(a0, a1),
+        nr::RENAME => files::rename(a0, a1, a2, f.r10),
+        nr::FTRUNCATE => files::ftruncate(a0, a1),
+        nr::SYNC => files::sync(),
+        nr::STATFS => files::statfs(a0, a1, a2),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -38,8 +50,11 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
 }
 
 fn write(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd != velora_abi::STDOUT && fd != velora_abi::STDERR {
+    let Some(f) = sched::fd_get(fd) else {
         return -errno::EBADF;
+    };
+    if !matches!(f.lock().handle, fs::Handle::Console) {
+        return files::write_file(&f, buf, len);
     }
     let len = len.min(MAX_WRITE);
     let Some(bytes) = uaccess::read_slice(buf, len) else {
@@ -55,12 +70,16 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
     len as i64
 }
 
-/// Reads typed text from the keyboard: blocks until at least one
+/// Reads a file, or typed text from the keyboard for console descriptors:
+/// blocks until at least one
 /// character is available, then returns as many whole UTF-8 characters
 /// as fit. Line editing comes with the terminal layer (stage 8).
 fn read(fd: u64, buf: u64, len: u64) -> i64 {
-    if fd != velora_abi::STDIN {
+    let Some(f) = sched::fd_get(fd) else {
         return -errno::EBADF;
+    };
+    if !matches!(f.lock().handle, fs::Handle::Console) {
+        return files::read_file(&f, buf, len);
     }
     if len < 4 {
         return -errno::EINVAL; // room for one UTF-8 character

@@ -1,13 +1,14 @@
-//! FAT filesystem support shared by the host tools and (later) the kernel.
+//! FAT file system support shared by the host tools and the kernel.
 //!
-//! Current state (stage 1):
+//! - [`FatVolume`]: a FAT16 or FAT32 volume on a block device, read and
+//!   write, behind the VFS `FileSystem` interface (module [`volume`]).
+//! - [`format_fat32`]: creates an empty FAT32 volume.
 //! - [`ImageBuilder`] creates a FAT16 image from an in-memory file tree,
 //!   with long file names (VFAT LFN). It is used by `mkiso` for the EFI
 //!   boot image on the ISO.
 //! - [`read_file`] reads a file back from a FAT16 image (used by tests).
 //!
-//! Not implemented yet: FAT12/FAT32, writing into an existing image.
-//! These come with the filesystem stage (stage 7).
+//! FAT12 is not supported.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -18,6 +19,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
+
+pub mod volume;
+pub use volume::{FatType, FatVolume, format_fat32};
 
 pub const SECTOR: usize = 512;
 const ROOT_ENTRIES: usize = 512;

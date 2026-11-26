@@ -26,7 +26,7 @@ jobs:
 
       - name: Install QEMU, UEFI firmware and Rust
         run: |
-          dnf install -y qemu-system-x86-core edk2-ovmf python3 unzip curl gcc git findutils
+          dnf install -y qemu-system-x86-core edk2-ovmf python3 unzip curl gcc git findutils dosfstools
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "/root/.cargo/bin" >> "$GITHUB_PATH"
 

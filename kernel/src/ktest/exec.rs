@@ -38,10 +38,27 @@ pub fn user_space_test_suite() {
 
 pub fn missing_and_non_executable_files() {
     assert_eq!(exec::spawn("/bin/none", &[], &[]), Err(ExecError::NotFound));
+    // No execute permission.
+    assert_eq!(exec::spawn("/etc/motd", &[], &[]), Err(ExecError::Access));
+    // Executable, but not in any known format.
+    let now = crate::fs::now();
+    let root = velora_vfs::Cred::ROOT;
+    crate::fs::with(|v| {
+        let n = v.create(
+            "/tmp/not-a-program",
+            velora_vfs::Kind::File,
+            0o755,
+            &root,
+            now,
+        )?;
+        v.write(n, 0, b"echo hello\n", now)
+    })
+    .unwrap();
     assert_eq!(
-        exec::spawn("/etc/motd", &[], &[]),
+        exec::spawn("/tmp/not-a-program", &[], &[]),
         Err(ExecError::NotExecutable)
     );
+    crate::fs::with(|v| v.unlink("/tmp/not-a-program", &root, now)).unwrap();
 }
 
 pub fn pe_files_are_recognised_but_not_run() {

@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 mod drivers;
 mod exec;
+mod fs;
 mod irq;
 mod mm;
 mod sched;
@@ -111,6 +112,14 @@ static TESTS: &[Test] = tests![
     drivers::virtio_blk_read_write,
     drivers::disks_are_independent,
     drivers::rtc_matches_bootloader_time,
+    // stage 7: file systems
+    fs::vfs_mounted_at_boot,
+    fs::devfs_exposes_disks,
+    fs::memfs_conformance,
+    fs::permissions_are_enforced,
+    fs::programs_need_execute_permission,
+    fs::velorafs_on_disk,
+    fs::fat32_on_disk,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);

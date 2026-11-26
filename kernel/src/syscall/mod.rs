@@ -1,6 +1,7 @@
 //! System call dispatch. The process's personality selects the table;
 //! today only the native Velora ABI exists (see docs/syscalls.md).
 
+mod files;
 mod native;
 
 use crate::arch::x86_64::syscall::SyscallFrame;

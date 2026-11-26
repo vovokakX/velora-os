@@ -1,0 +1,11 @@
+[package]
+name = "velorafs"
+description = "VeloraFS: extents, permissions, metadata journal, CRC32C checksums, fsck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-vfs = { path = "../vfs" }
