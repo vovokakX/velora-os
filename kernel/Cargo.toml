@@ -15,3 +15,6 @@ bench = false
 [features]
 # Build the in-kernel test runner instead of the normal boot path.
 ktest = []
+
+[dependencies]
+velora-mm = { path = "mm" }
