@@ -12,6 +12,8 @@ mod arch;
 mod boot;
 mod console;
 mod drivers;
+mod exec;
+mod initramfs;
 mod input;
 #[cfg(not(feature = "ktest"))]
 mod kbdtest;
@@ -23,6 +25,7 @@ mod sched;
 mod sync;
 mod syscall;
 mod time;
+#[cfg(feature = "ktest")]
 mod userprog;
 
 use arch::x86_64::{apic, ioapic, pic, serial};
@@ -100,6 +103,10 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     // SAFETY: set in `kmain` before the switch; nothing else touches it.
     let main_stack = unsafe { (*MAIN_STACK.get()).take() }.expect("main stack not recorded");
     sched::init(main_stack);
+    match initramfs::init() {
+        Ok((files, size)) => kok!("initramfs: {} files, {} KiB", files, size / 1024),
+        Err(e) => kwarn!("initramfs: {}", e),
+    }
     arch::cpu::enable_interrupts();
     kok!(
         "scheduler running (preemptive, {} Hz time slices)",
@@ -117,16 +124,21 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     }
 }
 
-/// Runs the embedded "hello" program in ring 3 to show that user mode
-/// works. Real programs are loaded from files from stage 5 on.
+/// Runs /bin/hello from the initramfs to show that programs load from
+/// files and run in user mode.
 #[cfg(not(feature = "ktest"))]
 fn run_first_user_program() {
-    match sched::spawn_flat("hello", userprog::hello(), sched::Priority::Normal) {
+    let argv = ["/bin/hello", "from", "initramfs"];
+    let envp = ["PATH=/bin", "HOME=/"];
+    match exec::spawn("/bin/hello", &argv, &envp) {
         Ok(pid) => match sched::wait_pid(pid) {
-            Some(0) => kok!("user mode works: process {} exited with status 0", pid),
-            other => kwarn!("user mode test: process {} ended with {:?}", pid, other),
+            Some(0) => kok!(
+                "user mode works: /bin/hello (pid {}) exited with status 0",
+                pid
+            ),
+            other => kwarn!("/bin/hello (pid {}) ended with {:?}", pid, other),
         },
-        Err(e) => kwarn!("cannot start a user process: {:?}", e),
+        Err(e) => kwarn!("cannot start /bin/hello: {:?}", e),
     }
 }
 
@@ -210,10 +222,11 @@ fn report_boot_info() {
     let u = mm::usage();
     let kib = |b: u64| b / 1024;
     kinfo!(
-        "memory in use: {} KiB of {} KiB (kernel image {}, page tables {}, heap {}, stacks {}, frame bitmap {} KiB)",
+        "memory in use: {} KiB of {} KiB (kernel image {}, initramfs {}, page tables {}, heap {}, stacks {}, frame bitmap {} KiB)",
         kib(u.in_use),
         kib(u.managed),
         kib(u.kernel_image),
+        kib(u.modules),
         kib(u.page_tables),
         kib(u.heap),
         kib(u.stacks),
