@@ -4,22 +4,32 @@ version = 4
 
 [[package]]
 name = "mkiso"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "velora-fat",
 ]
 
 [[package]]
+name = "velora-acpi"
+version = "0.2.0"
+
+[[package]]
 name = "velora-fat"
-version = "0.1.0"
+version = "0.2.0"
+
+[[package]]
+name = "velora-input"
+version = "0.2.0"
 
 [[package]]
 name = "velora-kernel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "velora-acpi",
+ "velora-input",
  "velora-mm",
 ]
 
 [[package]]
 name = "velora-mm"
-version = "0.1.0"
+version = "0.2.0"
