@@ -82,6 +82,7 @@ dependencies = [
  "velora-gpt",
  "velora-input",
  "velora-mm",
+ "velora-net",
  "velora-pci",
  "velora-rtc",
  "velora-tar",
@@ -91,6 +92,10 @@ dependencies = [
 
 [[package]]
 name = "velora-mm"
+version = "0.9.0"
+
+[[package]]
+name = "velora-net"
 version = "0.9.0"
 
 [[package]]
