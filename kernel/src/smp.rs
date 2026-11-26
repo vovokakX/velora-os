@@ -275,6 +275,26 @@ pub fn set_bkl_depth(depth: u64) {
     }
 }
 
+/// Prints the big kernel lock state (test builds, from a watchdog).
+#[cfg(feature = "ktest")]
+pub fn debug_dump(w: &mut dyn core::fmt::Write) {
+    let _ = writeln!(
+        w,
+        "bkl: owner {:#x} next {} serving {}",
+        OWNER.load(Ordering::Relaxed),
+        NEXT_TICKET.load(Ordering::Relaxed),
+        SERVING.load(Ordering::Relaxed)
+    );
+    for c in 0..online() {
+        let _ = writeln!(
+            w,
+            "cpu {}: waits for ticket {:#x}",
+            c,
+            trace::WAITING[c].load(Ordering::Relaxed)
+        );
+    }
+}
+
 /// True if this CPU holds the lock.
 pub fn bkl_held() -> bool {
     percpu::ready() && OWNER.load(Ordering::Relaxed) == percpu::this().index

@@ -793,6 +793,53 @@ pub fn current_name() -> String {
     })
 }
 
+/// Prints the scheduler state (test builds, from a watchdog). The lock
+/// is taken over even if someone holds it: the system is stuck anyway.
+#[cfg(feature = "ktest")]
+pub fn debug_dump(w: &mut dyn core::fmt::Write) {
+    if SCHED.try_lock().is_none() {
+        let _ = writeln!(w, "scheduler lock held; taking it over");
+        // SAFETY: diagnostics of a stuck system, which ends right after.
+        unsafe { SCHED.force_unlock() };
+    }
+    let g = SCHED.lock();
+    let Some(s) = g.as_ref() else { return };
+    let _ = writeln!(w, "ticks {}", time::ticks());
+    for (i, c) in s.cpus.iter().enumerate() {
+        let _ = writeln!(
+            w,
+            "cpu {}: online {} current {} idle {} slice {} need_resched {}",
+            i,
+            c.online,
+            c.current,
+            c.idle,
+            c.slice_left,
+            NEED_RESCHED[i].load(Ordering::Relaxed)
+        );
+    }
+    for (p, q) in s.ready.iter().enumerate() {
+        let _ = writeln!(w, "ready[{}]: {:?}", p, q);
+    }
+    let _ = writeln!(w, "dead: {:?}", s.dead);
+    for t in s.threads.values() {
+        let _ = writeln!(
+            w,
+            "thread {} {:?} pid {} {:?} {:?} affinity {:?} on_cpu {:?} last {} wake_at {:?} depth {} ticks {}",
+            t.tid,
+            t.name,
+            t.pid,
+            t.state,
+            t.priority,
+            t.affinity,
+            t.on_cpu,
+            t.last_cpu,
+            t.wake_at,
+            t.bkl_depth,
+            t.ticks
+        );
+    }
+}
+
 /// True if `tid` is one of the per-CPU idle threads.
 pub fn is_idle(tid: Tid) -> bool {
     with(|s| s.is_idle_thread(tid))

@@ -144,12 +144,38 @@ static TESTS: &[Test] = tests![
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
 
+/// TSC when the running test started (0 between tests).
+static TEST_STARTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static WATCHDOG_FIRED: AtomicBool = AtomicBool::new(false);
+
+/// Called by the boot CPU on every timer interrupt, before it takes the
+/// big kernel lock: a test that runs for more than 60 s is stuck, so the
+/// scheduler state is printed and the run ends.
+pub fn watchdog() {
+    let start = TEST_STARTED.load(Ordering::Relaxed);
+    let hz = crate::time::tsc_hz();
+    if start == 0 || hz == 0 || crate::arch::cpu::rdtsc() - start < 60 * hz {
+        return;
+    }
+    if WATCHDOG_FIRED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    crate::console::emergency(|w| {
+        let _ = writeln!(w, "\nktest: watchdog: the test runs for more than 60 s");
+        crate::sched::debug_dump(w);
+        crate::smp::debug_dump(w);
+    });
+    crate::arch::fatal_exit();
+}
+
 pub fn run() -> ! {
     kprintln!("ktest: boot took {} ms", crate::time::uptime_ms());
     kprintln!("ktest: running {} tests", TESTS.len());
     for t in TESTS {
         kprint!("ktest: {} ... ", t.name);
+        TEST_STARTED.store(crate::arch::cpu::rdtsc(), Ordering::SeqCst);
         (t.run)();
+        TEST_STARTED.store(0, Ordering::SeqCst);
         kprintln!("ok");
     }
     kprintln!("ktest: {} passed, 0 failed", TESTS.len());
