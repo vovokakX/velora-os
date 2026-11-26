@@ -6,6 +6,58 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.7.0] — 2026-11-26
+
+### Что нового
+- VFS: общий интерфейс файловых систем, таблица монтирования, разбор путей, права POSIX (владелец, группа, остальные). При загрузке монтируются: `/` — initramfs (только чтение), `/dev` — устройства (`null`, `zero`, `console`, диски), `/tmp` — файловая система в памяти, `/mnt/<диск>` — каждый диск с VeloraFS или FAT.
+- VeloraFS — своя файловая система: блоки по 4 КиБ, экстенты, владелец и права у каждого файла, журнал метаданных (каждая операция — транзакция, воспроизведение при монтировании), контрольные суммы CRC32C метаданных, проверка целостности (fsck). Формат описан в `docs/velorafs.md`.
+- FAT16 и FAT32: чтение и запись томов с длинными именами, форматирование FAT32.
+- Системные вызовы для файлов: `open`, `close`, `seek`, `stat`, `fstat`, `readdir`, `mkdir`, `unlink`, `rename`, `ftruncate`, `sync`, `statfs`. `read` и `write` работают с файлами. У процесса до 64 дескрипторов, 0–2 открыты на консоли, при завершении процесса его файлы закрываются.
+- Программы запускаются с любой файловой системы, если у файла есть право на выполнение.
+- vlibc: модуль `fs` (`File`, `read_dir`, `stat`, `mkdir`, `remove`, `rename`, `sync`, `statfs`) и функции C `open`, `close`, `lseek`, `mkdir`, `unlink`, `rename`, `sync`.
+- `velora-fsck`: проверка томов VeloraFS и FAT в образах дисков на хосте.
+- Тесты: 107 юнит-тестов на хосте (35 новых, в том числе отключение питания после каждой записи на диск), 83 теста ядра (7 новых), 25 проверок в `vtest` (10 новых). Тесты ядра запускаются дважды с одним диском. Первая загрузка создаёт VeloraFS и FAT32 и оставляет в журнале незаписанную транзакцию. Вторая проверяет файлы и воспроизведение журнала. После каждой загрузки тома проверяются на хосте программами `velora-fsck` и `fsck.fat`.
+
+### Исправления
+- Нет.
+
+### Известные проблемы
+- Каждое изменение в VeloraFS — отдельная транзакция с несколькими сбросами кеша диска, поэтому запись многими мелкими частями медленная (решение D26).
+- Пока идёт операция с диском, другие потоки не работают: VFS защищена одной блокировкой, драйверы ждут диск опросом (решения D21, D25).
+- fsck находит ошибки, но не исправляет их. У данных файлов VeloraFS нет контрольных сумм.
+- Нет жёстких и символических ссылок. Нет `chmod`/`chown` для программ и смены пользователя: все процессы работают от root (пользователи — этап 8).
+- Нет рабочего каталога: относительный путь отсчитывается от `/`.
+- Программы не могут монтировать диски: монтирование выполняется только при загрузке.
+- Таблицы разделов не читаются, файловая система ищется только на целом диске (GPT — этап 9).
+- FAT: номер файла меняется при переименовании (решение D27), журнала нет, проверки и исправления нет, FAT12 не поддерживается, таблица FAT целиком хранится в памяти.
+- С QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов на запросы. С QEMU 9.1 и новее всё работает (#19).
+
+---
+
+### What's new
+- VFS: a common file system interface, mount table, path handling and POSIX permissions (owner, group, others). Mounted at boot: `/` is the initramfs (read-only), `/dev` the devices (`null`, `zero`, `console`, disks), `/tmp` a file system in memory, and `/mnt/<disk>` every disk with VeloraFS or FAT.
+- VeloraFS, the native file system: 4 KiB blocks, extents, an owner and permissions on every file, a metadata journal (every operation is a transaction, replayed at mount), CRC32C checksums on metadata, an integrity check (fsck). The format is described in `docs/velorafs.md`.
+- FAT16 and FAT32: reading and writing volumes with long names, FAT32 formatting.
+- File system calls: `open`, `close`, `seek`, `stat`, `fstat`, `readdir`, `mkdir`, `unlink`, `rename`, `ftruncate`, `sync`, `statfs`. `read` and `write` work on files. A process has up to 64 descriptors, 0–2 open on the console, and its files are closed when it exits.
+- Programs run from any file system if the file has execute permission.
+- vlibc: the `fs` module (`File`, `read_dir`, `stat`, `mkdir`, `remove`, `rename`, `sync`, `statfs`) and the C functions `open`, `close`, `lseek`, `mkdir`, `unlink`, `rename`, `sync`.
+- `velora-fsck`: checks VeloraFS and FAT volumes in disk images on the host.
+- Tests: 107 host unit tests (35 new, including a power cut after every disk write), 83 kernel tests (7 new), 25 checks in `vtest` (10 new). The kernel tests run twice with the same disk: the first boot creates VeloraFS and FAT32 and leaves an unwritten transaction in the journal, the second checks the files and the journal replay. After each boot the volumes are checked on the host with `velora-fsck` and `fsck.fat`.
+
+### Fixes
+- None.
+
+### Known issues
+- Every VeloraFS change is its own transaction with several disk cache flushes, so writing in many small pieces is slow (decision D26).
+- While a disk operation runs, other threads do not: the VFS is behind one lock and drivers poll the disk (decisions D21, D25).
+- fsck finds errors but does not repair them. VeloraFS file data has no checksums.
+- No hard or symbolic links. No `chmod`/`chown` for programs and no user switching: every process runs as root (users arrive in stage 8).
+- No working directory: a relative path starts at `/`.
+- Programs cannot mount disks; mounting happens only at boot.
+- Partition tables are not read; a file system is looked for on the whole disk only (GPT comes in stage 9).
+- FAT: a file's number changes when it is renamed (decision D27), there is no journal, no check or repair, FAT12 is not supported, and the whole FAT is kept in memory.
+- With QEMU 8.2 (Ubuntu 24.04) virtio-blk gets no answers to requests; QEMU 9.1 and newer work (#19).
+
 ## [0.6.0] — 2026-11-26
 
 ### Что нового
