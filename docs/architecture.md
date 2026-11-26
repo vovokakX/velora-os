@@ -90,6 +90,7 @@
 | 0x00–0x1f | исключения процессора |
 | 0x20 | таймер локального APIC, 100 Гц |
 | 0x21 | клавиатура (ISA IRQ 1 через IOAPIC) |
+| 0x22 | SCI — события ACPI (с этапа 13) |
 | 0x30–0x6f | прерывания устройств (с этапа 6) |
 | 0x70–0x7f | ложные прерывания от замаскированных 8259 (игнорируются) |
 | 0xfe | ошибка APIC |
@@ -233,6 +234,20 @@
 - Образ для флешки `velora-usb.img` (`tools/mkusb`): GPT и раздел EFI
   FAT32 с теми же файлами, что в ISO (D41). Инструкция —
   [hardware.md](hardware.md).
+
+### ACPI: питание (этап 13)
+
+- `power.rs` при загрузке включает режим ACPI (SMI_CMD/ACPI_ENABLE), если
+  прошивка его не включила, выключает все события общего назначения (GPE),
+  направляет SCI на вектор 0x22 и включает фиксированное событие кнопки
+  питания. Нажатие будит поток ядра `acpi`, который записывает данные на
+  диски и выключает машину (D42).
+- Выключение: S5 из DSDT или SSDT (разбор `_S5` без интерпретатора AML,
+  все кодировки целых), запись SLP_TYP в PM1_CNT с сохранением остальных
+  битов или в регистр SLEEP_CONTROL при ACPI с аппаратным сокращением.
+  Расширенные адреса FADT (X_PM1*, X_GPE*) используются, если это порты.
+- Перезагрузка: регистр сброса ACPI в портах, памяти или конфигурации
+  PCI, затем 0xCF9, контроллер клавиатуры и тройная ошибка.
 
 ## English
 
@@ -420,3 +435,16 @@ are known in advance; on a panic or a fatal exception the kernel writes the
 log straight to them through the disk driver. `velora-usb.img`
 (`tools/mkusb`) is a GPT disk with a FAT32 EFI partition holding the same files
 as the ISO (D41); see [hardware.md](hardware.md).
+
+### ACPI power (stage 13)
+
+At boot `power.rs` switches the firmware to ACPI mode (SMI_CMD/ACPI_ENABLE)
+when needed, turns off all general-purpose events (GPEs), routes the SCI to
+vector 0x22 and enables the fixed power button event; a press wakes the `acpi`
+kernel thread, which flushes the disks and powers off (D42). Power off takes S5
+from the DSDT or an SSDT (`_S5` parsed without an AML interpreter, every
+integer encoding) and writes SLP_TYP to PM1_CNT keeping the other bits, or to
+the SLEEP_CONTROL register on hardware-reduced ACPI; extended FADT addresses
+(X_PM1*, X_GPE*) are used when they are I/O ports. Restart uses the ACPI reset
+register in I/O, memory or PCI configuration space, then 0xCF9, the keyboard
+controller and a triple fault.

@@ -805,3 +805,33 @@ files from it. The image is built on the host with the same GPT and FAT code
 the kernel and installer use, and the same inputs give the same image. The
 partition is plain FAT32, so any system can edit the settings. The user writes
 the image to a drive; the build and the tests only handle the file.
+
+## D42. ACPI без интерпретатора AML / ACPI without an AML interpreter
+
+**2026-11-26**
+
+**RU.** Полный интерпретатор AML — большой объём кода (своего или чужого),
+а для терминальной системы нужно немногое: выключение, перезагрузка и
+кнопка питания. Всё это доступно через фиксированное оборудование ACPI:
+значения `_S5` — это константы, их можно найти разбором байтов, а кнопка
+питания на настольных ПК и в QEMU — фиксированное событие PWRBTN в PM1.
+Поэтому интерпретатора нет, а внешние библиотеки не добавляются (проект
+пишет своё). Все события общего назначения (GPE) выключаются: без AML их
+некому обработать, а включённое событие с установленным статусом вызывало
+бы SCI без конца. Последствия, записанные как известные проблемы: `_PTS`
+перед выключением не выполняется; кнопка питания, которая сделана методом
+управления (часто у ноутбуков со встроенным контроллером), и устройства
+событий ACPI с аппаратным сокращением не обрабатываются. Выключение
+командой `shutdown` на таких машинах работает.
+
+**EN.** A full AML interpreter is a lot of code (ours or someone else's), and a
+terminal system needs little: power off, restart and the power button. All of
+it is available through ACPI fixed hardware: the `_S5` values are constants
+that byte parsing finds, and on desktops and in QEMU the power button is the
+fixed PWRBTN event in PM1. So there is no interpreter and no external library
+(the project writes its own code). All general-purpose events (GPEs) are turned
+off: without AML nothing could handle them, and an enabled event with its
+status set would raise the SCI forever. Consequences, listed as known issues:
+`_PTS` is not run before powering off; a control-method power button (common
+on laptops with an embedded controller) and hardware-reduced ACPI event devices
+are not handled. Powering off with `shutdown` works on such machines.
