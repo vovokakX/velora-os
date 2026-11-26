@@ -15,6 +15,7 @@ import os
 import re
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -68,7 +69,13 @@ def pick_accel():
     return "tcg"
 
 
-def build_command(iso, workdir, memory):
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def build_command(iso, workdir, memory, monitor_port):
     code = find_firmware("OVMF_CODE", CODE_NAMES)
     vars_src = find_firmware("OVMF_VARS", VARS_NAMES)
     vars_copy = os.path.join(workdir, "vars.fd")
@@ -88,8 +95,59 @@ def build_command(iso, workdir, memory):
         "-display", "none",
         "-no-reboot",
         "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
+        # Human monitor on TCP, used to inject key presses.
+        "-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor_port,
     ]
     return cmd, accel
+
+
+class Monitor:
+    """QEMU human monitor connection, used for `sendkey`."""
+
+    def __init__(self, port):
+        self.port = port
+        self.sock = None
+
+    def connect(self, timeout=10.0):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+                self.sock.settimeout(0.2)
+                self._drain()
+                return
+            except OSError:
+                time.sleep(0.1)
+        raise RuntimeError("cannot connect to the QEMU monitor")
+
+    def _drain(self):
+        try:
+            while self.sock.recv(4096):
+                pass
+        except OSError:
+            pass
+
+    def command(self, cmd):
+        if self.sock is None:
+            self.connect()
+        self.sock.sendall((cmd + "\n").encode())
+        time.sleep(0.05)
+        self._drain()
+
+    def keys(self, names, delay=0.08):
+        for name in names:
+            self.command("sendkey " + name)
+            time.sleep(delay)
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+
+
+def text_keys(text):
+    """QEMU key names for plain lowercase text (US positions)."""
+    names = {" ": "spc", "\n": "ret", ".": "dot", ",": "comma", "-": "minus"}
+    return [names.get(c, c) for c in text]
 
 
 class SerialReader:
@@ -133,16 +191,19 @@ def run(args):
         sys.exit("qemu_run: %s does not exist (run ./build.sh first)" % args.iso)
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
-        cmd, accel = build_command(args.iso, work, args.memory)
+        port = free_port()
+        cmd, accel = build_command(args.iso, work, args.memory, port)
         print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, args.iso))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         reader = SerialReader(proc, args.log)
+        monitor = Monitor(port)
         deadline = time.monotonic() + args.timeout
         try:
             if args.mode == "ktest":
-                return check_ktest(proc, reader, deadline)
-            return check_boot(proc, reader, deadline, args.max_boot_seconds)
+                return check_ktest(proc, reader, monitor, deadline)
+            return check_boot(proc, reader, monitor, deadline, args.max_boot_seconds)
         finally:
+            monitor.close()
             if proc.poll() is None:
                 proc.kill()
             proc.wait()
@@ -155,8 +216,27 @@ def fail(msg):
     return 1
 
 
-def check_ktest(proc, reader, deadline):
+# Keys sent when the kernel keyboard test asks for input. The kernel
+# expects the text "velA\nйЦ\n" (see kernel/src/ktest/irq.rs).
+KTEST_KEYS = ["v", "e", "l", "shift-a", "ret", "alt-shift", "q", "shift-w", "alt-shift", "ret"]
+
+
+def wait_for(proc, reader, text, deadline):
+    while time.monotonic() < deadline:
+        if reader.find(text) is not None:
+            return True
+        if proc.poll() is not None:
+            return reader.find(text) is not None
+        time.sleep(0.05)
+    return False
+
+
+def check_ktest(proc, reader, monitor, deadline):
+    keys_sent = False
     while proc.poll() is None and time.monotonic() < deadline:
+        if not keys_sent and reader.find("ktest: keyboard: waiting for input") is not None:
+            monitor.keys(KTEST_KEYS)
+            keys_sent = True
         time.sleep(0.1)
     if proc.poll() is None:
         return fail("timeout: kernel tests did not finish")
@@ -184,7 +264,7 @@ def check_ktest(proc, reader, deadline):
     return 0
 
 
-def check_boot(proc, reader, deadline, max_seconds):
+def check_boot(proc, reader, monitor, deadline, max_seconds):
     marker = "boot complete"
     while time.monotonic() < deadline:
         t = reader.find(marker)
@@ -210,6 +290,16 @@ def check_boot(proc, reader, deadline, max_seconds):
         return fail("idle memory use %d KiB is not below 64 MiB" % used_kib)
     if max_seconds and t > max_seconds:
         return fail("boot took %.2f s, limit %.2f s" % (t, max_seconds))
+    # Keyboard: type a line in each layout and check the echo.
+    if not wait_for(proc, reader, "keyboard test ready", deadline):
+        return fail("keyboard test did not start")
+    monitor.keys(text_keys("hello world\n"))
+    if not wait_for(proc, reader, "echo: hello world", deadline):
+        return fail("typed text was not echoed")
+    monitor.keys(["alt-shift"] + text_keys("ghbdtn\n"))
+    if not wait_for(proc, reader, "echo: привет", deadline):
+        return fail("Russian layout input was not echoed")
+    print("qemu_run: keyboard input works (EN and RU)")
     print("qemu_run: PASS (boot)")
     return 0
 
