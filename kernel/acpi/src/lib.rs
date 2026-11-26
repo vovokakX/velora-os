@@ -371,9 +371,29 @@ pub struct Fadt {
     pub iapc_boot_flags: u16,
     /// Physical address of the DSDT (X_DSDT when present), 0 if none.
     pub dsdt: u64,
-    /// PM1a/PM1b control register I/O ports (0 = absent).
+    /// PM1a/PM1b control register I/O ports (0 = absent). The extended
+    /// (X_) addresses are used when they are I/O ports.
     pub pm1a_cnt: u32,
     pub pm1b_cnt: u32,
+    /// PM1a/PM1b event blocks (status, then enable) and their length.
+    pub pm1a_evt: u32,
+    pub pm1b_evt: u32,
+    pub pm1_evt_len: u8,
+    /// General-purpose event blocks (status, then enable) and lengths.
+    pub gpe0_blk: u32,
+    pub gpe0_len: u8,
+    pub gpe1_blk: u32,
+    pub gpe1_len: u8,
+    /// ISA interrupt of the SCI.
+    pub sci_int: u16,
+    /// Port and value that switch the firmware to ACPI mode (0 = already
+    /// in ACPI mode or not needed).
+    pub smi_cmd: u32,
+    pub acpi_enable: u8,
+    /// Hardware-reduced ACPI: sleep control and status registers
+    /// (space id, address); space 0xff = absent.
+    pub sleep_control: (u8, u64),
+    pub sleep_status: (u8, u64),
     /// Fixed feature flags (bit 10: reset register supported).
     pub flags: u32,
     /// Reset register (generic address) and the value to write.
@@ -424,42 +444,78 @@ pub fn parse_hpet(table: &[u8]) -> Result<Hpet, Error> {
 }
 
 impl Fadt {
+    /// The power button is a control method (or absent), not the fixed
+    /// PWRBTN event.
+    pub const PWR_BUTTON_IS_METHOD: u32 = 1 << 4;
     pub const RESET_REG_SUPPORTED: u32 = 1 << 10;
+    pub const HW_REDUCED_ACPI: u32 = 1 << 20;
 }
+
+/// Generic address structure space ids.
+pub const SPACE_MEMORY: u8 = 0;
+pub const SPACE_IO: u8 = 1;
+pub const SPACE_PCI: u8 = 2;
 
 /// Sleep type values of the \_S5 (soft off) state, found in the DSDT
 /// without an AML interpreter: the usual `Name (_S5, Package {a, b, ...})`
 /// encoding is decoded directly. Returns (SLP_TYPa, SLP_TYPb).
-pub fn find_s5(dsdt: &[u8]) -> Option<(u8, u8)> {
-    let pos = dsdt.windows(4).position(|w| w == b"_S5_")?;
-    let mut i = pos + 4;
-    // Optional NameOp (0x08) before the name is already behind us; the
-    // package follows: PackageOp, PkgLength, NumElements.
-    if *dsdt.get(i)? != 0x12 {
-        return None;
+pub fn find_s5(aml: &[u8]) -> Option<(u8, u8)> {
+    // Every place where "_S5_" is followed by a package; other uses of the
+    // name (a reference inside a method, say) are skipped.
+    let mut from = 0;
+    while let Some(off) = aml[from..].windows(4).position(|w| w == b"_S5_") {
+        let pos = from + off;
+        from = pos + 1;
+        if let Some(v) = s5_package(aml, pos + 4) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Decodes `Package (n) { SLP_TYPa, SLP_TYPb, ... }` at `i`.
+fn s5_package(aml: &[u8], mut i: usize) -> Option<(u8, u8)> {
+    if *aml.get(i)? != 0x12 {
+        return None; // PackageOp
     }
     i += 1;
-    let lead = *dsdt.get(i)?;
+    let lead = *aml.get(i)?;
     i += 1 + (lead >> 6) as usize; // PkgLength: 1 + extra bytes
-    i += 1; // NumElements
-    let value = |i: &mut usize| -> Option<u8> {
-        let b = *dsdt.get(*i)?;
-        *i += 1;
-        match b {
-            0x0a => {
-                let v = *dsdt.get(*i)?;
-                *i += 1;
-                Some(v)
-            }
-            0x00 => Some(0),
-            0x01 => Some(1),
-            0xff => Some(0xff),
-            v => Some(v),
-        }
+    let count = *aml.get(i)?;
+    i += 1;
+    if count < 1 {
+        return None;
+    }
+    let a = aml_integer(aml, &mut i)?;
+    // Some tables give only SLP_TYPa; SLP_TYPb is then unused.
+    let b = if count >= 2 {
+        aml_integer(aml, &mut i)?
+    } else {
+        0
     };
-    let a = value(&mut i)?;
-    let b = value(&mut i)?;
-    Some((a & 7, b & 7))
+    Some(((a & 7) as u8, (b & 7) as u8))
+}
+
+/// An AML integer data object: ZeroOp, OneOp, OnesOp or a Byte, Word,
+/// DWord or QWord constant.
+fn aml_integer(aml: &[u8], i: &mut usize) -> Option<u64> {
+    let op = *aml.get(*i)?;
+    *i += 1;
+    let mut read = |n: usize| -> Option<u64> {
+        let bytes = aml.get(*i..*i + n)?;
+        *i += n;
+        Some(bytes.iter().rev().fold(0u64, |v, &b| (v << 8) | b as u64))
+    };
+    match op {
+        0x00 => Some(0),
+        0x01 => Some(1),
+        0xff => Some(u64::MAX),
+        0x0a => read(1),
+        0x0b => read(2),
+        0x0c => read(4),
+        0x0e => read(8),
+        _ => None,
+    }
 }
 
 pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
@@ -470,7 +526,38 @@ pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
     let len = h.length as usize;
     let u32_if = |o: usize| if len >= o + 4 { u32_at(table, o) } else { 0 };
     let x_dsdt = if len >= 148 { u64_at(table, 140) } else { 0 };
+    let u8_if = |o: usize| if len > o { table[o] } else { 0 };
+    // An extended (X_) block wins when it is an I/O port; else the
+    // 32-bit field.
+    let x_io = |gas: usize, legacy: usize| -> u32 {
+        if len >= gas + 12 && table[gas] == SPACE_IO {
+            let a = u64_at(table, gas + 4) as u32;
+            if a != 0 {
+                return a;
+            }
+        }
+        u32_if(legacy)
+    };
+    let gas = |o: usize| -> (u8, u64) {
+        if len >= o + 12 && u64_at(table, o + 4) != 0 {
+            (table[o], u64_at(table, o + 4))
+        } else {
+            (0xff, 0)
+        }
+    };
     Ok(Fadt {
+        sci_int: if len >= 48 { u16_at(table, 46) } else { 0 },
+        smi_cmd: u32_if(48),
+        acpi_enable: u8_if(52),
+        pm1a_evt: x_io(148, 56),
+        pm1b_evt: x_io(160, 60),
+        pm1_evt_len: u8_if(88),
+        gpe0_blk: x_io(220, 80),
+        gpe0_len: u8_if(92),
+        gpe1_blk: x_io(232, 84),
+        gpe1_len: u8_if(93),
+        sleep_control: gas(244),
+        sleep_status: gas(256),
         century_register: if len > 108 { table[108] } else { 0 },
         iapc_boot_flags: if len > 110 { u16_at(table, 109) } else { 0 },
         dsdt: if x_dsdt != 0 {
@@ -478,8 +565,8 @@ pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
         } else {
             u32_if(40) as u64
         },
-        pm1a_cnt: u32_if(64),
-        pm1b_cnt: u32_if(68),
+        pm1a_cnt: x_io(172, 64),
+        pm1b_cnt: x_io(184, 68),
         flags: u32_if(112),
         reset_space: if len > 116 { table[116] } else { 0 },
         reset_address: if len >= 128 { u64_at(table, 120) } else { 0 },
@@ -767,6 +854,67 @@ mod tests {
             Err(Error::TooShort)
         );
         assert_eq!(parse_hpet(&table(b"APIC", &body)), Err(Error::BadSignature));
+    }
+
+    #[test]
+    fn fadt_events_and_acpi_mode() {
+        let mut body = vec![0u8; 276 - HEADER_LEN];
+        let at = |o: usize| o - HEADER_LEN;
+        body[at(46)..at(48)].copy_from_slice(&9u16.to_le_bytes());
+        body[at(48)..at(52)].copy_from_slice(&0xb2u32.to_le_bytes());
+        body[at(52)] = 0xf1;
+        body[at(56)..at(60)].copy_from_slice(&0x600u32.to_le_bytes());
+        body[at(64)..at(68)].copy_from_slice(&0x604u32.to_le_bytes());
+        body[at(80)..at(84)].copy_from_slice(&0x620u32.to_le_bytes());
+        body[at(88)] = 4;
+        body[at(92)] = 16;
+        let f = parse_fadt(&table(b"FACP", &body)).unwrap();
+        assert_eq!((f.sci_int, f.smi_cmd, f.acpi_enable), (9, 0xb2, 0xf1));
+        assert_eq!((f.pm1a_evt, f.pm1_evt_len, f.pm1a_cnt), (0x600, 4, 0x604));
+        assert_eq!((f.gpe0_blk, f.gpe0_len, f.gpe1_blk), (0x620, 16, 0));
+        assert_eq!(f.sleep_control, (0xff, 0));
+        // Extended I/O addresses replace the 32-bit ones.
+        body[at(148)] = SPACE_IO;
+        body[at(152)..at(160)].copy_from_slice(&0x1800u64.to_le_bytes());
+        body[at(172)] = SPACE_IO;
+        body[at(176)..at(184)].copy_from_slice(&0x1804u64.to_le_bytes());
+        // Hardware-reduced sleep registers.
+        body[at(244)] = SPACE_IO;
+        body[at(248)..at(256)].copy_from_slice(&0x1810u64.to_le_bytes());
+        let f = parse_fadt(&table(b"FACP", &body)).unwrap();
+        assert_eq!((f.pm1a_evt, f.pm1a_cnt), (0x1800, 0x1804));
+        assert_eq!(f.sleep_control, (SPACE_IO, 0x1810));
+        // A short (ACPI 1.0) FADT has none of the extended fields.
+        let f = parse_fadt(&table(b"FACP", &body[..at(116)])).unwrap();
+        assert_eq!((f.pm1a_evt, f.pm1a_cnt), (0x600, 0x604));
+    }
+
+    #[test]
+    fn s5_in_other_encodings() {
+        // \_S5 with DWord and Word constants, SLP_TYPb missing.
+        let aml = [
+            0x08, b'\\', b'_', b'S', b'5', b'_', 0x12, 0x07, 0x01, 0x0c, 7, 0, 0, 0,
+        ];
+        assert_eq!(find_s5(&aml), Some((7, 0)));
+        let aml = [
+            0x08, b'_', b'S', b'5', b'_', 0x12, 0x07, 0x02, 0x0b, 5, 0, 0x0b, 5, 0,
+        ];
+        assert_eq!(find_s5(&aml), Some((5, 5)));
+        // A reference to _S5_ in code comes first and is skipped.
+        let mut aml = vec![0x70, b'_', b'S', b'5', b'_', 0x60];
+        aml.extend_from_slice(&[
+            0x08, b'_', b'S', b'5', b'_', 0x12, 0x06, 0x04, 0x0a, 3, 0x0a, 3,
+        ]);
+        assert_eq!(find_s5(&aml), Some((3, 3)));
+        // Unknown element encodings are refused, truncated data too.
+        assert_eq!(
+            find_s5(&[b'_', b'S', b'5', b'_', 0x12, 0x05, 0x02, 0x5b, 1]),
+            None
+        );
+        assert_eq!(
+            find_s5(&[b'_', b'S', b'5', b'_', 0x12, 0x05, 0x02, 0x0c, 1]),
+            None
+        );
     }
 
     #[test]
