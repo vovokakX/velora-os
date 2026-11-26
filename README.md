@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–9 (v0.9.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы все десять этапов плана (v0.10.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -29,10 +29,12 @@ VeloraFS (права, журнал, контрольные суммы, пров�
 загрузки появляется приглашение входа; оболочка vsh поддерживает историю,
 Tab-дополнение, конвейеры и перенаправления, есть основные команды (`ls`,
 `cat`, `cp`, `mv`, `rm`, `ps`, `kill`, `velofetch` и другие). После
-загрузки занято 7,7 МиБ (вместе с initramfs, в котором есть и файлы для
-установки), приглашение входа появляется через 1,7 с после запуска QEMU с
+загрузки занято 7,9 МиБ (вместе с initramfs, в котором есть и файлы для
+установки), приглашение входа появляется через 1,85 с после запуска QEMU с
 KVM.
 
+Есть сеть: драйвер virtio-net и свой стек (DHCP, ping, TCP и UDP;
+команды `ip`, `ping`, `nc`, см. [docs/network.md](docs/network.md)).
 Систему можно установить на диск: в Live-режиме войти как `root` и
 запустить `velora-setup` (см. [installer/README.md](installer/README.md)).
 
@@ -58,7 +60,7 @@ KVM.
 ```
 boot/       конфигурация загрузчика
 kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
-            kernel/mm, kernel/acpi, kernel/abi — библиотеки
+            kernel/mm, kernel/acpi, kernel/abi, kernel/net — библиотеки
 drivers/    аппаратно-независимые части драйверов (input, pci, rtc)
 fs/         vfs (интерфейс и монтирование), velorafs, fat (FAT16/FAT32), gpt, tar (initramfs)
 libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh)
@@ -106,7 +108,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 7 | VFS, FAT32, VeloraFS с журналом | v0.7.0 (готово) |
 | 8 | vsh, команды, пользователи и вход, velofetch | v0.8.0 (готово) |
 | 9 | Установщик velora-setup | v0.9.0 (готово) |
-| 10 | virtio-net, TCP/IP | v0.10.0 |
+| 10 | virtio-net, TCP/IP | v0.10.0 (готово) |
 
 После этого: USB (xHCI), многопроцессорность, графическая оболочка Lumi
 (компоновщик в пространстве пользователя поверх framebuffer) и Win32-слой
@@ -131,7 +133,7 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–9 (v0.9.0) are done. The kernel boots via UEFI, prints to the screen
+All ten stages of the plan are done (v0.10.0). The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -144,10 +146,12 @@ VeloraFS (permissions, journal, checksums, integrity check) and FAT16/FAT32 with
 read and write. The initramfs is mounted at `/`, disks under `/mnt`. Boot ends
 at a login prompt; the vsh shell has history, Tab completion, pipes and
 redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
-`ps`, `kill`, `velofetch` and others). 7.7 MiB are in use after boot
+`ps`, `kill`, `velofetch` and others). 7.9 MiB are in use after boot
 (initramfs included, which also holds the files to install); the login prompt
-appears 1.7 s after QEMU starts with KVM.
+appears 1.85 s after QEMU starts with KVM.
 
+There is networking: a virtio-net driver and a stack of our own (DHCP, ping,
+TCP and UDP; commands `ip`, `ping`, `nc`, see [docs/network.md](docs/network.md)).
 The system can be installed on a disk: in the Live system log in as `root`
 and run `velora-setup` (see [installer/README.md](installer/README.md)).
 
@@ -208,7 +212,7 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 7 | VFS, FAT32, VeloraFS with a journal | v0.7.0 (done) |
 | 8 | vsh, commands, users and login, velofetch | v0.8.0 (done) |
 | 9 | velora-setup installer | v0.9.0 (done) |
-| 10 | virtio-net, TCP/IP | v0.10.0 |
+| 10 | virtio-net, TCP/IP | v0.10.0 (done) |
 
 After that: USB (xHCI), SMP, the Lumi graphical shell (a user-space compositor
 on top of the framebuffer) and a Win32 layer for .exe files (a PE loader plus
