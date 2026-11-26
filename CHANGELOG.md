@@ -6,6 +6,60 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.9.0] — 2026-11-26
+
+### Что нового
+- Установщик `velora-setup`: в Live-режиме (загрузка с ISO) спрашивает диск, имя пользователя, пароли пользователя и root, просит подтверждение (`yes`) и устанавливает систему. Режим без вопросов `--auto` нужен для тестов. Описание — `installer/README.md`.
+- Разметка GPT: раздел EFI (FAT32, 64 МиБ) с загрузчиком Limine, ядром и `limine.conf`, и корневой раздел с VeloraFS на остальном месте. Таблица GPT читается и пишется crate `velora-gpt`; при повреждённой основной таблице используется резервная.
+- Ядро находит разделы GPT и показывает их как отдельные устройства (`vd0p1`, `vd0p2`). Параметр `velora.root=PARTUUID=<GUID>` монтирует корень с раздела VeloraFS. В установленной системе домашние каталоги и `/root` хранятся на диске.
+- Команды `df` (файловые системы и свободное место) и `passwd` (смена пароля, только root).
+- Системный вызов `getrandom`: RDRAND, если процессор его поддерживает, вместе с TSC. Используется для GUID разделов и солей паролей.
+- `kstrip`: ядро для установленной системы без отладочных данных (около 500 КиБ вместо 5,4 МиБ).
+- Тесты: 128 юнит-тестов на хосте (7 новых: GPT, kstrip), 89 тестов ядра, 33 проверки в `vtest`. Новый тест установки в QEMU проходит три шага:
+  - загрузка с ISO на чистый диск: установщик в интерактивном режиме отказывается без изменений, затем идёт автоматическая установка;
+  - загрузка только с диска: прежний пароль Live-образа не подходит, вход новым пользователем, файлы, `df` показывает VeloraFS в корне, `passwd`;
+  - ещё одна загрузка с диска: файлы и новый пароль на месте.
+  После каждого шага разделы проверяются на хосте программами `velora-fsck` и `fsck.fat`.
+
+### Исправления
+- Нет.
+
+### Известные проблемы
+- Установка занимает весь диск: двух систем на одном диске и сохранения прежних разделов нет.
+- Загрузка установленной системы — только через UEFI; BIOS не поддерживается.
+- Проверена загрузка с дисков virtio-blk в QEMU. С AHCI и NVMe установка должна работать так же, но в тестах это не проверяется.
+- Системных вызовов `mount`/`umount` нет. Установщик пишет файловые системы напрямую через `/dev` и отказывается работать с дисками, смонтированными в `/mnt`.
+- Если у процессора нет RDRAND, случайные данные получаются из TSC и менее надёжны.
+- `passwd` доступен только root: программ с setuid нет.
+- Ограничения прошлых версий остаются (сигналов нет, одна блокировка VFS, virtio-blk не работает с QEMU 8.2 — #19).
+
+---
+
+### What's new
+- The `velora-setup` installer: in the Live system (booted from the ISO) it asks for the disk, the user name, the user's and root's passwords, asks for confirmation (`yes`) and installs the system. `--auto` runs it without questions for tests. See `installer/README.md`.
+- GPT layout: an EFI system partition (FAT32, 64 MiB) with the Limine bootloader, the kernel and `limine.conf`, and a VeloraFS root partition in the rest. The `velora-gpt` crate reads and writes GPT and falls back to the backup table when the primary one is damaged.
+- The kernel finds GPT partitions and shows them as devices of their own (`vd0p1`, `vd0p2`). `velora.root=PARTUUID=<GUID>` mounts the root from a VeloraFS partition. In an installed system home directories and `/root` are on the disk.
+- Commands `df` (file systems and free space) and `passwd` (change a password, root only).
+- The `getrandom` system call: RDRAND when the CPU has it, mixed with the TSC. It provides partition GUIDs and password salts.
+- `kstrip`: the installed kernel without debug data (about 500 KiB instead of 5.4 MiB).
+- Tests: 128 host unit tests (7 new: GPT, kstrip), 89 kernel tests, 33 checks in `vtest`. A new installation test in QEMU runs three steps:
+  - boot the ISO with a blank disk: the interactive installer is refused without changes, then the unattended install runs;
+  - boot from the disk alone: the old Live password is refused, the new user logs in, works with files, `df` shows VeloraFS at the root, `passwd` runs;
+  - boot from the disk again: the files and the new password are still there.
+  After every step the partitions are checked on the host with `velora-fsck` and `fsck.fat`.
+
+### Fixes
+- None.
+
+### Known issues
+- The installation takes the whole disk: no dual boot and no keeping of existing partitions.
+- The installed system boots through UEFI only; BIOS is not supported.
+- Booting from virtio-blk disks in QEMU is tested. AHCI and NVMe should work the same way but are not covered by the tests.
+- No `mount`/`umount` system calls. The installer writes the file systems directly through `/dev` and refuses disks mounted under `/mnt`.
+- Without RDRAND the random data comes from the TSC and is weaker.
+- `passwd` is for root only: there are no setuid programs.
+- Earlier limitations remain (no signals, one VFS lock, virtio-blk does not work with QEMU 8.2 — #19).
+
 ## [0.8.0] — 2026-11-26
 
 ### Что нового
