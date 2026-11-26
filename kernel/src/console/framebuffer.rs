@@ -155,6 +155,21 @@ impl Framebuffer {
         }
     }
 
+    /// Inverts the colours of a rectangle (used for the text cursor;
+    /// inverting twice restores the image).
+    pub fn invert_rect(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        let mask = self.native(0xff_ffff);
+        let x_end = (x + w).min(self.width);
+        let y_end = (y + h).min(self.height);
+        for yy in y..y_end {
+            for xx in x..x_end {
+                if let Some(px) = self.get_native(xx, yy) {
+                    self.write_px(xx, yy, px ^ mask);
+                }
+            }
+        }
+    }
+
     /// Moves the image up by `lines` pixel rows and clears the bottom part.
     pub fn scroll_up(&mut self, lines: usize, rgb: u32) {
         if lines >= self.height {
