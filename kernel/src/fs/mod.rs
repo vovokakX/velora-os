@@ -147,6 +147,7 @@ pub fn automount() {
             continue;
         }
         let at = format!("/mnt/{}", name);
+        let dev = d.clone();
         let mut io = DiskIo::new(d);
         let mounted: Result<(Box<dyn velora_vfs::FileSystem>, bool), FsError> =
             if velorafs::probe(&mut io).is_some() {
@@ -155,8 +156,15 @@ pub fn automount() {
                     (Box::new(fs) as Box<dyn velora_vfs::FileSystem>, rec)
                 })
             } else if velora_fat::volume::probe(&mut io).is_some() {
-                velora_fat::FatVolume::mount(io, false)
-                    .map(|fs| (Box::new(fs) as Box<dyn velora_vfs::FileSystem>, false))
+                velora_fat::FatVolume::mount(io, false).map(|fs| {
+                    let mut fs = Box::new(fs) as Box<dyn velora_vfs::FileSystem>;
+                    if crate::crashlog::wanted(&mut *fs)
+                        && let Err(e) = crate::crashlog::prepare(&mut *fs, dev.clone(), 0, &at)
+                    {
+                        kwarn!("{}: cannot prepare the panic log: {}", name, e);
+                    }
+                    (fs, false)
+                })
             } else {
                 continue;
             };

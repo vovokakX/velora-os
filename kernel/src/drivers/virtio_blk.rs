@@ -375,6 +375,11 @@ impl BlockDevice for VirtioBlk {
             Ok(())
         }
     }
+
+    unsafe fn force_unlock(&self) {
+        // SAFETY: the caller is the panic path.
+        unsafe { self.queue.force_unlock() }
+    }
 }
 
 impl Drop for VirtioBlk {

@@ -18,6 +18,7 @@ use crate::fs::{self, DiskIo};
 use crate::{kprint, kprintln, sched};
 use alloc::boxed::Box;
 use alloc::format;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -271,8 +272,11 @@ pub fn fat32_on_disk() {
     if first {
         velora_fat::format_fat32(&mut part, "VELORA", 0x7e57).expect("format FAT32");
     }
-    let vol = velora_fat::FatVolume::mount(part, false).expect("mount FAT32");
+    let mut vol = velora_fat::FatVolume::mount(part, false).expect("mount FAT32");
     assert_eq!(vol.fat_type(), velora_fat::FatType::Fat32);
+    // The deliberate panic at the end of the tests is logged here; the
+    // host reads the log after boot 1 and boot 2 finds it.
+    crate::crashlog::prepare(&mut vol, fs_disk(), HALF_SECTORS, at).expect("panic log");
     fs::with(|v| v.mount(at, "ktest-fat", Box::new(vol))).unwrap();
     let efi = pattern(50_000, 2);
     if first {
@@ -292,7 +296,14 @@ pub fn fat32_on_disk() {
             "Файл на FAT32\n".as_bytes()
         );
         conformance_at(at, "conformance-2", MIB as usize);
-        kprint!("(files from boot 1 intact) ");
+        let prev = read_file("/mnt/fat/velora-panic.prev.log").expect("panic log of boot 1");
+        let text = String::from_utf8_lossy(&prev);
+        assert!(text.starts_with("VELORA PANIC LOG"), "bad panic log header");
+        assert!(
+            text.contains("ktest: deliberate panic") && text.contains("KERNEL PANIC"),
+            "the panic log of boot 1 has no report"
+        );
+        kprint!("(files and the panic log from boot 1 intact) ");
     }
     drop(fs::with(|v| v.unmount(at)).expect("unmount FAT32"));
 }

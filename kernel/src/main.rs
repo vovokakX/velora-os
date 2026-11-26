@@ -11,6 +11,7 @@ mod acpi;
 mod arch;
 mod boot;
 mod console;
+mod crashlog;
 mod drivers;
 mod exec;
 mod fs;
@@ -30,7 +31,7 @@ mod tty;
 #[cfg(feature = "ktest")]
 mod userprog;
 
-use arch::x86_64::{apic, ioapic, pic, serial};
+use arch::x86_64::{apic, hpet, ioapic, pic, pmtimer, serial};
 use boot::limine;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -181,14 +182,37 @@ fn init_interrupts() {
         apic::id(),
         if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
     );
+    if let Some(h) = acpi.hpet {
+        match hpet::init(h.address) {
+            Ok(hz) => kok!("HPET at {:#x}, {} kHz", h.address, hz / 1000),
+            Err(e) => kwarn!("HPET: {}", e),
+        }
+    }
+    if acpi.fadt.pm_timer_port != 0 {
+        let _ = pmtimer::init(acpi.fadt.pm_timer_port, acpi.fadt.pm_timer_32bit);
+    }
     match time::init() {
-        Ok((tsc_hz, per_ms)) => kok!(
-            "timer {} Hz; TSC {}.{:02} GHz, APIC timer {} kHz",
-            time::TICK_HZ,
-            tsc_hz / 1_000_000_000,
-            tsc_hz / 10_000_000 % 100,
-            per_ms
-        ),
+        Ok(t) => {
+            for (r, e) in &t.failed {
+                kwarn!("calibration against the {}: {}", r.name(), e);
+            }
+            kok!(
+                "timer {} Hz; TSC {}.{:02} GHz{}, APIC timer {} kHz (calibrated against the {})",
+                time::TICK_HZ,
+                t.tsc_hz / 1_000_000_000,
+                t.tsc_hz / 10_000_000 % 100,
+                if time::tsc_invariant() {
+                    ", invariant"
+                } else {
+                    ""
+                },
+                t.timer_per_ms,
+                t.reference.name()
+            );
+            if !time::tsc_invariant() {
+                kwarn!("the TSC is not invariant: time may drift in deep power states");
+            }
+        }
         Err(e) => panic!("timer calibration: {}", e),
     }
     match drivers::ps2::init(madt) {

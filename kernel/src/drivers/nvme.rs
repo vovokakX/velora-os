@@ -210,6 +210,11 @@ impl BlockDevice for NvmeDisk {
             .submit(command(IO_FLUSH, NSID))
             .map(|_| ())
     }
+
+    unsafe fn force_unlock(&self) {
+        // SAFETY: the caller is the panic path.
+        unsafe { self.io.force_unlock() }
+    }
 }
 
 fn probe(d: &Device, index: usize) -> Result<NvmeDisk, &'static str> {

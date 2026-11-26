@@ -178,6 +178,7 @@ fn fatal(frame: &InterruptFrame, cr2: u64) -> ! {
     crate::console::emergency(|w| {
         let _ = write_report(w, frame, cr2);
     });
+    crate::crashlog::save();
     crate::arch::fatal_exit();
 }
 

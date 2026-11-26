@@ -41,6 +41,13 @@ pub trait BlockDevice: Send + Sync {
     fn partition_guid(&self) -> Option<[u8; 16]> {
         None
     }
+
+    /// Releases the driver's request lock so the panic log can be
+    /// written even if the panic happened in the middle of a request.
+    ///
+    /// # Safety
+    /// Only for the panic path, where the holder will never run again.
+    unsafe fn force_unlock(&self) {}
 }
 
 /// A GPT partition: a window of its disk.
@@ -86,6 +93,11 @@ impl BlockDevice for Partition {
 
     fn partition_guid(&self) -> Option<[u8; 16]> {
         Some(self.guid)
+    }
+
+    unsafe fn force_unlock(&self) {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.disk.force_unlock() }
     }
 }
 

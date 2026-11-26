@@ -29,6 +29,10 @@ pub struct TextConsole {
     fb: Framebuffer,
     pub cols: usize,
     pub rows: usize,
+    /// Cell size in pixels (the font times the scale).
+    cw: usize,
+    ch: usize,
+    scale: usize,
     pub col: usize,
     pub row: usize,
     pub fg: u32,
@@ -50,13 +54,19 @@ pub struct TextConsole {
 const CURSOR_HEIGHT: usize = 2;
 
 impl TextConsole {
-    pub fn new(fb: Framebuffer) -> Self {
-        let cols = fb.width / font::WIDTH;
-        let rows = fb.height / font::HEIGHT;
+    /// A console over `fb` with the font enlarged `scale` times (1..=4).
+    pub fn new(fb: Framebuffer, scale: usize) -> Self {
+        let scale = scale.clamp(1, 4);
+        let (cw, ch) = (font::WIDTH * scale, font::HEIGHT * scale);
+        let cols = fb.width / cw;
+        let rows = fb.height / ch;
         let mut c = Self {
             fb,
             cols,
             rows,
+            cw,
+            ch,
+            scale,
             col: 0,
             row: 0,
             fg: DEFAULT_FG,
@@ -100,10 +110,10 @@ impl TextConsole {
 
     fn toggle_cursor_at(&mut self, (row, col): (usize, usize)) {
         self.fb.invert_rect(
-            col * font::WIDTH,
-            row * font::HEIGHT + font::HEIGHT - CURSOR_HEIGHT,
-            font::WIDTH,
-            CURSOR_HEIGHT,
+            col * self.cw,
+            row * self.ch + self.ch - CURSOR_HEIGHT * self.scale,
+            self.cw,
+            CURSOR_HEIGHT * self.scale,
         );
     }
 
@@ -213,7 +223,7 @@ impl TextConsole {
             'J' => match self.param(0, 0) {
                 0 => {
                     self.erase_line_end();
-                    let y = (self.row + 1) * font::HEIGHT;
+                    let y = (self.row + 1) * self.ch;
                     let (w, h) = (self.fb.width, self.fb.height.saturating_sub(y));
                     self.fb.fill_rect(0, y, w, h, self.bg);
                 }
@@ -231,10 +241,10 @@ impl TextConsole {
     }
 
     fn erase_line_end(&mut self) {
-        let x = (self.col * font::WIDTH).min(self.fb.width);
-        let y = self.row * font::HEIGHT;
+        let x = (self.col * self.cw).min(self.fb.width);
+        let y = self.row * self.ch;
         let w = self.fb.width - x;
-        self.fb.fill_rect(x, y, w, font::HEIGHT, self.bg);
+        self.fb.fill_rect(x, y, w, self.ch, self.bg);
     }
 
     fn sgr(&mut self) {
@@ -295,11 +305,12 @@ impl TextConsole {
             (self.fg, self.bg)
         };
         self.fb.draw_glyph(
-            self.col * font::WIDTH,
-            self.row * font::HEIGHT,
+            self.col * self.cw,
+            self.row * self.ch,
             glyph,
             fg,
             bg,
+            self.scale,
         );
         self.col += 1;
     }
@@ -307,7 +318,7 @@ impl TextConsole {
     fn newline(&mut self) {
         self.col = 0;
         if self.row + 1 >= self.rows {
-            self.fb.scroll_up(font::HEIGHT, self.bg);
+            self.fb.scroll_up(self.ch, self.bg);
         } else {
             self.row += 1;
         }

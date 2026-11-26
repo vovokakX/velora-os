@@ -41,14 +41,46 @@ fn on_tick(_frame: &mut InterruptFrame) {
     crate::sched::on_tick(now);
 }
 
-/// Calibrates against the PIT and starts the timer interrupt.
-/// Returns (TSC Hz, APIC timer ticks per ms).
-pub fn init() -> Result<(u64, u64), &'static str> {
-    let c = apic::calibrate()?;
-    TSC_HZ.store(c.tsc_hz, Ordering::SeqCst);
-    irq::set_handler(apic::VECTOR_TIMER, on_tick);
-    apic::start_periodic(TICK_HZ);
-    Ok((c.tsc_hz, c.timer_per_ms))
+/// Result of [`init`].
+pub struct TimerInfo {
+    pub tsc_hz: u64,
+    pub timer_per_ms: u64,
+    /// The clock the TSC and the APIC timer were measured against.
+    pub reference: apic::Reference,
+    /// References that were tried first and failed, with the reason.
+    pub failed: alloc::vec::Vec<(apic::Reference, &'static str)>,
+}
+
+/// Calibrates the TSC and the APIC timer against the best reference
+/// clock that works (HPET, then the ACPI PM timer, then the PIT) and
+/// starts the timer interrupt.
+pub fn init() -> Result<TimerInfo, &'static str> {
+    let mut failed = alloc::vec::Vec::new();
+    for r in apic::Reference::ALL {
+        if !r.available() {
+            continue;
+        }
+        match apic::calibrate(r) {
+            Ok(c) => {
+                TSC_HZ.store(c.tsc_hz, Ordering::SeqCst);
+                irq::set_handler(apic::VECTOR_TIMER, on_tick);
+                apic::start_periodic(TICK_HZ);
+                return Ok(TimerInfo {
+                    tsc_hz: c.tsc_hz,
+                    timer_per_ms: c.timer_per_ms,
+                    reference: r,
+                    failed,
+                });
+            }
+            Err(e) => failed.push((r, e)),
+        }
+    }
+    Err("no reference clock works (HPET, ACPI PM timer, PIT)")
+}
+
+/// The TSC keeps a constant rate in all power states (CPUID 0x80000007).
+pub fn tsc_invariant() -> bool {
+    cpu::cpuid(0x8000_0000, 0).eax >= 0x8000_0007 && cpu::cpuid(0x8000_0007, 0).edx & (1 << 8) != 0
 }
 
 pub fn tsc_hz() -> u64 {
