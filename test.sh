@@ -31,6 +31,9 @@ echo "==> boot test in QEMU"
 echo "==> network test in QEMU (DHCP, ping, TCP with the host)"
 "$PY" tests/qemu_run.py net --timeout 300
 
+echo "==> USB image test in QEMU (boot from a USB drive, no HPET)"
+"$PY" tests/qemu_run.py usb --timeout 300
+
 echo "==> installation test in QEMU (install, boot from disk, files persist)"
 "$PY" tests/qemu_run.py install --timeout 900
 

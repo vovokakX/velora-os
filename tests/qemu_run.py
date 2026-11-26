@@ -332,6 +332,22 @@ def host_fsck(path, offset, size, what):
     return None
 
 
+def check_panic_log(path):
+    """The deliberate panic at the end of the kernel tests must be in the
+    panic log on the FAT32 half of the file system disk."""
+    cmd = ["cargo", "run", "-q", "--release", "-p", "velora-fsck", "--",
+           path, "--offset", str(FS_HALF), "--size", str(FS_HALF),
+           "--cat", "/velora-panic.log"]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    text = r.stdout.decode("utf-8", errors="replace")
+    if r.returncode != 0:
+        return "cannot read the panic log: " + text.strip()
+    for want in ("VELORA PANIC LOG", "KERNEL PANIC", "ktest: deliberate panic"):
+        if want not in text:
+            return "the panic log has no '%s'" % want
+    return None
+
+
 # Markers each ktest boot must print besides the common ones.
 BOOT_MARKERS = {
     1: [
@@ -343,7 +359,8 @@ BOOT_MARKERS = {
         "(journal replayed)",
         "ktest: fs: boot 2: files from boot 1 intact",
         "vtest: files in /mnt/vd1: 8 passed, 0 failed",
-        "(files from boot 1 intact)",
+        "(files and the panic log from boot 1 intact)",
+        "the previous boot ended with a panic",
     ],
 }
 
@@ -388,6 +405,8 @@ def run(args):
             return run_install(args, work)
         if args.mode == "net":
             return run_net(args, work)
+        if args.mode == "usb":
+            return run_usb(args, work)
         if args.mode != "ktest":
             return run_once(args, work, None, args.log,
                             lambda p, r, m, d: check_boot(p, r, m, d, args.max_boot_seconds))
@@ -408,6 +427,10 @@ def run(args):
                 if problem:
                     return fail("after boot %d: %s" % (boot, problem))
             print("qemu_run: VeloraFS and FAT32 checked on the host after boot %d" % boot)
+            problem = check_panic_log(disks["fs"])
+            if problem:
+                return fail("after boot %d: %s" % (boot, problem))
+            print("qemu_run: panic log of boot %d read on the host" % boot)
         print("qemu_run: PASS (kernel tests, two boots)")
         return 0
 
@@ -624,6 +647,49 @@ def run_net(args, work):
         server.close()
     if r == 0:
         print("qemu_run: PASS (network: DHCP, ping, TCP both ways)")
+    return r
+
+
+def run_usb(args, work):
+    """Boots velora-usb.img the way a real PC boots a USB drive: the image is
+    a USB mass storage device on an xHCI controller and there is no CD.
+    The machine has no HPET, so the kernel must calibrate its timers
+    against the ACPI PM timer."""
+    if not os.path.exists(args.usb):
+        sys.exit("qemu_run: %s does not exist (run ./build.sh first)" % args.usb)
+    image = os.path.join(work, "usb.img")
+    shutil.copyfile(args.usb, image)
+    extra = [
+        "-machine", "hpet=off",
+        "-device", "qemu-xhci,id=xhci",
+        "-drive", "if=none,id=stick,format=raw,file=" + image,
+        "-device", "usb-storage,bus=xhci.0,drive=stick,bootindex=0",
+    ]
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        try:
+            assert s.wait("calibrated against the ACPI PM timer"), \
+                "the timers were not calibrated against the ACPI PM timer"
+            login(s, "user", "velora", "user@velora")
+            print("qemu_run: booted from the USB image: login prompt after %.2f s"
+                  % reader.find("velora login:"))
+            # The kernel log, saved and then printed (markers that the
+            # typed commands do not contain).
+            s.run("dmesg > /tmp/k.txt; ls -l /tmp/k.txt", "k.txt")
+            s.run("cat /tmp/k.txt", "calibrated against the ACPI PM timer")
+            s.run("ls /dev", "kmsg", exact=True)
+            s.type("exit\n")
+            login(s, "root", "velora", "root@velora")
+            s.type("shutdown\n")
+            wait_exit(proc)
+        except AssertionError as e:
+            return fail(str(e))
+        return 0
+
+    r = run_once(args, work, None, args.log, check, iso=None, extra=extra)
+    if r == 0:
+        print("qemu_run: PASS (boot from the USB image, PM timer, dmesg)")
     return r
 
 
@@ -900,8 +966,9 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install", "net"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb"])
     p.add_argument("--iso")
+    p.add_argument("--usb", default="velora-usb.img", help="image for the usb mode")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--memory", default="256M")
     p.add_argument("--max-boot-seconds", type=float, default=0.0)
