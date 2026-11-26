@@ -81,6 +81,7 @@ fn run_all() -> i32 {
     r.check("heap collections", heap_collections());
     r.check("heap reuse", heap_reuse());
     r.check("clock and sleep", clock_and_sleep());
+    r.check("wall clock", wall_clock());
     r.check("mmap and munmap", mmap_munmap());
     r.check("mmap refuses W+X and bad input", mmap_rejections());
     r.check("write with a bad pointer", bad_pointer());
@@ -146,6 +147,16 @@ fn clock_and_sleep() -> Result<(), String> {
     let t1 = time::monotonic().map_err(|e| format!("{}", e))?;
     let ms = (t1 - t0).as_millis();
     ensure!(ms >= 30, "slept only {} ms", ms);
+    Ok(())
+}
+
+fn wall_clock() -> Result<(), String> {
+    let now = time::realtime().map_err(|e| format!("{}", e))?;
+    ensure!(
+        now.as_secs() > 1_700_000_000,
+        "time {} s is before 2023",
+        now.as_secs()
+    );
     Ok(())
 }
 
