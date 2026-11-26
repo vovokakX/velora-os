@@ -1,0 +1,11 @@
+[package]
+name = "velora-fat"
+description = "FAT filesystem image builder and reader (no_std + alloc)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
