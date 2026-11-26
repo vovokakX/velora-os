@@ -13,6 +13,8 @@ pub const TICK_HZ: u64 = 100;
 static BOOT_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);
 static TICKS: AtomicU64 = AtomicU64::new(0);
+/// UNIX time (ns) that corresponds to uptime 0; 0 = unknown.
+static WALL_AT_BOOT_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Records the TSC at kernel entry, before anything else runs.
 pub fn mark_boot() {
@@ -64,6 +66,23 @@ pub fn uptime_ns() -> u64 {
 
 pub fn uptime_ms() -> u64 {
     uptime_ns() / 1_000_000
+}
+
+/// Sets the wall clock from a UNIX time read now (from the RTC).
+pub fn set_wall_clock(unix_seconds: i64) {
+    if unix_seconds <= 0 {
+        return;
+    }
+    let base = (unix_seconds as u64 * 1_000_000_000).saturating_sub(uptime_ns());
+    WALL_AT_BOOT_NS.store(base, Ordering::SeqCst);
+}
+
+/// Nanoseconds since 1970-01-01 UTC, if the wall clock is known.
+pub fn realtime_ns() -> Option<u64> {
+    match WALL_AT_BOOT_NS.load(Ordering::SeqCst) {
+        0 => None,
+        base => Some(base + uptime_ns()),
+    }
 }
 
 /// Busy-waits for `us` microseconds using the TSC.

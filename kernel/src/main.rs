@@ -107,6 +107,7 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
         Ok((files, size)) => kok!("initramfs: {} files, {} KiB", files, size / 1024),
         Err(e) => kwarn!("initramfs: {}", e),
     }
+    drivers::init();
     arch::cpu::enable_interrupts();
     kok!(
         "scheduler running (preemptive, {} Hz time slices)",
