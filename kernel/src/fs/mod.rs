@@ -2,7 +2,9 @@
 //! boot, open files and file descriptor tables.
 //!
 //! Mounts at boot:
-//! - `/`     the initramfs (read-only, [`tarfs`])
+//! - `/`     the initramfs (read-only, [`tarfs`]); with
+//!   `velora.root=PARTUUID=<guid>` on the command line, the VeloraFS
+//!   partition with that GUID instead (an installed system)
 //! - `/dev`  devices ([`devfs`]): null, zero, console and the disks
 //! - `/tmp`  a file system in memory (`MemFs`)
 //! - `/mnt/<disk>` every disk that holds VeloraFS or FAT16/FAT32
@@ -51,19 +53,66 @@ pub fn now() -> u64 {
     time::realtime_ns().map_or(0, |ns| ns / 1_000_000_000)
 }
 
-/// Mounts the initramfs at `/`, devfs at `/dev` and a memory file system
-/// at `/tmp`. Disks are mounted later by [`automount`].
+static ROOT_DEVICE: SpinLock<Option<String>> = SpinLock::new(None);
+
+/// The partition named by `velora.root=PARTUUID=<guid>`, if any.
+fn root_partition() -> Option<Arc<dyn block::BlockDevice>> {
+    let arg = crate::boot::cmdline()
+        .split_whitespace()
+        .find_map(|w| w.strip_prefix("velora.root=PARTUUID="))?;
+    let Some(guid) = velora_gpt::Guid::parse(arg) else {
+        kwarn!("velora.root: '{}' is not a GUID", arg);
+        return None;
+    };
+    let dev = block::devices()
+        .into_iter()
+        .find(|d| d.partition_guid() == Some(guid.0));
+    if dev.is_none() {
+        kwarn!("velora.root: no partition with GUID {}", guid);
+    }
+    dev
+}
+
+/// Mounts the root (initramfs or a VeloraFS partition), devfs at `/dev`
+/// and memory file systems at `/tmp` (and, in the Live system, at `/home`
+/// and `/root`). Other disks are mounted later by [`automount`].
 pub fn init() {
     let mut v = Vfs::new();
-    let root = tarfs::TarFs::new(initramfs::data());
-    let files = root.file_count();
-    v.mount("/", "initramfs", Box::new(root)).expect("mount /");
+    let mut on_disk = false;
+    if let Some(dev) = root_partition() {
+        let name = String::from(dev.name());
+        match VeloraFs::mount(DiskIo::new(dev), false) {
+            Ok(fs) => {
+                let recovered = fs.recovered();
+                v.mount("/", &name, Box::new(fs)).expect("mount /");
+                kok!(
+                    "root: VeloraFS on {}{}",
+                    name,
+                    if recovered { " (journal replayed)" } else { "" }
+                );
+                *ROOT_DEVICE.lock() = Some(name);
+                on_disk = true;
+            }
+            Err(e) => kwarn!("root on {}: {}; using the initramfs", name, e),
+        }
+    }
+    let mut files = 0;
+    if !on_disk {
+        let root = tarfs::TarFs::new(initramfs::data());
+        files = root.file_count();
+        v.mount("/", "initramfs", Box::new(root)).expect("mount /");
+    }
     let dev = v
         .mount("/dev", "devfs", Box::new(DevFs::new()))
         .expect("mount /dev");
     DEVFS_MOUNT.store(dev, Ordering::Relaxed);
     v.mount("/tmp", "memory", Box::new(MemFs::new(0o1777, TMP_CAPACITY)))
         .expect("mount /tmp");
+    if on_disk {
+        *VFS.lock() = Some(v);
+        kok!("VFS: root on disk, devfs at /dev, memory at /tmp");
+        return;
+    }
     // Home directories live in memory in the Live system; login creates
     // them on first use.
     v.mount("/home", "memory", Box::new(MemFs::new(0o755, TMP_CAPACITY)))
@@ -88,10 +137,15 @@ pub struct AutoMount {
 
 static AUTOMOUNTED: SpinLock<Vec<AutoMount>> = SpinLock::new(Vec::new());
 
-/// Mounts every disk with a known file system at `/mnt/<disk>`.
+/// Mounts every disk or partition with a known file system at
+/// `/mnt/<name>` (except the root partition).
 pub fn automount() {
+    let root = ROOT_DEVICE.lock().clone();
     for d in block::devices() {
         let name = String::from(d.name());
+        if root.as_deref() == Some(name.as_str()) {
+            continue;
+        }
         let at = format!("/mnt/{}", name);
         let mut io = DiskIo::new(d);
         let mounted: Result<(Box<dyn velora_vfs::FileSystem>, bool), FsError> =

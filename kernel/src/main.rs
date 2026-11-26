@@ -106,7 +106,7 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     sched::init(main_stack);
     match initramfs::init() {
         Ok((files, size)) => kok!("initramfs: {} files, {} KiB", files, size / 1024),
-        Err(e) => kwarn!("initramfs: {}", e),
+        Err(e) => kinfo!("initramfs: {}", e),
     }
     drivers::init();
     tty::init();
