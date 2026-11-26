@@ -175,6 +175,8 @@ fn fatal(frame: &InterruptFrame, cr2: u64) -> ! {
         });
         crate::arch::fatal_exit();
     }
+    crate::panic::mark_panicking();
+    crate::smp::stop_others();
     crate::console::emergency(|w| {
         let _ = write_report(w, frame, cr2);
     });

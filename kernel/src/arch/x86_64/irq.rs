@@ -61,6 +61,11 @@ pub fn dispatch(frame: &mut InterruptFrame) {
         f(frame);
     }
     apic::eoi();
+    // Interrupted with interrupts enabled (user code or a preemptible
+    // kernel thread): a safe point to let waiting CPUs into the kernel.
+    if frame.rflags & (1 << 9) != 0 {
+        crate::smp::bkl_yield_if_contended();
+    }
     // After EOI, so the next timer interrupt can arrive on the new thread.
     crate::sched::preempt_if_needed();
 }

@@ -37,7 +37,12 @@ pub fn boot_tsc() -> u64 {
 }
 
 fn on_tick(_frame: &mut InterruptFrame) {
-    let now = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    // Every CPU has a timer; only the boot CPU's counts time.
+    let now = if crate::arch::x86_64::percpu::index() == 0 {
+        TICKS.fetch_add(1, Ordering::Relaxed) + 1
+    } else {
+        TICKS.load(Ordering::Relaxed)
+    };
     crate::sched::on_tick(now);
 }
 

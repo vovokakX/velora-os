@@ -1,7 +1,7 @@
 //! Process, user and system calls added in stage 8.
 
 use super::uaccess;
-use crate::{acpi, arch, mm, power, sched, time, tty};
+use crate::{arch, mm, power, sched, time, tty};
 use velora_abi::{ProcEntry, SysInfo, errno, reboot as cmd, tty as op};
 use velora_vfs::Cred;
 
@@ -43,7 +43,7 @@ pub fn sysinfo(out: u64) -> i64 {
             .filter(|p| p.exited.is_none())
             .count() as u64,
         boot_ms: time::boot_done_ms(),
-        cpus: acpi::get().madt.lapics.iter().filter(|l| l.enabled).count() as u64,
+        cpus: crate::smp::online() as u64,
         ..Default::default()
     };
     copy_str(&mut info.version, crate::VERSION);

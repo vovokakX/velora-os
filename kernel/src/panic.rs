@@ -7,6 +7,17 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 static PANICKING: AtomicBool = AtomicBool::new(false);
 
+/// True once a panic started (other CPUs then halt on their NMI).
+pub fn panicking() -> bool {
+    PANICKING.load(Ordering::SeqCst)
+}
+
+/// Records that the system is going down (fatal CPU exceptions), so that
+/// the other CPUs halt on the NMI they get.
+pub fn mark_panicking() {
+    PANICKING.store(true, Ordering::SeqCst);
+}
+
 const MAX_FRAMES: usize = 24;
 /// Frame pointers must be in the higher half (kernel image, kernel stacks
 /// or the HHDM); anything else means the chain is broken.
@@ -77,7 +88,11 @@ fn panic_rip() -> u64 {
 fn panic(info: &PanicInfo) -> ! {
     cpu::disable_interrupts();
     let rbp = cpu::read_rbp();
-    if PANICKING.swap(true, Ordering::SeqCst) {
+    let first = !PANICKING.swap(true, Ordering::SeqCst);
+    if first {
+        crate::smp::stop_others();
+    }
+    if !first {
         crate::console::emergency(|w| {
             let _ = writeln!(w, "\npanic while panicking: {}", info.message());
         });

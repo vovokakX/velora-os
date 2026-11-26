@@ -21,9 +21,18 @@ pub mod syscall;
 
 /// Early CPU setup: our own GDT/TSS and the IDT with exception handlers.
 pub fn init() {
-    gdt::init();
+    let tss = gdt::init();
     idt::init();
-    percpu::init();
+    percpu::init(tss);
+    fpu::init();
+    syscall::init();
+}
+
+/// The same setup on an application processor `index` (needs the heap).
+pub fn init_ap(index: usize) {
+    let tss = gdt::init_ap();
+    idt::load();
+    percpu::init_ap(index, tss);
     fpu::init();
     syscall::init();
 }
