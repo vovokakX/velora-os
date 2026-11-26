@@ -29,6 +29,7 @@ FIRMWARE_DIRS = [
     "/usr/share/qemu",
     "/usr/share/OVMF",
     "/usr/share/edk2/x64",
+    "/usr/share/edk2/ovmf",
     "/opt/homebrew/share/qemu",
     "/usr/local/share/qemu",
     r"C:\Program Files\qemu\share",

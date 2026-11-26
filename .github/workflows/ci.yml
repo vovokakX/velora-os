@@ -77,3 +77,26 @@ jobs:
           name: serial-logs
           path: build/logs/
           if-no-files-found: ignore
+
+  # Temporary (issue #19): the kernel tests under KVM with a newer QEMU.
+  kvm-newer-qemu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: fedora:41
+      options: --device /dev/kvm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          dnf install -y qemu-system-x86-core edk2-ovmf python3 unzip curl gcc git findutils
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          qemu-system-x86_64 --version
+          ls /usr/share/edk2/ovmf/ /usr/share/qemu | head -40
+      - name: Kernel tests in QEMU
+        env:
+          VELORA_QEMU_EXTRA: -trace virtio_set_status -trace virtio_blk_data_plane_start -trace virtio_queue_notify
+        run: |
+          ./build.sh --test
+          python3 tests/qemu_run.py ktest --timeout 300
