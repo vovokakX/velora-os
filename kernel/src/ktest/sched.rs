@@ -130,6 +130,16 @@ fn data_word(pid: u64) -> u64 {
     .expect("no such process")
 }
 
+pub fn user_stack_segment_has_rpl_3_after_syscall() {
+    assert_eq!(
+        run("ssrpl", userprog::ss_rpl()),
+        3,
+        "sysret left a user SS with RPL != 3"
+    );
+    let star = unsafe { crate::arch::cpu::rdmsr(0xc000_0081) };
+    assert_eq!((star >> 48) & 3, 3, "STAR[63:48] has no RPL 3");
+}
+
 pub fn user_processes_are_preempted() {
     let a = sched::spawn_flat("spin-a", userprog::spin(), Priority::Normal).unwrap();
     let b = sched::spawn_flat("spin-b", userprog::spin(), Priority::Normal).unwrap();

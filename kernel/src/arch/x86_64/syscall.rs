@@ -93,11 +93,14 @@ unsafe extern "C" {
 /// Programs the `syscall` MSRs.
 pub fn init() {
     // SAFETY: standard SYSCALL setup. STAR: kernel CS = 0x08 (SS = 0x10);
-    // sysret uses 0x18 + 16 = user CS 0x28|3 and 0x18 + 8 = user SS 0x20|3.
+    // sysret uses 0x1b + 16 = user CS 0x2b and 0x1b + 8 = user SS 0x23.
+    // The RPL bits must be in STAR itself: Intel CPUs force RPL 3 on
+    // sysret, but AMD CPUs copy them, and a user SS with RPL 0 makes the
+    // next iretq back to user mode fail with #GP.
     unsafe {
         let efer = cpu::rdmsr(cpu::MSR_EFER);
         cpu::wrmsr(cpu::MSR_EFER, efer | EFER_SCE);
-        let star = ((gdt::USER_CODE32 as u64 & !3) << 48) | ((gdt::KERNEL_CODE as u64) << 32);
+        let star = ((gdt::USER_CODE32 as u64) << 48) | ((gdt::KERNEL_CODE as u64) << 32);
         cpu::wrmsr(MSR_STAR, star);
         cpu::wrmsr(MSR_LSTAR, velora_syscall_entry as *const () as u64);
         // Cleared on entry: TF, IF, DF, AC.

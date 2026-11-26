@@ -87,6 +87,7 @@ static TESTS: &[Test] = tests![
     sched::user_cannot_read_kernel_memory,
     sched::user_cannot_run_privileged_instructions,
     sched::user_code_is_not_writable,
+    sched::user_stack_segment_has_rpl_3_after_syscall,
     sched::user_processes_are_preempted,
     sched::user_sse_registers_are_per_thread,
     sched::user_sleep_and_yield,
