@@ -80,7 +80,7 @@ cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
 KSTRIP="$BUILD/velora-$MODE-stripped.elf"
 cargo run -q -p kstrip --release -- "$KCOPY" "$KSTRIP"
 
-PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc plume velora-setup"
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc plume dmesg velora-setup"
 FILES=()
 for p in $PROGRAMS; do
     FILES+=(--file "bin/$p=$UBIN/$p:755")
@@ -112,5 +112,20 @@ cargo run -q -p mkiso --release -- \
     --file "licenses/velora.txt=LICENSE" \
     --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
     --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt"
+
+# 6. Image for USB drives (release build only): GPT + FAT32 EFI partition.
+if [ "$MODE" = "release" ]; then
+    echo "==> building velora-usb.img"
+    cargo run -q -p mkusb --release -- \
+        --out velora-usb.img \
+        --size-mib 64 \
+        --file "EFI/BOOT/BOOTX64.EFI=$LIMINE_DIR/BOOTX64.EFI" \
+        --file "boot/limine.conf=$CONF" \
+        --file "boot/velora=$KCOPY" \
+        --file "boot/initramfs.tar=$INITRD" \
+        --file "licenses/velora.txt=LICENSE" \
+        --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
+        --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt"
+fi
 
 echo "==> done: $OUT"

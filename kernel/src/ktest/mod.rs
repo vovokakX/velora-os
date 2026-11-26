@@ -39,6 +39,7 @@ static TESTS: &[Test] = tests![
     font_glyph_matches_source,
     text_console_draws_glyph,
     text_console_wraps_and_scrolls,
+    text_console_scale_reverse_and_cursor,
     ansi_sgr_colours,
     ansi_cursor_position,
     gdt_and_tss_loaded,
@@ -74,6 +75,7 @@ static TESTS: &[Test] = tests![
     irq::legacy_pic_masked,
     irq::keyboard_irq_routed,
     irq::tsc_calibrated,
+    irq::reference_clocks_agree,
     irq::timer_ticks_at_expected_rate,
     irq::handler_registry_dispatches,
     irq::keyboard_input,
@@ -199,7 +201,7 @@ static TEST_FB: RacyCell<[u32; TW * TH]> = RacyCell::new([0; TW * TH]);
 pub(crate) fn test_console() -> TextConsole {
     // SAFETY: tests run one at a time; the buffer is static.
     let fb = unsafe { Framebuffer::from_raw(TEST_FB.get().cast(), TW, TH, TW * 4) };
-    TextConsole::new(fb)
+    TextConsole::new(fb, 1)
 }
 
 // --- tests ------------------------------------------------------------------
@@ -257,6 +259,40 @@ fn text_console_draws_glyph() {
     assert_eq!(fb.get_native(5, 2), Some(fg));
     assert_eq!(fb.get_native(6, 2), Some(bg));
     assert_eq!((c.row, c.col), (0, 1));
+}
+
+/// Font scale 2, reverse video and the cursor (an inverted underline).
+fn text_console_scale_reverse_and_cursor() {
+    // SAFETY: tests run one at a time; the buffer is static.
+    let fb = unsafe { Framebuffer::from_raw(TEST_FB.get().cast(), TW, TH, TW * 4) };
+    let mut c = TextConsole::new(fb, 2);
+    assert_eq!((c.cols, c.rows), (2, 1));
+    c.write_str("A");
+    let (fg, bg, inv) = {
+        let fb = c.framebuffer();
+        let bg = fb.native(text::DEFAULT_BG);
+        (fb.native(text::DEFAULT_FG), bg, bg ^ fb.native(0xff_ffff))
+    };
+    let fb = c.framebuffer();
+    // Row 2 of 'A' (.XXXXX..) is pixel rows 4 and 5, each dot 2x2 pixels.
+    assert_eq!(fb.get_native(1, 4), Some(bg));
+    assert_eq!(fb.get_native(2, 4), Some(fg));
+    assert_eq!(fb.get_native(3, 5), Some(fg));
+    assert_eq!(fb.get_native(12, 5), Some(bg));
+    // The cursor is in cell 1: its bottom 4 pixel rows are inverted.
+    assert_eq!(fb.get_native(20, 31), Some(inv));
+    assert_eq!(fb.get_native(20, 27), Some(bg));
+    c.write_str("[?25l");
+    assert_eq!(
+        c.framebuffer().get_native(20, 31),
+        Some(bg),
+        "hidden cursor drawn"
+    );
+    c.write_str("[7mB[27m");
+    // Reverse video: the background of 'B' has the foreground colour.
+    assert_eq!(c.framebuffer().get_native(16, 0), Some(fg));
+    c.write_str("[?25h[H");
+    assert_eq!(c.framebuffer().get_native(0, 31), Some(inv));
 }
 
 fn text_console_wraps_and_scrolls() {

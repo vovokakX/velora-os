@@ -287,6 +287,13 @@ pub trait FileSystem: Send {
     fn fsck(&mut self) -> Result<Vec<String>> {
         Err(FsError::Unsupported)
     }
+    /// Device sectors holding a file's data, as (first sector, count)
+    /// runs in file order. Used to write the panic log straight to the
+    /// disk when the file system can no longer be used. Call `sync` first:
+    /// the result describes what is on the disk.
+    fn data_sectors(&mut self, _ino: Ino) -> Result<Vec<(u64, u64)>> {
+        Err(FsError::Unsupported)
+    }
 }
 
 /// A device of fixed-size sectors, addressed by sector number.

@@ -29,10 +29,11 @@ jobs:
       - name: Test before publishing
         run: ./test.sh
 
-      - name: Build release ISO
+      - name: Build release images
         run: |
           ./build.sh
           sha256sum velora.iso > velora.iso.sha256
+          sha256sum velora-usb.img > velora-usb.img.sha256
 
       - name: Create GitHub release
         env:
@@ -41,5 +42,5 @@ jobs:
         run: |
           notes="docs/releases/${TAG}.md"
           test -f "$notes" || { echo "missing $notes"; exit 1; }
-          gh release create "$TAG" velora.iso velora.iso.sha256 -R "$GITHUB_REPOSITORY" \
+          gh release create "$TAG" velora.iso velora.iso.sha256 velora-usb.img velora-usb.img.sha256 -R "$GITHUB_REPOSITORY" \
             --title "Velora OS ${TAG}" --notes-file "$notes"

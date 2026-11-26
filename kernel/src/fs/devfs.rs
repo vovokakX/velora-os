@@ -1,4 +1,4 @@
-//! /dev: null, zero, console and one node per disk.
+//! /dev: null, zero, console, kmsg (the kernel log) and one node per disk.
 //!
 //! Disks are read and written at byte offsets that are multiples of the
 //! sector size. The console node is turned into a console handle when it
@@ -14,6 +14,7 @@ const ROOT: Ino = 1;
 const NULL: Ino = 2;
 const ZERO: Ino = 3;
 pub const CONSOLE_INO: Ino = 4;
+const KMSG: Ino = 5;
 const FIRST_DISK: Ino = 16;
 
 pub struct DevFs {
@@ -33,6 +34,7 @@ impl DevFs {
             (String::from("null"), NULL, Kind::CharDevice),
             (String::from("zero"), ZERO, Kind::CharDevice),
             (String::from("console"), CONSOLE_INO, Kind::CharDevice),
+            (String::from("kmsg"), KMSG, Kind::File),
         ];
         for (i, d) in self.disks.iter().enumerate() {
             v.push((
@@ -81,6 +83,7 @@ impl FileSystem for DevFs {
         let (kind, mode, size) = match ino {
             ROOT => (Kind::Dir, 0o755, 0),
             NULL | ZERO | CONSOLE_INO => (Kind::CharDevice, 0o666, 0),
+            KMSG => (Kind::File, 0o444, crate::console::klog::len() as u64),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 (Kind::BlockDevice, 0o600, d.size_bytes())
@@ -131,6 +134,7 @@ impl FileSystem for DevFs {
                 Ok(buf.len())
             }
             CONSOLE_INO => Err(FsError::Unsupported),
+            KMSG => Ok(crate::console::klog::read(offset as usize, buf)),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, buf.len())?;
@@ -146,7 +150,7 @@ impl FileSystem for DevFs {
         match ino {
             ROOT => Err(FsError::IsDir),
             NULL | ZERO => Ok(data.len()),
-            CONSOLE_INO => Err(FsError::Unsupported),
+            CONSOLE_INO | KMSG => Err(FsError::Unsupported),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, data.len())?;

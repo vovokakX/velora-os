@@ -140,9 +140,18 @@ impl Framebuffer {
         }
     }
 
-    /// Draws an 8-pixel-wide glyph with explicit foreground and background.
-    pub fn draw_glyph(&mut self, x: usize, y: usize, rows: &[u8; 16], fg: u32, bg: u32) {
-        if x + 8 > self.width || y + 16 > self.height {
+    /// Draws an 8x16 glyph enlarged `scale` times, with explicit
+    /// foreground and background.
+    pub fn draw_glyph(
+        &mut self,
+        x: usize,
+        y: usize,
+        rows: &[u8; 16],
+        fg: u32,
+        bg: u32,
+        scale: usize,
+    ) {
+        if x + 8 * scale > self.width || y + 16 * scale > self.height {
             return;
         }
         let fg = self.native(fg);
@@ -150,7 +159,11 @@ impl Framebuffer {
         for (dy, bits) in rows.iter().enumerate() {
             for dx in 0..8 {
                 let px = if bits & (0x80 >> dx) != 0 { fg } else { bg };
-                self.write_px(x + dx, y + dy, px);
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        self.write_px(x + dx * scale + sx, y + dy * scale + sy, px);
+                    }
+                }
             }
         }
     }

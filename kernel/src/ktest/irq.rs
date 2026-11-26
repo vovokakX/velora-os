@@ -2,7 +2,7 @@
 
 use crate::arch::cpu;
 use crate::arch::x86_64::idt::InterruptFrame;
-use crate::arch::x86_64::{apic, ioapic, irq, pic};
+use crate::arch::x86_64::{apic, hpet, ioapic, irq, pic, pmtimer};
 use crate::{acpi, input, kprintln, time};
 use alloc::string::String;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +41,30 @@ pub fn tsc_calibrated() {
     time::delay_us(1000);
     let b = time::uptime_ns();
     assert!(b - a >= 1_000_000, "delay_us(1000) took {} ns", b - a);
+}
+
+/// QEMU q35 has an HPET and an ACPI PM timer; all reference clocks must
+/// measure the same TSC rate as the boot calibration (within 5 %).
+pub fn reference_clocks_agree() {
+    assert!(hpet::available(), "no HPET on q35");
+    assert!(hpet::hz() > 1_000_000, "HPET {} Hz", hpet::hz());
+    assert!(pmtimer::available(), "no ACPI PM timer on q35");
+    let boot = time::tsc_hz();
+    for r in apic::Reference::ALL {
+        let was = cpu::irq_save();
+        let hz = apic::measure_tsc_hz(r);
+        cpu::irq_restore(was);
+        let hz = hz.unwrap_or_else(|e| panic!("{}: {}", r.name(), e));
+        let diff = hz.abs_diff(boot);
+        kprintln!("ktest:   {}: TSC {} kHz", r.name(), hz / 1000);
+        assert!(
+            diff * 20 < boot,
+            "{} measured {} Hz, boot {} Hz",
+            r.name(),
+            hz,
+            boot
+        );
+    }
 }
 
 pub fn timer_ticks_at_expected_rate() {

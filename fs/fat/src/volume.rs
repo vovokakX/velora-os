@@ -1095,6 +1095,26 @@ impl<D: BlockIo> FileSystem for FatVolume<D> {
         self.commit()
     }
 
+    fn data_sectors(&mut self, ino: Ino) -> Result<Vec<(u64, u64)>> {
+        let e = self.entry(ino)?;
+        if e[11] & ATTR_DIRECTORY != 0 {
+            return Err(FsError::IsDir);
+        }
+        let first = entry_cluster(&e);
+        if first == 0 {
+            return Ok(Vec::new());
+        }
+        let mut runs: Vec<(u64, u64)> = Vec::new();
+        for c in self.chain(first)? {
+            let s = self.cluster_sector(c);
+            match runs.last_mut() {
+                Some((start, n)) if *start + *n == s => *n += self.spc,
+                _ => runs.push((s, self.spc)),
+            }
+        }
+        Ok(runs)
+    }
+
     fn statfs(&mut self) -> Result<FsStat> {
         Ok(FsStat {
             block_size: self.cluster_bytes(),
@@ -1215,6 +1235,43 @@ mod tests {
     fn remount(v: FatVolume<MemDisk>) -> FatVolume<MemDisk> {
         let img = v.into_device().durable_image();
         FatVolume::mount(MemDisk::from_image(512, img), false).unwrap()
+    }
+
+    #[test]
+    fn data_sectors_point_at_the_file_contents() {
+        let mut v = fat32(40 * MIB);
+        let root = v.root();
+        let attr = NewAttr {
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+        };
+        // Interleave two files so that the first one is fragmented.
+        let a = v.create(root, "a.log", Kind::File, attr, 0).unwrap();
+        let b = v.create(root, "b.bin", Kind::File, attr, 0).unwrap();
+        let data: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+        for k in 0..4 {
+            let part = &data[k * 5000..(k + 1) * 5000];
+            v.write(a, (k * 5000) as u64, part, 0).unwrap();
+            v.write(b, (k * 5000) as u64, &[0xee; 5000], 0).unwrap();
+        }
+        v.sync().unwrap();
+        let runs = v.data_sectors(a).unwrap();
+        assert!(runs.len() > 1, "expected a fragmented file: {:?}", runs);
+        let mut disk = v.into_device();
+        let mut raw = Vec::new();
+        for (start, n) in runs {
+            let mut buf = vec![0u8; n as usize * 512];
+            disk.read(start, &mut buf).unwrap();
+            raw.extend_from_slice(&buf);
+        }
+        assert!(raw.len() >= data.len());
+        assert_eq!(&raw[..data.len()], &data[..]);
+        let mut v = FatVolume::mount(disk, false).unwrap();
+        let root = v.root();
+        let empty = v.create(root, "empty", Kind::File, attr, 0).unwrap();
+        assert_eq!(v.data_sectors(empty).unwrap(), vec![]);
+        assert_eq!(v.data_sectors(root), Err(FsError::NotFound));
     }
 
     #[test]

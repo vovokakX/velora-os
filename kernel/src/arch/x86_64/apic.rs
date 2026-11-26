@@ -3,7 +3,7 @@
 //! left enabled.
 
 use super::cpu;
-use super::pit;
+use super::{hpet, pit, pmtimer};
 use crate::mm::mmio;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -139,42 +139,118 @@ pub fn software_enabled() -> bool {
     read(REG_SVR) & SVR_ENABLE != 0
 }
 
-/// Result of measuring the TSC and the APIC timer against the PIT.
+/// Reference clocks for calibration, best first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reference {
+    Hpet,
+    PmTimer,
+    Pit,
+}
+
+impl Reference {
+    pub const ALL: [Reference; 3] = [Reference::Hpet, Reference::PmTimer, Reference::Pit];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Reference::Hpet => "HPET",
+            Reference::PmTimer => "ACPI PM timer",
+            Reference::Pit => "PIT",
+        }
+    }
+
+    pub fn available(self) -> bool {
+        match self {
+            Reference::Hpet => hpet::available(),
+            Reference::PmTimer => pmtimer::available(),
+            Reference::Pit => true,
+        }
+    }
+
+    /// Busy-waits `ms` milliseconds (at most 54) of this clock. Fails if
+    /// the clock does not count.
+    pub fn wait_ms(self, ms: u64) -> Result<(), &'static str> {
+        const SPIN_LIMIT: u64 = 400_000_000;
+        let mut spins = 0u64;
+        let mut spin = || {
+            spins += 1;
+            core::hint::spin_loop();
+            spins < SPIN_LIMIT
+        };
+        match self {
+            Reference::Hpet => {
+                if !hpet::available() {
+                    return Err("no HPET");
+                }
+                let target = ms * hpet::hz() / 1000;
+                let c0 = hpet::counter();
+                while hpet::elapsed(c0, hpet::counter()) < target {
+                    if !spin() {
+                        return Err("the HPET does not count");
+                    }
+                }
+            }
+            Reference::PmTimer => {
+                if !pmtimer::available() {
+                    return Err("no ACPI PM timer");
+                }
+                let target = (ms * pmtimer::HZ / 1000) as u32;
+                let c0 = pmtimer::counter();
+                while pmtimer::elapsed(c0, pmtimer::counter()) < target {
+                    if !spin() {
+                        return Err("the ACPI PM timer does not count");
+                    }
+                }
+            }
+            Reference::Pit => {
+                let oneshot = pit::start_oneshot(ms);
+                while !oneshot.expired() {
+                    if !spin() {
+                        return Err("the PIT does not count (no legacy timer?)");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Result of measuring the TSC and the APIC timer against a reference.
 pub struct Calibration {
     pub tsc_hz: u64,
     pub timer_per_ms: u64,
 }
 
-/// Measures the TSC and APIC timer frequencies over 50 ms of PIT time.
-/// Interrupts must be disabled.
-pub fn calibrate() -> Result<Calibration, &'static str> {
-    const MS: u64 = 50;
+const CALIBRATION_MS: u64 = 50;
+
+/// Measures the TSC and APIC timer frequencies over 50 ms of `r`.
+/// Interrupts must be disabled; the APIC timer is stopped afterwards.
+pub fn calibrate(r: Reference) -> Result<Calibration, &'static str> {
     write(REG_TIMER_DIVIDE, TIMER_DIVIDE_16);
     write(REG_LVT_TIMER, LVT_MASKED);
-    let oneshot = pit::start_oneshot(MS);
     write(REG_TIMER_INITIAL, u32::MAX);
     let tsc0 = cpu::rdtsc();
-    let mut spins = 0u64;
-    while !oneshot.expired() {
-        spins += 1;
-        if spins > 200_000_000 {
-            write(REG_TIMER_INITIAL, 0);
-            return Err("PIT did not count (no legacy timer?)");
-        }
-        core::hint::spin_loop();
-    }
+    let waited = r.wait_ms(CALIBRATION_MS);
     let tsc1 = cpu::rdtsc();
     let elapsed = u32::MAX - read(REG_TIMER_CURRENT);
     write(REG_TIMER_INITIAL, 0);
+    waited?;
     let c = Calibration {
-        tsc_hz: (tsc1 - tsc0) * 1000 / MS,
-        timer_per_ms: elapsed as u64 / MS,
+        tsc_hz: (tsc1 - tsc0) * 1000 / CALIBRATION_MS,
+        timer_per_ms: elapsed as u64 / CALIBRATION_MS,
     };
     if c.timer_per_ms == 0 || c.tsc_hz < 1_000_000 {
         return Err("calibration gave implausible values");
     }
     TIMER_PER_MS.store(c.timer_per_ms, Ordering::SeqCst);
     Ok(c)
+}
+
+/// Measures only the TSC against `r` (for tests; the APIC timer keeps
+/// running). Interrupts must be disabled.
+pub fn measure_tsc_hz(r: Reference) -> Result<u64, &'static str> {
+    let tsc0 = cpu::rdtsc();
+    r.wait_ms(CALIBRATION_MS)?;
+    Ok((cpu::rdtsc() - tsc0) * 1000 / CALIBRATION_MS)
 }
 
 /// Starts the periodic timer interrupt at `hz` on `VECTOR_TIMER`.

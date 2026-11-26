@@ -216,6 +216,11 @@ impl BlockDevice for AhciDisk {
     fn flush(&self) -> Result<(), BlockError> {
         self.port.lock().command(ATA_FLUSH_EXT, 0, 0, 0, false)
     }
+
+    unsafe fn force_unlock(&self) {
+        // SAFETY: the caller is the panic path.
+        unsafe { self.port.force_unlock() }
+    }
 }
 
 fn probe_controller(d: &Device, first_index: usize) -> Result<usize, &'static str> {

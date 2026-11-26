@@ -3,6 +3,7 @@
 
 pub mod font;
 pub mod framebuffer;
+pub mod klog;
 pub mod text;
 
 use crate::arch::x86_64::serial::SERIAL;
@@ -20,8 +21,27 @@ pub fn init() -> Option<(usize, usize)> {
     let raw = resp.framebuffers().first()?;
     let fb = Framebuffer::from_limine(raw)?;
     let size = (fb.width, fb.height);
-    *SCREEN.lock() = Some(TextConsole::new(fb));
+    let scale = font_scale(fb.width);
+    *SCREEN.lock() = Some(TextConsole::new(fb, scale));
     Some(size)
+}
+
+/// Font scale: `velora.fontscale=N` (1 to 4) on the command line, else 2
+/// on screens at least 2560 pixels wide (an 8x16 font is too small to
+/// read there) and 1 otherwise. Runs before the boot information is
+/// captured, so it reads the bootloader's answer directly.
+fn font_scale(width: usize) -> usize {
+    let asked = limine::CMDLINE.response().and_then(|c| {
+        c.cmdline()
+            .split_ascii_whitespace()
+            .find_map(|w| w.strip_prefix("velora.fontscale="))
+            .and_then(|v| v.parse::<usize>().ok())
+    });
+    match asked {
+        Some(n) => n.clamp(1, 4),
+        None if width >= 2560 => 2,
+        None => 1,
+    }
 }
 
 /// Moves the screen console to a RAM back buffer (needs the heap).
@@ -44,6 +64,7 @@ struct Both;
 
 impl Write for Both {
     fn write_str(&mut self, s: &str) -> fmt::Result {
+        klog::append(s);
         let _ = SERIAL.lock().write_str(s);
         if let Some(c) = SCREEN.lock().as_mut() {
             c.write_str(s);
@@ -66,6 +87,7 @@ pub fn emergency(f: impl FnOnce(&mut dyn Write)) {
     unsafe {
         SERIAL.force_unlock();
         SCREEN.force_unlock();
+        klog::force_unlock();
     }
     f(&mut Both);
 }

@@ -86,6 +86,7 @@ fn panic(info: &PanicInfo) -> ! {
     crate::console::emergency(|w| {
         let _ = write_report(w, info, rbp);
     });
+    crate::crashlog::save();
 
     #[cfg(feature = "ktest")]
     crate::ktest::on_panic();
