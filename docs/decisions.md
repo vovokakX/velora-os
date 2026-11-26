@@ -412,3 +412,22 @@ is found, the main CI check and the release build run in a Fedora 41 container
 accepts `VELORA_QEMU_EXTRA` (extra QEMU arguments, e.g. tracing) and
 `VELORA_VIRTIO_OPTS` (virtio-blk device options) for such investigations.
 
+## D24. vlibc под LGPL-3.0 / vlibc under LGPL-3.0
+
+**2026-11-26**
+
+**RU.** Решение владельца проекта. vlibc (`libc/vlibc`) распространяется по
+LGPL-3.0-or-later. С ней могут компоноваться программы под любой лицензией, в
+том числе закрытые. Изменения самой vlibc при этом остаются открытыми. Код из
+`kernel/abi` (номера вызовов, константы) и `kernel/mm` (аллокатор кучи) входит
+в vlibc при сборке, поэтому эти crate тоже переведены на LGPL-3.0-or-later.
+LGPL совместима с GPL, так что ядро, которое их использует, остаётся под
+GPL-3.0-or-later. Остальной проект не меняется.
+
+**EN.** Decided by the project owner. vlibc (`libc/vlibc`) is distributed under
+LGPL-3.0-or-later, so programs under any license, closed ones included, can link
+with it while changes to vlibc itself stay open. Code from `kernel/abi` (call
+numbers, constants) and `kernel/mm` (the heap allocator) is built into vlibc, so
+these crates moved to LGPL-3.0-or-later as well. The LGPL is GPL-compatible, so
+the kernel that uses them stays GPL-3.0-or-later. Nothing else changes.
+

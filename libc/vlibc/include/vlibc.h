@@ -3,7 +3,7 @@
  * Only a small subset exists so far; file functions arrive with the
  * file systems (stage 7).
  *
- * SPDX-License-Identifier: GPL-3.0-or-later
+ * SPDX-License-Identifier: LGPL-3.0-or-later
  */
 #ifndef VLIBC_H
 #define VLIBC_H
