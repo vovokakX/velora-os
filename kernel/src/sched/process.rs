@@ -56,6 +56,8 @@ pub(super) struct Process {
     pub cred: Cred,
     /// Working directory (normalised absolute path).
     pub cwd: String,
+    /// The CPU all threads of this process run on.
+    pub cpu: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +69,7 @@ pub struct ProcessInfo {
     pub exited: Option<i64>,
     pub user_pages: u64,
     pub uid: u32,
+    pub cpu: usize,
 }
 
 impl Process {
@@ -82,6 +85,7 @@ impl Process {
             },
             user_pages: self.aspace.as_ref().map(|a| a.user_pages()).unwrap_or(0),
             uid: self.cred.uid,
+            cpu: self.cpu,
         }
     }
 }
@@ -156,7 +160,8 @@ pub fn spawn_user(
     let result = with(|s| {
         let pid = s.next_pid;
         s.next_pid += 1;
-        let parent = s.threads[&s.current].pid;
+        let parent = s.threads[&s.cur()].pid;
+        let cpu = s.least_loaded_cpu();
         let (cred, files, cwd) = match s.processes.get(&parent) {
             Some(p) => (p.cred, p.files.inherit_std(), p.cwd.clone()),
             None => (Cred::ROOT, FdTable::standard(), String::from("/")),
@@ -177,6 +182,7 @@ pub fn spawn_user(
                 files,
                 cred,
                 cwd,
+                cpu,
             },
         );
         match new_thread(
@@ -187,6 +193,7 @@ pub fn spawn_user(
             super::user_thread_start,
             0,
             Some((entry, rsp)),
+            Some(cpu),
         ) {
             Some(tid) => {
                 s.processes.get_mut(&pid).unwrap().threads.push(tid);
@@ -211,7 +218,7 @@ pub fn parent_of(pid: Pid) -> Option<Pid> {
 /// current process and returns the start. A guard page is left after it.
 pub fn reserve_mmap_range(len: u64) -> Option<u64> {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         let p = s.processes.get_mut(&pid)?;
         let start = p.mmap_next;
         let next = start.checked_add(len)?.checked_add(PAGE_SIZE)?;
@@ -271,7 +278,7 @@ pub(super) fn terminate(s: &mut Sched, pid: Pid, status: i64) {
         .map(|p| p.threads.clone())
         .unwrap_or_default();
     for t in tids {
-        if t != s.current {
+        if t != s.cur() {
             mark_dead(s, t);
         }
     }
@@ -293,7 +300,7 @@ pub fn kill(pid: Pid, status: i64) -> bool {
         if found {
             terminate(s, pid, status);
         }
-        (found, s.threads[&s.current].pid == pid)
+        (found, s.threads[&s.cur()].pid == pid)
     });
     if found && is_current {
         super::exit_current(status);
@@ -308,7 +315,7 @@ pub fn wait_pid(pid: Pid) -> Option<i64> {
     let was = cpu::irq_save();
     let status = loop {
         let state = with(|s| {
-            let cur = s.current;
+            let cur = s.cur();
             let p = s.processes.get_mut(&pid)?;
             match p.state {
                 ProcState::Zombie(c) => Some(Some(c)),
@@ -327,7 +334,19 @@ pub fn wait_pid(pid: Pid) -> Option<i64> {
     if status.is_some() {
         // Make sure the dead threads are reaped before dropping the process.
         super::finish_switch();
-        let aspace = with(|s| s.processes.remove(&pid).and_then(|mut p| p.aspace.take()));
+        // A killed thread may still be running on another CPU (until that
+        // CPU switches away): its address space is freed only once every
+        // thread of the process is gone.
+        let aspace = with(|s| {
+            let mut p = s.processes.remove(&pid)?;
+            let a = p.aspace.take()?;
+            if p.threads.iter().any(|t| s.threads.contains_key(t)) {
+                s.orphan_spaces.push((p.threads, a));
+                None
+            } else {
+                Some(a)
+            }
+        });
         drop(aspace);
     }
     cpu::irq_restore(was);
@@ -337,7 +356,7 @@ pub fn wait_pid(pid: Pid) -> Option<i64> {
 /// Credentials of the current process (root for kernel threads).
 pub fn current_cred() -> Cred {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         s.processes.get(&pid).map_or(Cred::ROOT, |p| p.cred)
     })
 }
@@ -345,7 +364,7 @@ pub fn current_cred() -> Cred {
 /// The open file behind descriptor `fd` of the current process.
 pub fn fd_get(fd: u64) -> Option<FileRef> {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         s.processes.get(&pid)?.files.get(fd)
     })
 }
@@ -353,7 +372,7 @@ pub fn fd_get(fd: u64) -> Option<FileRef> {
 /// Gives `f` the lowest free descriptor; `None` when the table is full.
 pub fn fd_install(f: FileRef) -> Option<u64> {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         s.processes.get_mut(&pid)?.files.install(f)
     })
 }
@@ -362,14 +381,14 @@ pub fn fd_install(f: FileRef) -> Option<u64> {
 /// scheduler lock.
 pub fn fd_remove(fd: u64) -> Option<FileRef> {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         s.processes.get_mut(&pid)?.files.remove(fd)
     })
 }
 
 fn with_current<R>(f: impl FnOnce(&mut Process) -> R) -> Option<R> {
     with(|s| {
-        let pid = s.threads[&s.current].pid;
+        let pid = s.threads[&s.cur()].pid;
         s.processes.get_mut(&pid).map(f)
     })
 }

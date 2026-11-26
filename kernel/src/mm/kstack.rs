@@ -39,6 +39,12 @@ impl KernelStack {
 /// Allocates a stack of `pages` pages (at most `MAX_PAGES`).
 pub fn alloc(pages: u64) -> Option<KernelStack> {
     assert!((1..=MAX_PAGES).contains(&pages), "bad kernel stack size");
+    {
+        let mut cache = CACHE.lock();
+        if let Some(i) = cache.iter().position(|st| st.pages() == pages) {
+            return Some(cache.swap_remove(i));
+        }
+    }
     let slot = match FREE_SLOTS.lock().pop() {
         Some(s) => s,
         None => {
@@ -83,10 +89,21 @@ fn release(slot: u64, from: u64, to: u64) {
 }
 
 /// Frees a stack. Nothing may run on it any more.
+///
+/// The stack stays mapped and goes to a cache for the next `alloc` of the
+/// same size. Another CPU may still have its pages in its TLB (kernel
+/// pages are global); as long as the mapping never changes, such entries
+/// stay correct and no TLB shootdown is needed (D43).
 pub fn free(stack: KernelStack) {
-    let slot = stack.top - SLOT;
-    release(slot, stack.bottom, stack.top);
-    MAPPED.fetch_sub(stack.pages(), Ordering::Relaxed);
+    CACHE.lock().push(stack);
+}
+
+/// Stacks freed and kept mapped for reuse.
+static CACHE: SpinLock<Vec<KernelStack>> = SpinLock::new(Vec::new());
+
+/// Stacks waiting in the reuse cache.
+pub fn cached() -> usize {
+    CACHE.lock().len()
 }
 
 pub fn mapped_pages() -> u64 {
