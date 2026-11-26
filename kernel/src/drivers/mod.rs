@@ -35,6 +35,19 @@ pub fn init() {
     if disks == 0 {
         crate::kinfo!("no disks found");
     }
+    if block::scan_partitions() > 0 {
+        for d in block::devices()
+            .iter()
+            .filter(|d| d.partition_guid().is_some())
+        {
+            crate::kok!(
+                "partition {}: {}, {} MiB",
+                d.name(),
+                d.description(),
+                d.size_bytes() / (1024 * 1024)
+            );
+        }
+    }
     match rtc::read(acpi.fadt.century_register) {
         Some(t) => {
             crate::time::set_wall_clock(t.to_unix());

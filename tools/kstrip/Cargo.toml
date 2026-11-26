@@ -1,0 +1,8 @@
+[package]
+name = "kstrip"
+description = "Drops debug sections from the kernel ELF for the installed system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

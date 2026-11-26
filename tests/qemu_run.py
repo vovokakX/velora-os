@@ -9,6 +9,12 @@ Modes:
          and that the journal was replayed. After each boot the disk writes
          and both file systems are checked on the host (velora-fsck, and
          fsck.fat when it is installed).
+  install
+         End-to-end installation: boot velora.iso with a blank disk, run
+         velora-setup (refused once interactively, then unattended), power
+         off, boot from the disk alone, log in as the new user, work with
+         files, change a password, reboot again and check the files. The
+         partitions are checked on the host after every boot.
   boot   Boot velora.iso, measure the time to the login prompt, then log
          in through the emulated keyboard and run a shell scenario
          (commands, pipes, redirection, Tab, history, Ctrl+C, RU layout),
@@ -101,6 +107,7 @@ def disk_args(kind, path):
     device = {
         "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
         "fs": "virtio-blk-pci,drive=dfs,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
+        "install": "virtio-blk-pci,drive=dinstall,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
         "ahci": "ide-hd,drive=dahci,bus=ide.1",
         "nvme": "nvme,serial=velora0,drive=dnvme",
     }[kind]
@@ -150,7 +157,6 @@ def build_command(iso, workdir, memory, monitor_port, disks=None):
         "-smp", "1",
         "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=" + code,
         "-drive", "if=pflash,format=raw,unit=1,file=" + vars_copy,
-        "-cdrom", iso,
         "-serial", "stdio",
         "-display", "none",
         "-no-reboot",
@@ -158,6 +164,8 @@ def build_command(iso, workdir, memory, monitor_port, disks=None):
         # Human monitor on TCP, used to inject key presses.
         "-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor_port,
     ]
+    if iso:
+        cmd += ["-cdrom", iso]
     for kind, path in (disks or {}).items():
         cmd += disk_args(kind, path)
     # Extra QEMU arguments for debugging, e.g. VELORA_QEMU_EXTRA="-trace virtio*".
@@ -336,10 +344,11 @@ BOOT_MARKERS = {
 }
 
 
-def run_once(args, work, disks, log, check):
+def run_once(args, work, disks, log, check, iso="default"):
     port = free_port()
-    cmd, accel = build_command(args.iso, work, args.memory, port, disks)
-    print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, args.iso))
+    iso = args.iso if iso == "default" else iso
+    cmd, accel = build_command(iso, work, args.memory, port, disks)
+    print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, iso or "none (boot from disk)"))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     reader = SerialReader(proc, log)
     monitor = Monitor(port)
@@ -360,6 +369,8 @@ def run(args):
         sys.exit("qemu_run: %s does not exist (run ./build.sh first)" % args.iso)
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
+        if args.mode == "install":
+            return run_install(args, work)
         if args.mode != "ktest":
             return run_once(args, work, None, args.log,
                             lambda p, r, m, d: check_boot(p, r, m, d, args.max_boot_seconds))
@@ -423,7 +434,7 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 32 passed, 0 failed",
+        "vtest: 33 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
@@ -476,6 +487,164 @@ class Session:
         self.type(command + "\n")
         if not self.wait(expect, exact):
             raise AssertionError("no '%s' after typing: %s" % (expect, command))
+
+
+INSTALL_DISK_SIZE = 256 * 1024 * 1024
+
+
+def gpt_partitions(path):
+    """(first_lba, last_lba) of every partition in the image's primary GPT."""
+    import struct
+    with open(path, "rb") as f:
+        f.seek(SECTOR)
+        h = f.read(SECTOR)
+        if h[:8] != b"EFI PART":
+            return []
+        entries_lba, count, size = struct.unpack_from("<QII", h, 72)
+        f.seek(entries_lba * SECTOR)
+        data = f.read(count * size)
+    parts = []
+    for i in range(count):
+        e = data[i * size:(i + 1) * size]
+        if e[:16] != bytes(16):
+            first, last = struct.unpack_from("<QQ", e, 32)
+            parts.append((first, last))
+    return parts
+
+
+def check_installed_disk(path, after):
+    parts = gpt_partitions(path)
+    if len(parts) != 2:
+        return "expected 2 GPT partitions after %s, found %d" % (after, len(parts))
+    for (first, last), what in zip(parts, ("FAT32", "VeloraFS")):
+        problem = host_fsck(path, first * SECTOR, (last + 1 - first) * SECTOR, what)
+        if problem:
+            return "after %s: %s" % (after, problem)
+    print("qemu_run: EFI partition and root file system checked on the host after %s" % after)
+    return None
+
+
+def login(s, user, password, prompt):
+    assert s.wait("velora login:"), "no login prompt"
+    s.type(user + "\n")
+    assert s.wait("Password:"), "no password prompt"
+    s.type(password + "\n")
+    assert s.wait(prompt), "no prompt '%s' after logging in as %s" % (prompt, user)
+
+
+def wait_exit(proc, seconds=60):
+    end = time.monotonic() + seconds
+    while proc.poll() is None and time.monotonic() < end:
+        time.sleep(0.1)
+    assert proc.poll() is not None, "QEMU still running after shutdown"
+
+
+def install_step1(proc, reader, monitor, deadline):
+    """Live system: refuse once interactively, then install unattended."""
+    s = Session(proc, reader, monitor, deadline)
+    try:
+        login(s, "root", "velora", "root@velora")
+        s.run("df", "initramfs")
+        # Interactive run, answered "no" at the confirmation.
+        s.type("velora-setup\n")
+        assert s.wait("Disk to install on:"), "installer did not ask for a disk"
+        s.type("vd0\n")
+        assert s.wait("Name of the new user"), "installer did not ask for a user"
+        s.type("anna\n")
+        for _ in range(2):
+            assert s.wait("Password for"), "installer did not ask for a password"
+            s.type("secret\n")
+            assert s.wait("Repeat the password:"), "no password repeat prompt"
+            s.type("secret\n")
+        assert s.wait("Type 'yes' to erase vd0"), "no confirmation question"
+        s.type("no\n")
+        assert s.wait("Nothing was changed."), "refusal not confirmed"
+        print("qemu_run: interactive installer refused without changes")
+        s.type("SETUP_ROOT_PASSWORD=rootpw1 SETUP_USER_PASSWORD=annapw1 "
+               "velora-setup --auto --disk vd0 --user anna --yes\n")
+        if not s.wait("Installation complete.", timeout=300):
+            raise AssertionError("installation did not complete")
+        print("qemu_run: unattended installation complete")
+        s.type("shutdown\n")
+        wait_exit(proc)
+    except AssertionError as e:
+        return fail(str(e))
+    return 0
+
+
+def install_step2(proc, reader, monitor, deadline):
+    """First boot from the disk: log in, work with files, change a password."""
+    s = Session(proc, reader, monitor, deadline)
+    try:
+        assert s.wait("root: VeloraFS on vd0p2"), "root was not mounted from the disk"
+        assert s.wait("velora login:"), "no login prompt"
+        print("qemu_run: installed system: login prompt after %.2f s" % reader.find("velora login:"))
+        # The Live password no longer works.
+        s.type("root\n")
+        assert s.wait("Password:"), "no password prompt"
+        s.type("velora\n")
+        assert s.wait("Login incorrect"), "the Live password was accepted"
+        login(s, "anna", "annapw1", "anna@velora")
+        s.run("df", "velorafs")
+        s.run("pwd", "/home/anna", exact=True)
+        s.run("X=keep; echo ${X}-me > notes.txt; mkdir projects; cp notes.txt projects/copy.txt; cat projects/copy.txt",
+              "keep-me", exact=True)
+        s.run("ls /home", "anna", exact=True)
+        s.run("cat /etc/shadow", "permission denied")
+        s.run("velofetch", "Memory:")
+        s.run("exit", "velora login:")
+        login(s, "root", "rootpw1", "root@velora")
+        s.type("passwd anna\n")
+        assert s.wait("New password for anna:"), "passwd did not ask"
+        s.type("annapw2\n")
+        assert s.wait("Repeat the password:"), "passwd did not ask again"
+        s.type("annapw2\n")
+        assert s.wait("password for anna changed"), "password not changed"
+        s.type("shutdown\n")
+        wait_exit(proc)
+    except AssertionError as e:
+        return fail(str(e))
+    return 0
+
+
+def install_step3(proc, reader, monitor, deadline):
+    """Second boot from the disk: the files and the new password persist."""
+    s = Session(proc, reader, monitor, deadline)
+    try:
+        login(s, "anna", "annapw2", "anna@velora")
+        s.run("cat notes.txt", "keep-me", exact=True)
+        s.run("cat projects/copy.txt", "keep-me", exact=True)
+        s.run("ls -l", "projects")
+        s.run("exit", "velora login:")
+        login(s, "root", "rootpw1", "root@velora")
+        s.type("shutdown\n")
+        wait_exit(proc)
+    except AssertionError as e:
+        return fail(str(e))
+    return 0
+
+
+def run_install(args, work):
+    disk = os.path.join(work, "install.img")
+    with open(disk, "wb") as f:
+        f.truncate(INSTALL_DISK_SIZE)
+    disks = {"install": disk}
+    base = args.log.replace(".log", "")
+    steps = [
+        ("installation from the ISO", install_step1, args.iso),
+        ("first boot from the disk", install_step2, None),
+        ("second boot from the disk", install_step3, None),
+    ]
+    for n, (what, check, iso) in enumerate(steps, 1):
+        print("qemu_run: install test, step %d of 3: %s" % (n, what))
+        result = run_once(args, work, disks, "%s-%d.log" % (base, n), check, iso=iso)
+        if result != 0:
+            return result
+        problem = check_installed_disk(disk, what)
+        if problem:
+            return fail(problem)
+    print("qemu_run: PASS (install, boot from disk, login, files persist)")
+    return 0
 
 
 def check_boot(proc, reader, monitor, deadline, max_seconds):
@@ -570,7 +739,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot"])
+    p.add_argument("mode", choices=["ktest", "boot", "install"])
     p.add_argument("--iso")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--memory", default="256M")

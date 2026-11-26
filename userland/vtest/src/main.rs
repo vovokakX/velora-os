@@ -144,6 +144,7 @@ fn run_all() -> i32 {
     );
     r.check("kill a process", kill_a_process());
     r.check("process list and system information", system_information());
+    r.check("random bytes", random_bytes());
     println!("vtest: {} passed, {} failed", r.passed, r.failed);
     r.failed as i32
 }
@@ -862,5 +863,18 @@ fn system_information() -> Result<(), String> {
     let (cols, rows) = vlibc::term::size();
     ensure!(cols >= 40 && rows >= 10, "console size {}x{}", cols, rows);
     ensure!(vlibc::term::is_console(1), "stdout is not the console");
+    Ok(())
+}
+
+fn random_bytes() -> Result<(), String> {
+    let mut a = [0u8; 300];
+    let mut b = [0u8; 300];
+    process::random(&mut a);
+    process::random(&mut b);
+    ensure!(a != b, "two calls gave the same bytes");
+    ensure!(
+        a.iter().filter(|&&x| x == 0).count() < 30,
+        "too many zero bytes"
+    );
     Ok(())
 }

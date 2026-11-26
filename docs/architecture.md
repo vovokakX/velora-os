@@ -185,6 +185,17 @@
   DSDT, регистр сброса ACPI, порт 0xCF9, контроллер клавиатуры).
 - В Live-режиме `/home` и `/root` — файловые системы в памяти (D32).
 
+### Установка (этап 9)
+
+- `velora-gpt` (`fs/gpt`) читает и пишет GPT. Ядро при загрузке
+  регистрирует разделы как устройства `<диск>p<N>` (`drivers/block.rs`).
+- Установленная система: раздел EFI (FAT32) с Limine, ядром и
+  `limine.conf`; корень — раздел VeloraFS, его GUID передаётся ядру
+  параметром `velora.root=PARTUUID=...`. initramfs не нужен (D33).
+- `installer/velora-setup` пишет GPT, FAT32 и VeloraFS через `/dev/<диск>`
+  теми же crate, что ядро (D34). Ядро и Limine для установки лежат в
+  initramfs Live-образа в `/usr/lib/velora`.
+
 ## English
 
 ### Overview
@@ -325,3 +336,14 @@ shared code in the crate's library). Power off and restart are in
 `kernel/src/power.rs` (ACPI S5 from the DSDT, the ACPI reset register, port
 0xCF9, the keyboard controller). In the Live system `/home` and `/root` are
 file systems in memory (D32).
+
+### Installation (stage 9)
+
+`velora-gpt` (`fs/gpt`) reads and writes GPT; at boot the kernel registers
+partitions as devices `<disk>p<N>` (`drivers/block.rs`). An installed system
+has an EFI partition (FAT32) with Limine, the kernel and `limine.conf`, and a
+VeloraFS root partition whose GUID reaches the kernel as
+`velora.root=PARTUUID=...`; no initramfs is needed (D33).
+`installer/velora-setup` writes GPT, FAT32 and VeloraFS through `/dev/<disk>`
+with the same crates the kernel uses (D34). The kernel and Limine to install
+are in the Live image's initramfs under `/usr/lib/velora`.

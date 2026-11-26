@@ -598,3 +598,61 @@ and `login` creates `/home/<name>` on first login. Their contents are lost on
 reboot. In an installed system (stage 9) the root and home directories will be
 on VeloraFS.
 
+## D33. Разметка установленной системы / Layout of an installed system
+
+**2026-11-26**
+
+**RU.** GPT с двумя разделами. Первый — EFI system partition (FAT32,
+64 МиБ, выровнен на 1 МиБ): Limine (`/EFI/BOOT/BOOTX64.EFI` — путь для
+съёмных носителей, работает без записей в NVRAM), ядро и `limine.conf`.
+Второй — корень (VeloraFS) на остальном месте. Для типа корневого раздела
+выбран свой GUID `5E1F7A30-9C42-4D8B-A1E7-56454C4F5241`. Ядро находит корень
+по уникальному GUID раздела из параметра `velora.root=PARTUUID=...`, а не по
+имени устройства: имя зависит от порядка контроллеров. initramfs в
+установленной системе не используется, программы лежат на VeloraFS. 64 МиБ —
+наименьший размер, при котором FAT32 с кластерами по 512 байт получает
+нужные 65 525 кластеров с запасом.
+
+**EN.** GPT with two partitions. The first is the EFI system partition (FAT32,
+64 MiB, 1 MiB aligned): Limine (`/EFI/BOOT/BOOTX64.EFI`, the removable-media
+path, which works without NVRAM entries), the kernel and `limine.conf`. The
+second is the root (VeloraFS) in the rest. The root partition type uses its own
+GUID `5E1F7A30-9C42-4D8B-A1E7-56454C4F5241`. The kernel finds the root by the
+partition's unique GUID from `velora.root=PARTUUID=...`, not by device name,
+since names depend on controller order. An installed system uses no
+initramfs; the programs live on VeloraFS. 64 MiB is the smallest size at which
+FAT32 with 512-byte clusters gets the required 65,525 clusters with margin.
+
+## D34. Установщик пишет файловые системы сам / The installer writes the file systems itself
+
+**2026-11-26**
+
+**RU.** Установщику не нужен `mount`. Он открывает `/dev/<диск>`, делает
+поверх него `BlockIo` и пишет GPT, FAT32 и VeloraFS библиотеками, которые
+использует и ядро. Логика форматирования одна, проверена юнит-тестами, а
+ядро не нужно учить монтированию во время работы. Диски, смонтированные в
+`/mnt`, установщик не трогает: запись в обход ядра испортила бы
+смонтированную файловую систему. Вызовы `mount`/`umount` (30, 31) остаются
+в планах.
+
+**EN.** The installer needs no `mount`. It opens `/dev/<disk>`, wraps it as a
+`BlockIo` and writes GPT, FAT32 and VeloraFS with the libraries the kernel uses
+too, so the formatting logic exists once, is unit-tested, and the kernel needs
+no run-time mounting. Disks mounted under `/mnt` are refused, because writing
+behind the kernel's back would corrupt a mounted file system. `mount`/`umount`
+(30, 31) remain planned.
+
+## D35. Источник случайных чисел / Random numbers
+
+**2026-11-26**
+
+**RU.** `getrandom` берёт RDRAND (если процессор его поддерживает) и
+смешивает с TSC через splitmix64. Этого достаточно для солей паролей и
+GUID, но это не криптографический генератор с накоплением энтропии. Без
+RDRAND результат предсказуемее, это записано в известных проблемах.
+
+**EN.** `getrandom` takes RDRAND (when the CPU has it) and mixes it with the TSC
+through splitmix64. This is enough for password salts and GUIDs but is not a
+cryptographic generator with an entropy pool; without RDRAND the output is
+more predictable, which is listed as a known issue.
+

@@ -11,9 +11,9 @@ Velora OS — операционная система для x86_64, напис�
 Win32-слой. Архитектура уже оставляет для них место: personality процесса,
 интерфейс `ExecFormat` с заготовкой PE, абстракция framebuffer.
 
-Цели производительности: в простое меньше 64 МиБ ОЗУ (сейчас 6,5 МиБ);
-загрузка до приглашения входа в QEMU меньше 3 с (сейчас 1,75 с под KVM в
-CI вместе с прошивкой, 3,2–3,8 с на TCG в Windows).
+Цели производительности: в простое меньше 64 МиБ ОЗУ (сейчас 7,7 МиБ);
+загрузка до приглашения входа в QEMU меньше 3 с (сейчас 1,7 с под KVM в
+CI вместе с прошивкой, у установленной системы 1,65 с).
 
 Репозиторий: https://github.com/vovokakX/velora-os
 
@@ -29,40 +29,35 @@ CI вместе с прошивкой, 3,2–3,8 с на TCG в Windows).
 | 6 | `stage-6-drivers` | PCI, virtio-blk, AHCI, NVMe, RTC | готово, v0.6.0 |
 | 7 | `stage-7-fs` | VFS, FAT16/FAT32, VeloraFS (права, журнал, CRC32C, fsck), файловые вызовы | готово, v0.7.0 |
 | 8 | `stage-8-userland` | vsh, команды, пользователи и вход (PBKDF2), velofetch, каналы, терминал | готово, v0.8.0 |
-| 9 | `stage-9-installer` | velora-setup: GPT, форматирование, загрузчик; полный E2E-тест | **следующий** |
-| 10 | `stage-10-network` | virtio-net, ARP, IPv4, ICMP, UDP, DHCP, TCP | не начат |
+| 9 | `stage-9-installer` | velora-setup: GPT, FAT32 ESP + VeloraFS root, загрузчик; полный E2E-тест | готово, v0.9.0 |
+| 10 | `stage-10-network` | virtio-net, ARP, IPv4, ICMP, UDP, DHCP, TCP | **следующий** |
 
 Дальше: xHCI/USB HID, SMP, гибридный ISO для USB, загрузка через BIOS, Lumi,
 Win32-слой. Подробности — `docs/roadmap.md`.
 
 ## Где мы сейчас
 
-Этапы 1–8 завершены и выпущены (последний релиз — v0.8.0). Следующий —
-**этап 9** (issue #9). Что нужно сделать:
+Этапы 1–9 завершены и выпущены (последний релиз — v0.9.0). Следующий —
+**этап 10** (issue #10). Что нужно сделать:
 
-- GPT: чтение и создание таблицы разделов (лучше отдельный `no_std` crate с
-  тестами на хосте); разделы как отдельные блочные устройства (`vd0p1`).
-- Системные вызовы `mount`/`umount` (номера 30, 31 зарезервированы).
-- Загрузка установленной системы: Limine на разделе EFI (FAT32,
-  `velora_fat::format_fat32` уже есть), корень на VeloraFS. Ядру нужен
-  параметр командной строки, указывающий корневой раздел, и монтирование
-  корня с диска вместо initramfs (initramfs можно оставить для `/bin`,
-  если корень пуст, но лучше копировать программы на диск).
-- `installer/velora-setup`: определить Live-режим, выбрать диск,
-  подтверждение, разметка GPT (EFI + корень), форматирование, копирование
-  системы, загрузчик, пользователь и пароли (хеши через `velora-auth`,
-  запись `/etc/shadow` на VeloraFS), режим без вопросов для теста.
-- Смена пароля (`passwd`) для установленной системы.
-- Полный E2E-тест в `tests/qemu_run.py`: загрузка ISO с чистым диском,
-  автоустановка, перезагрузка с диска без CD, вход с новым паролем,
-  команды, файлы сохраняются после ещё одной перезагрузки.
-- Установщик форматирует только образы дисков QEMU в тестах.
+- Драйвер virtio-net (PCI, современный virtio 1.x, как virtio-blk в
+  `kernel/src/drivers/virtio_blk.rs`).
+- Сетевой стек (логику — в `no_std` crate с тестами на хосте): Ethernet,
+  ARP, IPv4, ICMP (echo), UDP, DHCP-клиент, TCP (установка соединения,
+  передача, повтор, закрытие).
+- Системные вызовы сокетов (новые номера, `docs/syscalls.md`) и функции
+  vlibc; команды, например `ping`, `ifconfig`/`ip`, простой TCP-клиент
+  (`nc`/`fetch`).
+- Тесты: в QEMU с user-mode сетью (`-netdev user`): DHCP получает адрес,
+  `ping` шлюза 10.0.2.2, обмен по TCP с сервером на хосте
+  (`hostfwd`/guestfwd или сервер в тестовом скрипте). Критерий готовности
+  из плана: ping и TCP-обмен с хостом QEMU.
 
-Как устроено то, что уже есть: файловые системы — `docs/architecture.md`
-(раздел «Файловые системы»), формат VeloraFS — `docs/velorafs.md`;
-пользовательское окружение — раздел «Пользовательское окружение» там же;
-решения D25–D32. Пароль Live-образа по умолчанию `velora`
-(`VELORA_ROOT_PASSWORD`, `VELORA_USER_PASSWORD` при сборке).
+Как устроено то, что уже есть: `docs/architecture.md` (файловые системы,
+пользовательское окружение, установка), `docs/velorafs.md`,
+`installer/README.md`, решения D25–D35. Пароль Live-образа по умолчанию
+`velora`. Тесты: `ktest` (две загрузки), `boot` (вход и команды),
+`install` (установка, загрузка с диска, сохранение файлов).
 
 Открытые issues:
 - **#19** — с QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов. С QEMU 9.1
@@ -155,6 +150,7 @@ PATH для тестов).
 ./test.sh --host     # только юнит-тесты на хосте
 python tests/qemu_run.py ktest --timestamps   # один прогон тестов ядра
 python tests/qemu_run.py boot                 # загрузка, вход, сценарий команд, shutdown
+python tests/qemu_run.py install              # установка, загрузка с диска, файлы сохраняются
 ```
 
 Перед PR (то же проверяет CI):
@@ -210,14 +206,15 @@ kernel/mm, kernel/acpi, kernel/abi, kernel/exe   библиотеки ядра �
 kernel/src/fs  VFS в ядре: монтирование, tarfs, devfs, каналы, дескрипторы
 drivers/     аппаратно-независимые части драйверов (input, pci, rtc)
 fs/          vfs (интерфейс, монтирование, MemFs, conformance), velorafs,
-             fat (FAT16/FAT32), tar (initramfs)
+             fat (FAT16/FAT32), gpt, tar (initramfs)
 libc/vlibc   библиотека для программ (LGPL)
 libc/auth    SHA-256, PBKDF2, /etc/passwd и /etc/shadow (тесты на хосте)
 libc/shell   язык vsh и редактор строки (тесты на хосте)
 userland/    отдельный workspace программ (login, vsh, coreutils, hello, vtest), свои флаги сборки
-tools/       mkiso, mkinitrd, mkpasswd, fsck (velora-fsck), fontgen
+tools/       mkiso, mkinitrd, mkpasswd, kstrip, fsck (velora-fsck), fontgen
+installer/   velora-setup (собирается в workspace userland)
 tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, решения (D1–D32),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, решения (D1–D35),
              план, сторонние компоненты, заметки к релизам
 ```
 

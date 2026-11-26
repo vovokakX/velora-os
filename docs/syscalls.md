@@ -4,7 +4,7 @@
 
 ## Русский
 
-Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–8). Номера и коды
+Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–9). Номера и коды
 ошибок определены в crate `velora-abi` (`kernel/abi`): им пользуются и ядро,
 и будущая vlibc.
 
@@ -65,6 +65,7 @@
 | 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
 | 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
+| 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
@@ -137,13 +138,16 @@ ESPIPE 29, EROFS 30, ENAMETOOLONG 36, ENOSYS 38, ENOTEMPTY 39, EUCLEAN 117`
 
 | № | Вызов | Этап |
 |---|---|---|
-| 30 | `mount` / `umount` (для установщика) | 9 |
+| 30 | `mount(source, target, type)` | позже (установщику не понадобился, см. D34) |
+| 31 | `umount(target)` | позже |
 
 Изменения фиксируются здесь и в [decisions.md](decisions.md).
 
 ## English
 
-Status: the calls in the "Implemented" table work (stages 4–8). Numbers and
+Status: the calls in the "Implemented" table work (stages 4–9). Stage 9
+added 39 `getrandom(buf, len)` (up to 256 random bytes: RDRAND when present,
+mixed with the TSC). 30 `mount` and 31 `umount` stay reserved (decision D34). Numbers and
 error codes are defined in the `velora-abi` crate (`kernel/abi`), shared by
 the kernel and the future vlibc.
 
