@@ -15,6 +15,7 @@
 
 mod devfs;
 mod disk;
+pub mod pipe;
 mod tarfs;
 
 pub use devfs::DevFs;
@@ -63,9 +64,15 @@ pub fn init() {
     DEVFS_MOUNT.store(dev, Ordering::Relaxed);
     v.mount("/tmp", "memory", Box::new(MemFs::new(0o1777, TMP_CAPACITY)))
         .expect("mount /tmp");
+    // Home directories live in memory in the Live system; login creates
+    // them on first use.
+    v.mount("/home", "memory", Box::new(MemFs::new(0o755, TMP_CAPACITY)))
+        .expect("mount /home");
+    v.mount("/root", "memory", Box::new(MemFs::new(0o700, TMP_CAPACITY)))
+        .expect("mount /root");
     *VFS.lock() = Some(v);
     kok!(
-        "VFS: initramfs at / ({} files, read-only), devfs at /dev, memory at /tmp",
+        "VFS: initramfs at / ({} files, read-only), devfs at /dev, memory at /tmp, /home, /root",
         files
     );
 }
@@ -156,6 +163,8 @@ pub enum Handle {
         path: String,
         kind: Kind,
     },
+    /// One end of a pipe.
+    Pipe { pipe: Arc<pipe::Pipe>, write: bool },
 }
 
 pub struct OpenFile {
@@ -168,8 +177,10 @@ pub struct OpenFile {
 
 impl Drop for OpenFile {
     fn drop(&mut self) {
-        if let Handle::File { node, .. } = self.handle {
-            with(|v| v.close_ref(node.mount));
+        match &self.handle {
+            Handle::File { node, .. } => with(|v| v.close_ref(node.mount)),
+            Handle::Pipe { pipe, write } => pipe.close_end(*write),
+            Handle::Console => {}
         }
     }
 }
@@ -198,6 +209,31 @@ impl FdTable {
         Self {
             slots: alloc::vec![Some(console()), Some(console()), Some(console())],
         }
+    }
+
+    /// A table for a new process: descriptors 0, 1 and 2 of this one
+    /// (other descriptors are not inherited, so pipe ends a shell keeps
+    /// open do not leak into its children).
+    pub fn inherit_std(&self) -> Self {
+        let mut slots: Vec<Option<FileRef>> = (0..3).map(|fd| self.get(fd)).collect();
+        for (fd, s) in slots.iter_mut().enumerate() {
+            if s.is_none() && fd < 3 {
+                *s = Some(console());
+            }
+        }
+        Self { slots }
+    }
+
+    /// Puts `f` at descriptor `fd`, returning what was there.
+    pub fn set(&mut self, fd: u64, f: FileRef) -> Option<Option<FileRef>> {
+        let fd = fd as usize;
+        if fd >= MAX_FDS {
+            return None;
+        }
+        if self.slots.len() <= fd {
+            self.slots.resize(fd + 1, None);
+        }
+        Some(self.slots[fd].replace(f))
     }
 
     pub fn get(&self, fd: u64) -> Option<FileRef> {
@@ -288,6 +324,22 @@ pub fn open_file(p: &str, flags: u64, mode: u32, cred: &Cred) -> Result<OpenFile
             append: flags & open::APPEND != 0,
         })
     })
+}
+
+/// Creates a pipe: (read end, write end).
+pub fn new_pipe() -> (OpenFile, OpenFile) {
+    let p = Arc::new(pipe::Pipe::new());
+    let end = |write: bool| OpenFile {
+        handle: Handle::Pipe {
+            pipe: p.clone(),
+            write,
+        },
+        offset: 0,
+        readable: !write,
+        writable: write,
+        append: false,
+    };
+    (end(false), end(true))
 }
 
 /// Mount id of `/dev` (for tests).
