@@ -102,7 +102,9 @@ Velora).
 
 ### Лицензия
 
-GPL-3.0-or-later, см. [LICENSE](LICENSE). Сторонние компоненты перечислены в
+GPL-3.0-or-later, см. [LICENSE](LICENSE). Библиотека для программ vlibc и
+crate, код которых в неё входит (`kernel/abi`, `kernel/mm`), — LGPL-3.0-or-later
+([libc/vlibc/LICENSE](libc/vlibc/LICENSE)). Сторонние компоненты перечислены в
 [docs/third-party.md](docs/third-party.md).
 
 ---
@@ -187,5 +189,7 @@ translation of Win32 calls into Velora system calls).
 
 ### License
 
-GPL-3.0-or-later, see [LICENSE](LICENSE). Third-party components are listed in
+GPL-3.0-or-later, see [LICENSE](LICENSE). The vlibc program library and the
+crates whose code it includes (`kernel/abi`, `kernel/mm`) are LGPL-3.0-or-later
+([libc/vlibc/LICENSE](libc/vlibc/LICENSE)). Third-party components are listed in
 [docs/third-party.md](docs/third-party.md).

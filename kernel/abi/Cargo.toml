@@ -3,6 +3,7 @@ name = "velora-abi"
 description = "Velora native ABI: system call numbers, error codes, constants"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+# Shared with vlibc, which is LGPL: see libc/README.md.
+license = "LGPL-3.0-or-later"
 repository.workspace = true
 publish = false

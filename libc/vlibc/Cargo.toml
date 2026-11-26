@@ -3,7 +3,7 @@ name = "vlibc"
 description = "Velora C-library-level runtime for user programs: startup, system calls, I/O, heap, processes"
 version = "0.6.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
+license = "LGPL-3.0-or-later"
 publish = false
 
 [dependencies]
