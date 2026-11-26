@@ -251,7 +251,27 @@ impl VirtioBlk {
 
         let want = q.used_idx.wrapping_add(1);
         let ring = &q.ring;
-        block::poll(5000, || ring.read::<u16>(USED_OFF + 2) == want)?;
+        if let Err(e) = block::poll(5000, || ring.read::<u16>(USED_OFF + 2) == want) {
+            // SAFETY: reads of this device's common configuration.
+            let (status, enabled) = unsafe {
+                mmio::write16(self.common + QUEUE_SELECT, 0);
+                (
+                    mmio::read8(self.common + DEVICE_STATUS),
+                    mmio::read16(self.common + QUEUE_ENABLE),
+                )
+            };
+            crate::kwarn!(
+                "{}: request timed out (device status {:#x}, queue enabled {}, avail {}, used {}, used flags {:#x}, notify {:#x})",
+                self.name,
+                status,
+                enabled,
+                q.ring.read::<u16>(AVAIL_OFF + 2),
+                q.ring.read::<u16>(USED_OFF + 2),
+                q.ring.read::<u16>(USED_OFF),
+                self.notify
+            );
+            return Err(e);
+        }
         q.used_idx = want;
         fence(Ordering::SeqCst);
         match q.req.read::<u8>(STATUS_OFF) {
