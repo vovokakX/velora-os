@@ -37,7 +37,7 @@
 | 6 | `wait(pid, status)` | ждёт завершения потомка, пишет его статус (`i64`) по адресу `status` (может быть 0); возвращает pid | `ECHILD`, `EFAULT` |
 | 7 | `mmap(addr, len, prot, flags)` | анонимная память, заполненная нулями; `prot`: READ 1, WRITE 2, EXEC 4 (WRITE+EXEC запрещено); `flags`: FIXED 1 — ровно по `addr` | `EINVAL`, `EEXIST`, `ENOMEM` |
 | 8 | `munmap(addr, len)` | убирает отображение и освобождает страницы | `EINVAL` |
-| 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): время с загрузки, `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EFAULT` |
+| 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): время с загрузки; `clock = 0` (REALTIME, с этапа 6): время UTC с 1970 года по часам RTC; `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EAGAIN` (время неизвестно), `EFAULT` |
 | 25 | `sleep_ms(ms)` | спит не меньше `ms` миллисекунд (точность — тик 10 мс) | — |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
@@ -128,7 +128,7 @@ the kernel and the future vlibc.
 | 6 | `wait(pid, status)` | waits for a child to exit and stores its status (`i64`) at `status` (may be 0); returns the pid | `ECHILD`, `EFAULT` |
 | 7 | `mmap(addr, len, prot, flags)` | zero-filled anonymous memory; `prot`: READ 1, WRITE 2, EXEC 4 (WRITE+EXEC refused); `flags`: FIXED 1 — exactly at `addr` | `EINVAL`, `EEXIST`, `ENOMEM` |
 | 8 | `munmap(addr, len)` | removes mappings and frees the pages | `EINVAL` |
-| 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): time since boot as `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EFAULT` |
+| 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): time since boot; `clock = 0` (REALTIME, since stage 6): UTC time since 1970 from the RTC; `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EAGAIN` (time unknown), `EFAULT` |
 | 25 | `sleep_ms(ms)` | sleeps at least `ms` milliseconds (10 ms tick resolution) | — |
 
 An unknown number returns `-ENOSYS` (38). Error numbers match Linux to make
