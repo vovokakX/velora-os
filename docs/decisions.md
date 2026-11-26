@@ -835,3 +835,42 @@ status set would raise the SCI forever. Consequences, listed as known issues:
 `_PTS` is not run before powering off; a control-method power button (common
 on laptops with an embedded controller) and hardware-reduced ACPI event devices
 are not handled. Powering off with `shutdown` works on such machines.
+
+## D43. SMP с большой блокировкой ядра / SMP with a big kernel lock
+
+**2026-11-27**
+
+**RU.** Ядро писалось для одного процессора: системные вызовы идут с
+выключенными прерываниями и считают, что больше никто не работает с
+данными ядра. Тонкие блокировки по всему ядру — большой и рискованный
+объём работы. Поэтому выбрана большая блокировка ядра, как в ранних
+многопроцессорных Unix: код ядра выполняется на одном процессоре за раз,
+программы — на всех. Для терминальной системы, где почти всё время
+работают программы, этого достаточно; тест показывает, что четыре
+вычисляющие программы на четырёх ядрах идут с той же скоростью, что одна.
+Блокировка билетная (порядок честный) и рекурсивная для процессора; её
+глубина сохраняется в потоке, потому что переключение потоков происходит
+под блокировкой. Поток ядра, занятый вычислениями, отдаёт её ждущим на
+каждом тике таймера. Все потоки процесса закреплены за одним процессором,
+поэтому снятие страниц пользователя не требует сброса TLB на других
+процессорах; стеки ядра после освобождения остаются отображёнными и
+переиспользуются, поэтому и страницы ядра не меняют содержимого.
+Недостатки: системные вызовы разных процессоров не идут параллельно;
+опрос диска с выключенными прерываниями (D21) задерживает вход в ядро на
+остальных процессорах; потоки одной программы не работают параллельно.
+
+**EN.** The kernel was written for one CPU: system calls run with interrupts off
+and assume nothing else touches kernel data. Fine-grained locking across the
+kernel would be a large and risky change, so a big kernel lock was chosen, as
+in early multiprocessor Unix systems: kernel code runs on one CPU at a time,
+programs on all. That is enough for a terminal system, where programs run most
+of the time; a test shows four computing programs on four cores each run as
+fast as one alone. The lock is a ticket lock (fair order), recursive per CPU;
+its depth is saved per thread because threads are switched under the lock. A
+kernel thread that computes hands it to waiting CPUs at every timer tick. All
+threads of a process are pinned to one CPU, so unmapping user pages needs no
+TLB shootdown on other CPUs; freed kernel stacks stay mapped and are reused, so
+kernel pages never change contents either. Drawbacks: system calls on
+different CPUs do not run in parallel; disk polling with interrupts off (D21)
+delays kernel entry on the other CPUs; threads of one program do not run in
+parallel.
