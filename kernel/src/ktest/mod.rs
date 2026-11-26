@@ -21,6 +21,7 @@ mod irq;
 mod mm;
 mod net;
 mod sched;
+mod smp;
 mod user;
 
 struct Test {
@@ -98,6 +99,11 @@ static TESTS: &[Test] = tests![
     sched::user_sse_registers_are_per_thread,
     sched::user_sleep_and_yield,
     sched::user_clock_gettime,
+    // stage 14: multiprocessing
+    smp::all_cpus_online,
+    smp::programs_run_in_parallel,
+    smp::kill_on_another_cpu,
+    smp::big_kernel_lock_balanced,
     sched::processes_do_not_leak_memory,
     sched::wait_for_unknown_process,
     // stage 5: programs from files
