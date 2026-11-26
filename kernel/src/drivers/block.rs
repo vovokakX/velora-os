@@ -36,6 +36,93 @@ pub trait BlockDevice: Send + Sync {
     fn size_bytes(&self) -> u64 {
         self.sector_count() * self.sector_size() as u64
     }
+
+    /// Unique GUID of a GPT partition (None for whole disks).
+    fn partition_guid(&self) -> Option<[u8; 16]> {
+        None
+    }
+}
+
+/// A GPT partition: a window of its disk.
+pub struct Partition {
+    name: String,
+    disk: Arc<dyn BlockDevice>,
+    start: u64,
+    count: u64,
+    guid: [u8; 16],
+    kind: String,
+}
+
+impl BlockDevice for Partition {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> String {
+        alloc::format!("{} partition of {}", self.kind, self.disk.name())
+    }
+
+    fn sector_size(&self) -> usize {
+        self.disk.sector_size()
+    }
+
+    fn sector_count(&self) -> u64 {
+        self.count
+    }
+
+    fn read(&self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError> {
+        check_request(self, lba, buf.len())?;
+        self.disk.read(self.start + lba, buf)
+    }
+
+    fn write(&self, lba: u64, buf: &[u8]) -> Result<(), BlockError> {
+        check_request(self, lba, buf.len())?;
+        self.disk.write(self.start + lba, buf)
+    }
+
+    fn flush(&self) -> Result<(), BlockError> {
+        self.disk.flush()
+    }
+
+    fn partition_guid(&self) -> Option<[u8; 16]> {
+        Some(self.guid)
+    }
+}
+
+/// Reads the GPT of every disk and registers its partitions as devices
+/// named `<disk>p<N>`. Returns the number of partitions found.
+pub fn scan_partitions() -> usize {
+    let mut found = 0;
+    for disk in devices() {
+        if disk.partition_guid().is_some() {
+            continue;
+        }
+        let mut io = crate::fs::DiskIo::new(disk.clone());
+        let Ok(Some(parts)) = velora_gpt::read(&mut io) else {
+            continue;
+        };
+        for (i, p) in parts.iter().enumerate() {
+            if p.last_lba >= disk.sector_count() || p.first_lba > p.last_lba {
+                crate::kwarn!("{}: partition {} lies outside the disk", disk.name(), i + 1);
+                continue;
+            }
+            let kind = match p.type_guid {
+                velora_gpt::Guid::ESP => "EFI system",
+                velora_gpt::Guid::VELORA_ROOT => "Velora root",
+                _ => "data",
+            };
+            register(Arc::new(Partition {
+                name: alloc::format!("{}p{}", disk.name(), i + 1),
+                disk: disk.clone(),
+                start: p.first_lba,
+                count: p.sectors(),
+                guid: p.unique_guid.0,
+                kind: String::from(kind),
+            }));
+            found += 1;
+        }
+    }
+    found
 }
 
 /// Checks a request against the device size; returns the sector count.
