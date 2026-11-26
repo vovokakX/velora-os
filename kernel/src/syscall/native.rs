@@ -1,11 +1,11 @@
 //! The native Velora system calls.
 
-use super::{files, uaccess};
+use super::{files, process, uaccess};
 use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::exec;
 use crate::mm::PAGE_SIZE;
 use crate::mm::paging::UserKind;
-use crate::{fs, input, kprint, sched, time};
+use crate::{fs, kprint, sched, time, tty};
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_abi::{StrRef, Timespec, clock, errno, map, nr, prot};
@@ -40,6 +40,20 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::FTRUNCATE => files::ftruncate(a0, a1),
         nr::SYNC => files::sync(),
         nr::STATFS => files::statfs(a0, a1, a2),
+        nr::PIPE => files::pipe(a0),
+        nr::DUP => files::dup(a0),
+        nr::DUP2 => files::dup2(a0, a1),
+        nr::CHDIR => files::chdir(a0, a1),
+        nr::GETCWD => files::getcwd(a0, a1),
+        nr::CHMOD => files::chmod(a0, a1, a2),
+        nr::CHOWN => files::chown(a0, a1, a2, f.r10),
+        nr::KILL => process::kill(a0, a1),
+        nr::SYSINFO => process::sysinfo(a0),
+        nr::REBOOT => process::reboot(a0),
+        nr::SETUID => process::setuid(a0, a1),
+        nr::GETUID => process::getuid(),
+        nr::PROCLIST => process::proclist(a0, a1),
+        nr::TTY => process::tty(a0, a1),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -49,12 +63,29 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Console,
+    Pipe,
+    File,
+}
+
+fn target(f: &fs::FileRef) -> Target {
+    match f.lock().handle {
+        fs::Handle::Console => Target::Console,
+        fs::Handle::Pipe { .. } => Target::Pipe,
+        fs::Handle::File { .. } => Target::File,
+    }
+}
+
 fn write(fd: u64, buf: u64, len: u64) -> i64 {
     let Some(f) = sched::fd_get(fd) else {
         return -errno::EBADF;
     };
-    if !matches!(f.lock().handle, fs::Handle::Console) {
-        return files::write_file(&f, buf, len);
+    match target(&f) {
+        Target::File => return files::write_file(&f, buf, len),
+        Target::Pipe => return files::write_pipe(&f, buf, len),
+        Target::Console => {}
     }
     let len = len.min(MAX_WRITE);
     let Some(bytes) = uaccess::read_slice(buf, len) else {
@@ -70,39 +101,19 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
     len as i64
 }
 
-/// Reads a file, or typed text from the keyboard for console descriptors:
-/// blocks until at least one
-/// character is available, then returns as many whole UTF-8 characters
-/// as fit. Line editing comes with the terminal layer (stage 8).
+/// Reads a file, a pipe or the console terminal (see `tty`).
 fn read(fd: u64, buf: u64, len: u64) -> i64 {
     let Some(f) = sched::fd_get(fd) else {
         return -errno::EBADF;
     };
-    if !matches!(f.lock().handle, fs::Handle::Console) {
-        return files::read_file(&f, buf, len);
+    match target(&f) {
+        Target::File => return files::read_file(&f, buf, len),
+        Target::Pipe => return files::read_pipe(&f, buf, len),
+        Target::Console => {}
     }
-    if len < 4 {
-        return -errno::EINVAL; // room for one UTF-8 character
-    }
-    let mut out = [0u8; 256];
-    let cap = (len as usize).min(out.len());
-    let mut n = 0;
-    loop {
-        let ev = if n == 0 {
-            input::wait(None)
-        } else {
-            input::pop()
-        };
-        let Some(ev) = ev else { break };
-        if let (true, Some(c)) = (ev.pressed, ev.ch) {
-            if n + c.len_utf8() > cap {
-                break;
-            }
-            n += c.encode_utf8(&mut out[n..]).len();
-        }
-    }
-    if uaccess::write(buf, &out[..n]) {
-        n as i64
+    let data = tty::read(len.min(4096) as usize);
+    if uaccess::write(buf, &data) {
+        data.len() as i64
     } else {
         -errno::EFAULT
     }
@@ -164,7 +175,8 @@ fn user_strings(ptr: u64, count: u64) -> Result<Vec<String>, i64> {
 
 fn spawn(path: u64, path_len: u64, argv: u64, argc: u64, envp: u64, envc: u64) -> i64 {
     let result = (|| {
-        let path = user_string(path, path_len)?;
+        // Relative program paths start at the working directory.
+        let path = files::user_path(path, path_len)?;
         let argv = user_strings(argv, argc)?;
         let envp = user_strings(envp, envc)?;
         let a: Vec<&str> = argv.iter().map(String::as_str).collect();

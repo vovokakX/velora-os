@@ -17,11 +17,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mkpasswd"
+version = "0.7.0"
+dependencies = [
+ "velora-auth",
+]
+
+[[package]]
 name = "velora-abi"
 version = "0.7.0"
 
 [[package]]
 name = "velora-acpi"
+version = "0.7.0"
+
+[[package]]
+name = "velora-auth"
 version = "0.7.0"
 
 [[package]]
@@ -54,6 +65,7 @@ version = "0.7.0"
 dependencies = [
  "velora-abi",
  "velora-acpi",
+ "velora-auth",
  "velora-exe",
  "velora-fat",
  "velora-input",
@@ -75,6 +87,10 @@ version = "0.7.0"
 
 [[package]]
 name = "velora-rtc"
+version = "0.7.0"
+
+[[package]]
+name = "velora-shell"
 version = "0.7.0"
 
 [[package]]

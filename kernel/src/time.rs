@@ -16,6 +16,17 @@ static TICKS: AtomicU64 = AtomicU64::new(0);
 /// UNIX time (ns) that corresponds to uptime 0; 0 = unknown.
 static WALL_AT_BOOT_NS: AtomicU64 = AtomicU64::new(0);
 
+static BOOT_DONE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Records that boot finished (for `sysinfo`).
+pub fn mark_boot_done() {
+    BOOT_DONE_MS.store(uptime_ms(), Ordering::Relaxed);
+}
+
+pub fn boot_done_ms() -> u64 {
+    BOOT_DONE_MS.load(Ordering::Relaxed)
+}
+
 /// Records the TSC at kernel entry, before anything else runs.
 pub fn mark_boot() {
     BOOT_TSC.store(cpu::rdtsc(), Ordering::Relaxed);
