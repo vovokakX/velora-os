@@ -1,0 +1,11 @@
+[package]
+name = "mkiso"
+description = "Builds the bootable Velora ISO (ISO 9660 + El Torito UEFI boot image)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-fat = { path = "../../fs/fat" }
