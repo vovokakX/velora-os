@@ -1,0 +1,23 @@
+[package]
+name = "velora-setup"
+description = "Installs Velora OS from the Live system onto a disk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+# Built with the user programs (their flags and linker script).
+workspace = "../../userland"
+
+[[bin]]
+name = "velora-setup"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vlibc = { path = "../../libc/vlibc" }
+velora-auth = { path = "../../libc/auth" }
+velora-vfs = { path = "../../fs/vfs" }
+velora-gpt = { path = "../../fs/gpt" }
+velora-fat = { path = "../../fs/fat" }
+velorafs = { path = "../../fs/velorafs" }
