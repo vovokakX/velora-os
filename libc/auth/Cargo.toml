@@ -1,0 +1,8 @@
+[package]
+name = "velora-auth"
+description = "SHA-256, PBKDF2 password hashes and account file parsing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
