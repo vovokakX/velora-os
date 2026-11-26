@@ -67,6 +67,19 @@ pub fn reference_clocks_agree() {
     }
 }
 
+/// ACPI mode is on, the SCI is routed and unmasked, the fixed power
+/// button is enabled and an S5 sleep type was found.
+pub fn acpi_power_management() {
+    let f = acpi::get().fadt;
+    assert!(f.pm1a_evt != 0 && f.pm1_evt_len >= 4, "no PM1 event block");
+    assert!(crate::power::acpi_mode(), "SCI_EN is not set");
+    let st = crate::power::status();
+    let gsi = st.sci_gsi.expect("the SCI is not routed");
+    assert_eq!(ioapic::entry(gsi), Some((crate::power::VECTOR_SCI, false)));
+    assert!(st.power_button, "the power button event is not enabled");
+    assert!(acpi::s5().is_some(), "no S5 sleep type");
+}
+
 pub fn timer_ticks_at_expected_rate() {
     assert!(cpu::interrupts_enabled());
     let t0 = time::ticks();

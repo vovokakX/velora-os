@@ -27,7 +27,7 @@ the Win32 layer.
 
 ## Цели производительности / Performance targets
 
-| Цель / Target | Сейчас / Now (v0.11.0) |
+| Цель / Target | Сейчас / Now (v0.13.0) |
 |---|---|
-| ОЗУ в простое < 64 МиБ / idle RAM < 64 MiB | 8,0 МиБ после загрузки Live-образа, включая initramfs с файлами для установки (QEMU, 256 МиБ RAM); проверяется тестом загрузки / 8.0 MiB after booting the Live image, initramfs with the files to install included, initramfs included (QEMU, 256 MiB RAM); checked by the boot test |
-| Загрузка до приглашения входа < 3 с в QEMU / boot to login prompt < 3 s in QEMU | приглашение входа через 1,85 с с KVM в CI (QEMU 9.1, прошивка включена), у установленной системы 1,7 с; на TCG в Windows 3,2–5,2 с; время измеряют тесты загрузки и установки / login prompt after 1.85 s with KVM in CI (QEMU 9.1, firmware included), 1.7 s for an installed system; 3.2–5.2 s on TCG under Windows; measured by the boot and installation tests |
+| ОЗУ в простое < 64 МиБ / idle RAM < 64 MiB | 8,1 МиБ после загрузки Live-образа, включая initramfs с файлами для установки (QEMU, 256 МиБ RAM); проверяется тестом загрузки / 8.1 MiB after booting the Live image, initramfs with the files to install included, initramfs included (QEMU, 256 MiB RAM); checked by the boot test |
+| Загрузка до приглашения входа < 3 с в QEMU / boot to login prompt < 3 s in QEMU | приглашение входа через 1,9 с с KVM в CI (QEMU 9.1, прошивка включена), у установленной системы 1,75 с; на TCG в Windows 3,2–5,2 с; время измеряют тесты загрузки и установки / login prompt after 1.9 s with KVM in CI (QEMU 9.1, firmware included), 1.75 s for an installed system; 3.2–5.2 s on TCG under Windows; measured by the boot and installation tests |

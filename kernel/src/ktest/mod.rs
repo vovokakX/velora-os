@@ -76,6 +76,7 @@ static TESTS: &[Test] = tests![
     irq::keyboard_irq_routed,
     irq::tsc_calibrated,
     irq::reference_clocks_agree,
+    irq::acpi_power_management,
     irq::timer_ticks_at_expected_rate,
     irq::handler_registry_dispatches,
     irq::keyboard_input,

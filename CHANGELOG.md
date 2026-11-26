@@ -6,6 +6,44 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.13.0] — 2026-11-26
+
+### Что нового
+- Кнопка питания: ядро включает режим ACPI (SMI_CMD/ACPI_ENABLE), если прошивка этого не сделала, направляет прерывание SCI и включает фиксированное событие кнопки питания. Нажатие записывает данные на диски и выключает компьютер (решение D42).
+- Все события общего назначения (GPE) выключаются при загрузке, чтобы включённое прошивкой событие не вызывало SCI без конца.
+- Выключение: значения `_S5` ищутся в DSDT и SSDT, разбор понимает все кодировки целых AML и пропускает ссылки на `_S5` внутри кода. SLP_TYP записывается в PM1_CNT с сохранением остальных битов; для ACPI с аппаратным сокращением — в регистр SLEEP_CONTROL.
+- Расширенные адреса FADT (X_PM1a/b_EVT_BLK, X_PM1a/b_CNT_BLK, X_GPE0/1_BLK) используются, если это порты ввода-вывода.
+- Перезагрузка через регистр сброса ACPI в памяти и в конфигурации PCI (раньше только в портах).
+- Тесты: тест `boot` выключает машину кнопкой питания (`system_powerdown` в QEMU), тест `usb` проверяет `reboot`, тест ядра проверяет режим ACPI, маршрут SCI и событие кнопки. 178 юнит-тестов на хосте, 93 теста ядра.
+
+### Исправления
+- Нет.
+
+### Известные проблемы
+- Интерпретатора AML нет: `_PTS` перед выключением не выполняется; кнопка питания, сделанная методом управления (часто у ноутбуков), и устройства событий ACPI с аппаратным сокращением не обрабатываются. На таких машинах выключайте командой `shutdown`.
+- Блоки PM1 и GPE в памяти (а не в портах) не поддерживаются; на ПК x86 они почти не встречаются.
+- Используется одно ядро процессора; клавиатура только PS/2; сеть только virtio-net (этапы 14–16).
+- Ограничения прошлых версий остаются (сигналов нет, одна блокировка VFS, только UEFI, нет DNS, virtio-blk не работает с QEMU 8.2 — #19).
+
+---
+
+### What's new
+- Power button: the kernel switches the firmware to ACPI mode (SMI_CMD/ACPI_ENABLE) when it has not done so, routes the SCI interrupt and enables the fixed power button event. A press flushes the disks and turns the computer off (decision D42).
+- All general-purpose events (GPEs) are turned off at boot, so that an event the firmware left enabled cannot raise the SCI forever.
+- Power off: the `_S5` values are looked up in the DSDT and the SSDTs; the parser understands every AML integer encoding and skips references to `_S5` inside code. SLP_TYP is written to PM1_CNT keeping the other bits; on hardware-reduced ACPI to the SLEEP_CONTROL register.
+- Extended FADT addresses (X_PM1a/b_EVT_BLK, X_PM1a/b_CNT_BLK, X_GPE0/1_BLK) are used when they are I/O ports.
+- Restart through the ACPI reset register in memory and in PCI configuration space (before: I/O ports only).
+- Tests: the `boot` test turns the machine off with the power button (`system_powerdown` in QEMU), the `usb` test checks `reboot`, and a kernel test checks ACPI mode, the SCI route and the button event. 178 host unit tests, 93 kernel tests.
+
+### Fixes
+- None.
+
+### Known issues
+- No AML interpreter: `_PTS` is not run before powering off; a control-method power button (common on laptops) and hardware-reduced ACPI event devices are not handled. Use `shutdown` on such machines.
+- PM1 and GPE blocks in memory (instead of I/O ports) are not supported; x86 PCs hardly ever use them.
+- One CPU core is used; PS/2 keyboard only; virtio-net only (stages 14–16).
+- Earlier limitations remain (no signals, one VFS lock, UEFI only, no DNS, virtio-blk does not work with QEMU 8.2 — #19).
+
 ## [0.12.0] — 2026-11-26
 
 ### Что нового
