@@ -16,6 +16,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 mod irq;
 mod mm;
+mod sched;
 
 struct Test {
     name: &'static str,
@@ -72,6 +73,24 @@ static TESTS: &[Test] = tests![
     irq::handler_registry_dispatches,
     irq::keyboard_input,
     irq::no_stray_interrupts,
+    // stage 4: threads, processes, ring 3, system calls
+    sched::scheduler_started,
+    sched::kernel_threads_are_preempted,
+    sched::sleep_blocks_for_the_requested_time,
+    sched::user_hello,
+    sched::user_getpid,
+    sched::user_bad_pointer_gets_efault,
+    sched::user_unknown_syscall_gets_enosys,
+    sched::user_memory_is_isolated,
+    sched::user_cannot_read_kernel_memory,
+    sched::user_cannot_run_privileged_instructions,
+    sched::user_code_is_not_writable,
+    sched::user_processes_are_preempted,
+    sched::user_sse_registers_are_per_thread,
+    sched::user_sleep_and_yield,
+    sched::user_clock_gettime,
+    sched::processes_do_not_leak_memory,
+    sched::wait_for_unknown_process,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
