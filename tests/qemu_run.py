@@ -85,7 +85,7 @@ SECTOR = 512
 def disk_args(kind, path):
     drive = "if=none,id=d%s,file=%s,format=raw" % (kind, path)
     device = {
-        "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on",
+        "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
         "ahci": "ide-hd,drive=dahci,bus=ide.1",
         "nvme": "nvme,serial=velora0,drive=dnvme",
     }[kind]
