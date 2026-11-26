@@ -24,7 +24,8 @@ pub fn boot_tsc() -> u64 {
 }
 
 fn on_tick(_frame: &mut InterruptFrame) {
-    TICKS.fetch_add(1, Ordering::Relaxed);
+    let now = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    crate::sched::on_tick(now);
 }
 
 /// Calibrates against the PIT and starts the timer interrupt.
@@ -73,9 +74,12 @@ pub fn delay_us(us: u64) {
     }
 }
 
-/// Sleeps at least `ms` milliseconds, halting the CPU between timer
-/// interrupts. Interrupts are enabled while sleeping and restored after.
+/// Sleeps at least `ms` milliseconds. With the scheduler running the
+/// thread blocks; before that the CPU halts between timer interrupts.
 pub fn sleep_ms(ms: u64) {
+    if crate::sched::is_running() {
+        return crate::sched::sleep_ms(ms);
+    }
     let was = cpu::interrupts_enabled();
     let target = cpu::rdtsc() + tsc_hz() * ms / 1000;
     while cpu::rdtsc() < target {
