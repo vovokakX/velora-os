@@ -202,6 +202,20 @@
   тесты на хосте), поток ядра `net`, сокеты как файловые дескрипторы.
   Подробно — [network.md](network.md), решения D36–D37.
 
+### Текстовый редактор (этап 11)
+
+- `libc/editor` (`velora-editor`) — вся логика Plume без ввода-вывода:
+  декодер клавиш, буфер строк (UTF-8, LF или CRLF), команды, подсказки,
+  вопросы и отрисовка кадра. Проверяется на хосте. Запись файлов идёт
+  через трейт `Io`, поэтому тесты подставляют файлы в памяти.
+- `userland/plume` переводит консоль в «сырой» режим, читает клавиши,
+  выводит разницу между кадрами (`Screen`, только изменившиеся строки)
+  и сохраняет файлы через vlibc с `sync` после записи (D38).
+- Консоль ядра для этого рисует курсор (подчёркивание), понимает
+  инверсию (SGR 7/27), скрытие курсора (`ESC[?25l`/`ESC[?25h`) и
+  `ESC[J`. Символ UTF-8, разорванный между двумя вызовами `write`,
+  собирается в `tty::write`.
+
 ## English
 
 ### Overview
@@ -359,3 +373,16 @@ are in the Live image's initramfs under `/usr/lib/velora`.
 A virtio-net driver, the `kernel/net` stack (`velora-net`, without I/O of its
 own, tested on the host), the `net` kernel thread, and sockets as file
 descriptors. Details in [network.md](network.md), decisions D36–D37.
+
+### Text editor (stage 11)
+
+`libc/editor` (`velora-editor`) holds all of Plume's logic without I/O: the key
+decoder, the line buffer (UTF-8, LF or CRLF), commands, hints, questions and
+frame drawing. It is tested on the host; files are written through the `Io`
+trait, so tests use files in memory. `userland/plume` puts the console in raw
+mode, reads keys, prints the difference between frames (`Screen`, changed rows
+only) and saves files through vlibc with a `sync` after writing (D38). For
+this the kernel console draws a cursor (an underline), understands reverse
+video (SGR 7/27), cursor hiding (`ESC[?25l`/`ESC[?25h`) and `ESC[J`; a UTF-8
+character split between two `write` calls is put back together in
+`tty::write`.

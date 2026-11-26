@@ -1,0 +1,8 @@
+[package]
+name = "velora-editor"
+description = "Plume text editor: buffer, keys, editing commands and screen drawing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

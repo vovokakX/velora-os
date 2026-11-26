@@ -699,3 +699,32 @@ congestion control this is reliable and simple but slower under loss than full
 implementations, which is enough for a LAN and QEMU. A SYN gives up sooner
 (5 retries, about 15 s) than data (8 retries).
 
+## D38. Plume: логика в библиотеке, вывод разницей кадров / Plume: logic in a library, output as frame differences
+
+**2026-11-26**
+
+**RU.** Редактор разделён на библиотеку `velora-editor` без ввода-вывода и
+небольшую программу `plume`. Библиотека получает клавиши и отдаёт кадр
+(строки ячеек и положение курсора), запись файлов идёт через трейт `Io`.
+Так все команды, вопросы и вид экрана проверяются юнит-тестами на хосте,
+а тест в QEMU проверяет только связку с консолью. Экран выводится
+разницей с предыдущим кадром: отправляются только изменившиеся строки.
+Это важно для последовательного порта и для framebuffer без аппаратного
+ускорения. Сохранение пишет файл на месте (`TRUNCATE`), а не через
+временный файл и переименование: так сохраняются владелец и права файла
+(например, у `/etc/passwd`). После записи вызывается `sync`, чтобы файл
+был на диске сразу. Файл с неверным UTF-8 открывается только для чтения,
+чтобы сохранение не заменило байты на U+FFFD. Отмены действий (undo) нет.
+
+**EN.** The editor is split into the `velora-editor` library, which has no I/O,
+and a small `plume` program. The library takes keys and returns a frame (rows
+of cells and the cursor position); files are written through the `Io` trait.
+All commands, questions and the screen layout are therefore checked by host
+unit tests, and the QEMU test only checks the connection to the console. The
+screen is updated with the difference from the previous frame: only changed
+rows are sent, which matters on the serial port and on a framebuffer without
+acceleration. Saving writes the file in place (`TRUNCATE`) rather than through
+a temporary file and a rename, so the file keeps its owner and permissions
+(for example `/etc/passwd`); `sync` follows so the file is on disk at once. A
+file with invalid UTF-8 opens read-only so that saving cannot replace bytes
+with U+FFFD. There is no undo.

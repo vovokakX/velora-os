@@ -476,19 +476,37 @@ class Session:
 
     def __init__(self, proc, reader, monitor, deadline):
         self.proc, self.reader, self.monitor, self.deadline = proc, reader, monitor, deadline
+        # Search position: line index, and an offset in that line. A match
+        # in a complete line moves past the whole line; a match in the
+        # unfinished last line (full-screen programs draw without
+        # newlines) moves just past the match.
         self.mark = 0
+        self.offset = 0
 
     def lines(self):
+        """(index, text, unfinished) of every line from the search position."""
         with self.reader.lock:
-            return [line for _, line in self.reader.lines[self.mark:]] + [self.reader.partial]
+            done = self.reader.lines
+            out = [(i, done[i][1], False) for i in range(self.mark, len(done))]
+            return out + [(len(done), self.reader.partial, True)]
 
     def wait(self, text, exact=False, timeout=60.0):
         end = min(self.deadline, time.monotonic() + timeout)
         while time.monotonic() < end:
-            for i, line in enumerate(self.lines()):
-                clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line).split("\r")[-1]
-                if (clean.strip() == text) if exact else (text in line):
-                    self.mark += i + 1
+            for i, line, unfinished in self.lines():
+                start = self.offset if i == self.mark else 0
+                rest = line[start:]
+                if exact:
+                    clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", rest).split("\r")[-1]
+                    found, pos = clean.strip() == text, len(line)
+                else:
+                    p = rest.find(text)
+                    found, pos = p >= 0, start + p + len(text)
+                if found:
+                    if unfinished:
+                        self.mark, self.offset = i, pos
+                    else:
+                        self.mark, self.offset = i + 1, 0
                     return True
             if self.proc.poll() is not None:
                 return False
@@ -712,7 +730,7 @@ def install_step2(proc, reader, monitor, deadline):
         s.run("ls /home", "anna", exact=True)
         s.run("cat /etc/shadow", "permission denied")
         s.run("velofetch", "Memory:")
-        s.run("exit", "velora login:")
+        s.type("exit\n")  # login() waits for the prompt
         login(s, "root", "rootpw1", "root@velora")
         s.type("passwd anna\n")
         assert s.wait("New password for anna:"), "passwd did not ask"
@@ -735,7 +753,7 @@ def install_step3(proc, reader, monitor, deadline):
         s.run("cat notes.txt", "keep-me", exact=True)
         s.run("cat projects/copy.txt", "keep-me", exact=True)
         s.run("ls -l", "projects")
-        s.run("exit", "velora login:")
+        s.type("exit\n")  # login() waits for the prompt
         login(s, "root", "rootpw1", "root@velora")
         s.type("shutdown\n")
         wait_exit(proc)
@@ -827,6 +845,29 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
         s.keys(["alt-shift"])
         s.type("\n")
         assert s.wait("привет", exact=True), "Russian input was not echoed"
+        # Plume: a new file with Cyrillic text, saved on exit after the
+        # question; then search, cut, paste and Ctrl+S.
+        s.type("plume note.txt\n")
+        assert s.wait("New file"), "plume did not start"
+        s.type("first line\n")
+        s.keys(["alt-shift"])
+        s.type("ghbdtn")
+        s.keys(["alt-shift"])
+        s.type(" 42\n")
+        s.keys(["ctrl-x"])
+        assert s.wait("Save the changes"), "plume did not ask to save the changes"
+        s.type("y")
+        s.run("cat note.txt", "привет 42", exact=True)
+        s.type("plume note.txt\n")
+        assert s.wait("Read 3 lines"), "plume did not open the file"
+        s.keys(["ctrl-w"])
+        s.type("42\n")
+        s.keys(["ctrl-k", "up", "ctrl-u", "ctrl-s"])
+        assert s.wait("Wrote 3 lines to note.txt"), "plume did not save with Ctrl+S"
+        s.keys(["ctrl-x"])
+        s.run("cat note.txt", "привет 42", exact=True)
+        assert s.wait("first line", exact=True), "cut and paste gave the wrong order"
+        print("qemu_run: plume created, edited and saved a file")
         # Ctrl+C ends a program that waits for input.
         s.type("cat\n")
         time.sleep(1.0)

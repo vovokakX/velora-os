@@ -1,6 +1,8 @@
 //! Text console on top of a framebuffer, with a subset of ANSI escapes
-//! (SGR colours, cursor movement, erase) so that the same byte stream
-//! looks the same on the screen and on the serial terminal.
+//! (SGR colours and reverse video, cursor movement, erase, cursor
+//! visibility `?25h`/`?25l`) so that the same byte stream looks the same
+//! on the screen and on the serial terminal. The cursor is an underline
+//! drawn by inverting the bottom of its cell after each write.
 
 use super::font;
 use super::framebuffer::Framebuffer;
@@ -32,11 +34,20 @@ pub struct TextConsole {
     pub fg: u32,
     pub bg: u32,
     bold: bool,
+    reverse: bool,
     fg_index: Option<usize>,
     state: State,
     params: [u16; MAX_PARAMS],
     nparams: usize,
+    /// The CSI sequence started with '?' (private mode).
+    private: bool,
+    cursor_visible: bool,
+    /// Cell where the cursor is currently drawn.
+    cursor_drawn: Option<(usize, usize)>,
 }
+
+/// Height in pixels of the underline cursor.
+const CURSOR_HEIGHT: usize = 2;
 
 impl TextConsole {
     pub fn new(fb: Framebuffer) -> Self {
@@ -51,10 +62,14 @@ impl TextConsole {
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
             bold: false,
+            reverse: false,
             fg_index: None,
             state: State::Normal,
             params: [0; MAX_PARAMS],
             nparams: 0,
+            private: false,
+            cursor_visible: true,
+            cursor_drawn: None,
         };
         c.clear();
         c
@@ -76,8 +91,33 @@ impl TextConsole {
     }
 
     pub fn write_str(&mut self, s: &str) {
+        self.hide_cursor();
         for c in s.chars() {
             self.write_char(c);
+        }
+        self.show_cursor();
+    }
+
+    fn toggle_cursor_at(&mut self, (row, col): (usize, usize)) {
+        self.fb.invert_rect(
+            col * font::WIDTH,
+            row * font::HEIGHT + font::HEIGHT - CURSOR_HEIGHT,
+            font::WIDTH,
+            CURSOR_HEIGHT,
+        );
+    }
+
+    fn hide_cursor(&mut self) {
+        if let Some(at) = self.cursor_drawn.take() {
+            self.toggle_cursor_at(at);
+        }
+    }
+
+    fn show_cursor(&mut self) {
+        if self.cursor_visible && self.cursor_drawn.is_none() && self.rows > 0 && self.cols > 0 {
+            let at = (self.row.min(self.rows - 1), self.col.min(self.cols - 1));
+            self.toggle_cursor_at(at);
+            self.cursor_drawn = Some(at);
         }
     }
 
@@ -89,6 +129,7 @@ impl TextConsole {
                     self.state = State::Csi;
                     self.params = [0; MAX_PARAMS];
                     self.nparams = 0;
+                    self.private = false;
                 } else {
                     self.state = State::Normal;
                 }
@@ -131,7 +172,7 @@ impl TextConsole {
                     self.nparams += 1;
                 }
             }
-            '?' => {}
+            '?' => self.private = true,
             _ => {
                 self.state = State::Normal;
                 self.csi_final(c);
@@ -148,6 +189,17 @@ impl TextConsole {
     }
 
     fn csi_final(&mut self, c: char) {
+        if self.private {
+            // Only cursor visibility (DECTCEM) is supported.
+            if self.param(0, 0) == 25 {
+                match c {
+                    'h' => self.cursor_visible = true,
+                    'l' => self.cursor_visible = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
         match c {
             'm' => self.sgr(),
             'A' => self.row = self.row.saturating_sub(self.param(0, 1) as usize),
@@ -158,22 +210,31 @@ impl TextConsole {
                 self.row = (self.param(0, 1) as usize - 1).min(self.rows - 1);
                 self.col = (self.param(1, 1) as usize - 1).min(self.cols - 1);
             }
-            'J' => {
-                if self.param(0, 0) == 2 {
+            'J' => match self.param(0, 0) {
+                0 => {
+                    self.erase_line_end();
+                    let y = (self.row + 1) * font::HEIGHT;
+                    let (w, h) = (self.fb.width, self.fb.height.saturating_sub(y));
+                    self.fb.fill_rect(0, y, w, h, self.bg);
+                }
+                2 => {
                     let (row, col) = (self.row, self.col);
                     self.clear();
                     self.row = row;
                     self.col = col;
                 }
-            }
-            'K' => {
-                let x = self.col * font::WIDTH;
-                let y = self.row * font::HEIGHT;
-                let w = self.fb.width - x;
-                self.fb.fill_rect(x, y, w, font::HEIGHT, self.bg);
-            }
+                _ => {}
+            },
+            'K' => self.erase_line_end(),
             _ => {}
         }
+    }
+
+    fn erase_line_end(&mut self) {
+        let x = (self.col * font::WIDTH).min(self.fb.width);
+        let y = self.row * font::HEIGHT;
+        let w = self.fb.width - x;
+        self.fb.fill_rect(x, y, w, font::HEIGHT, self.bg);
     }
 
     fn sgr(&mut self) {
@@ -185,8 +246,11 @@ impl TextConsole {
                     self.fg = DEFAULT_FG;
                     self.bg = DEFAULT_BG;
                     self.bold = false;
+                    self.reverse = false;
                     self.fg_index = None;
                 }
+                7 => self.reverse = true,
+                27 => self.reverse = false,
                 1 => {
                     self.bold = true;
                     if let Some(idx) = self.fg_index {
@@ -225,12 +289,17 @@ impl TextConsole {
             self.newline();
         }
         let glyph = font::glyph_or_replacement(c);
+        let (fg, bg) = if self.reverse {
+            (self.bg, self.fg)
+        } else {
+            (self.fg, self.bg)
+        };
         self.fb.draw_glyph(
             self.col * font::WIDTH,
             self.row * font::HEIGHT,
             glyph,
-            self.fg,
-            self.bg,
+            fg,
+            bg,
         );
         self.col += 1;
     }
