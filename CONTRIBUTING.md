@@ -32,8 +32,14 @@
 cargo fmt --all
 cargo clippy --workspace --exclude velora-kernel --all-targets -- -D warnings
 cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -D warnings
+(cd userland && cargo fmt --all && \
+  CARGO_TARGET_DIR=../target/user RUSTFLAGS="-C relocation-model=static" \
+  cargo clippy --target x86_64-unknown-none -- -D warnings)
 ./test.sh
 ```
+
+Пользовательские программы (`userland/`) — отдельный workspace: их собирают
+с другими флагами, чем ядро (см. `build.sh`).
 
 В репозиторий не добавляются ключи, пароли, собранные образы и другие
 бинарные файлы (кроме изображений для документации).
@@ -69,7 +75,9 @@ cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -
 
 ### Before opening a PR
 
-Run the commands listed in the Russian section above. Do not commit keys,
+Run the commands listed in the Russian section above. User programs
+(`userland/`) are a separate workspace built with different flags than the
+kernel (see `build.sh`). Do not commit keys,
 passwords, built images or other binaries (images used by the docs are fine).
 
 ### Stubs
