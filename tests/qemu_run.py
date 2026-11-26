@@ -75,7 +75,48 @@ def free_port():
         return s.getsockname()[1]
 
 
-def build_command(iso, workdir, memory, monitor_port):
+# Test disks: (kind, QEMU arguments). Each image gets a signature at LBA 1;
+# the kernel tests read it and write "VELORA-WRITE-<KIND>" to LBA 2.
+DISK_KINDS = ["virtio", "ahci", "nvme"]
+DISK_SIZE = 32 * 1024 * 1024
+SECTOR = 512
+
+
+def disk_args(kind, path):
+    drive = "if=none,id=d%s,file=%s,format=raw" % (kind, path)
+    device = {
+        "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on",
+        "ahci": "ide-hd,drive=dahci,bus=ide.1",
+        "nvme": "nvme,serial=velora0,drive=dnvme",
+    }[kind]
+    return ["-drive", drive, "-device", device]
+
+
+def make_disks(workdir):
+    paths = {}
+    for kind in DISK_KINDS:
+        path = os.path.join(workdir, kind + ".img")
+        with open(path, "wb") as f:
+            f.truncate(DISK_SIZE)
+            f.seek(SECTOR)
+            f.write(("VELORA-DISK-" + kind.upper()).encode())
+        paths[kind] = path
+    return paths
+
+
+def check_disk_writes(paths):
+    """Returns the kinds whose image does not contain the kernel's write."""
+    bad = []
+    for kind, path in paths.items():
+        with open(path, "rb") as f:
+            f.seek(2 * SECTOR)
+            want = ("VELORA-WRITE-" + kind.upper()).encode()
+            if f.read(len(want)) != want:
+                bad.append(kind)
+    return bad
+
+
+def build_command(iso, workdir, memory, monitor_port, disks=None):
     code = find_firmware("OVMF_CODE", CODE_NAMES)
     vars_src = find_firmware("OVMF_VARS", VARS_NAMES)
     vars_copy = os.path.join(workdir, "vars.fd")
@@ -98,6 +139,8 @@ def build_command(iso, workdir, memory, monitor_port):
         # Human monitor on TCP, used to inject key presses.
         "-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor_port,
     ]
+    for kind, path in (disks or {}).items():
+        cmd += disk_args(kind, path)
     return cmd, accel
 
 
@@ -192,7 +235,8 @@ def run(args):
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
         port = free_port()
-        cmd, accel = build_command(args.iso, work, args.memory, port)
+        disks = make_disks(work) if args.mode == "ktest" else None
+        cmd, accel = build_command(args.iso, work, args.memory, port, disks)
         print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, args.iso))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         reader = SerialReader(proc, args.log)
@@ -200,7 +244,14 @@ def run(args):
         deadline = time.monotonic() + args.timeout
         try:
             if args.mode == "ktest":
-                return check_ktest(proc, reader, monitor, deadline)
+                result = check_ktest(proc, reader, monitor, deadline)
+                if result == 0:
+                    proc.wait()
+                    bad = check_disk_writes(disks)
+                    if bad:
+                        return fail("kernel writes did not reach the disk images: %s" % bad)
+                    print("qemu_run: disk writes verified on the host: %s" % ", ".join(DISK_KINDS))
+                return result
             return check_boot(proc, reader, monitor, deadline, args.max_boot_seconds)
         finally:
             monitor.close()
@@ -250,7 +301,7 @@ def check_ktest(proc, reader, monitor, deadline):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 14 passed, 0 failed",
+        "vtest: 15 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
