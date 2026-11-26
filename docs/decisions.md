@@ -518,3 +518,83 @@ journal) and checks the files. After each boot the volumes are checked on the
 host by `velora-fsck` from this repository, and FAT32 also by `fsck.fat` from
 dosfstools (in CI). A power cut after every single write is covered by host
 unit tests, where iterating over all cut points is fast.
+
+## D29. Терминал в ядре / The terminal in the kernel
+
+**2026-11-26**
+
+**RU.** Редактирование строки, эхо и Ctrl+C для консоли делает ядро
+(`tty.rs`), а не каждая программа: тогда `cat`, `login` и любая простая
+программа получают готовую строку. vsh переключает консоль в «сырой» режим
+и редактирует строку сам (история, Tab). Ctrl+C перехватывается при
+поступлении клавиши и обрабатывается потоком ядра `tty-intr`. Поэтому
+завершается и программа, которая не читает клавиатуру. Сигналов в системе
+нет: Ctrl+C завершает процесс переднего плана со статусом 130.
+
+**EN.** Line editing, echo and Ctrl+C for the console are done by the kernel
+(`tty.rs`), not by every program, so `cat`, `login` and any simple program get
+finished lines. vsh switches the console to raw mode and edits its own line
+(history, Tab). Ctrl+C is caught as the key arrives and handled by the
+`tty-intr` kernel thread, so it also ends a program that does not read the
+keyboard. There are no signals: Ctrl+C ends the foreground process with status
+130.
+
+## D30. Пароли: PBKDF2, только хеши / Passwords: PBKDF2, hashes only
+
+**2026-11-26**
+
+**RU.** Пароли хранятся как PBKDF2-HMAC-SHA-256 с 10 000 итераций и
+случайной солью 16 байт (`$pbkdf2-sha256$...`) в `/etc/shadow` с правами
+0600. SHA-256 и PBKDF2 реализованы в `libc/auth` и проверены на векторах
+из RFC. В репозитории нет ни паролей, ни хешей: `/etc/shadow` создаётся при
+сборке программой `tools/mkpasswd`. Пароли берутся из переменных окружения
+`VELORA_ROOT_PASSWORD` и `VELORA_USER_PASSWORD`, по умолчанию `velora`. Это
+общеизвестный пароль Live-образа, а не секрет, и он указан в README.
+Установщик (этап 9) будет спрашивать пароли и записывать новые хеши.
+Сравнение хешей идёт за постоянное время, а для неизвестного пользователя
+хеш тоже вычисляется.
+
+**EN.** Passwords are stored as PBKDF2-HMAC-SHA-256 with 10,000 iterations and a
+random 16-byte salt (`$pbkdf2-sha256$...`) in `/etc/shadow`, mode 0600. SHA-256
+and PBKDF2 are implemented in `libc/auth` and checked against RFC vectors. The
+repository holds no passwords or hashes: `/etc/shadow` is generated at build
+time by `tools/mkpasswd` from the `VELORA_ROOT_PASSWORD` and
+`VELORA_USER_PASSWORD` environment variables (default `velora`, the
+documented Live image password, not a secret). The installer (stage 9) will
+ask for passwords and write new hashes. Hashes are compared in constant time,
+and a hash is computed for unknown users too.
+
+## D31. spawn вместо fork; наследуются только 0–2 / spawn instead of fork; only 0–2 are inherited
+
+**2026-11-26**
+
+**RU.** Процессы создаются вызовом `spawn` (загрузить программу и
+запустить), без `fork`. Shell готовит дескрипторы 0–2 через `dup2` (канал,
+файл перенаправления), запускает программу и восстанавливает свои. Потомок
+получает только дескрипторы 0–2. Иначе концы каналов, которые shell держит
+открытыми, попадали бы во все программы конвейера, и читатель никогда не
+получил бы конец ввода. Флаг close-on-exec поэтому не нужен.
+
+**EN.** Processes are created with `spawn` (load a program and run it), without
+`fork`. The shell sets descriptors 0–2 with `dup2` (a pipe, a redirection
+file), spawns the program and restores its own. The child gets only
+descriptors 0–2; otherwise pipe ends the shell holds would leak into every
+program of a pipeline and the reader would never see the end of input. A
+close-on-exec flag is therefore not needed.
+
+## D32. Live-режим: домашние каталоги в памяти / Live system: home directories in memory
+
+**2026-11-26**
+
+**RU.** Корень Live-образа — initramfs только для чтения. Чтобы
+пользователи могли работать в своих каталогах, ядро монтирует в `/home` и
+`/root` файловые системы в памяти, а `login` создаёт `/home/<имя>` при
+первом входе. После перезагрузки их содержимое пропадает. В установленной
+системе (этап 9) корень и домашние каталоги будут на VeloraFS.
+
+**EN.** The Live root is the read-only initramfs. So users can work in their own
+directories, the kernel mounts in-memory file systems at `/home` and `/root`,
+and `login` creates `/home/<name>` on first login. Their contents are lost on
+reboot. In an installed system (stage 9) the root and home directories will be
+on VeloraFS.
+

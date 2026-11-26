@@ -4,7 +4,7 @@
 
 ## Русский
 
-Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–7). Номера и коды
+Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–8). Номера и коды
 ошибок определены в crate `velora-abi` (`kernel/abi`): им пользуются и ядро,
 и будущая vlibc.
 
@@ -45,30 +45,56 @@
 | 14 | `mkdir(path, path_len, mode)` | создаёт каталог | `EEXIST`, `ENOENT`, `EACCES`, `EROFS`, `ENOSPC` |
 | 15 | `unlink(path, path_len)` | удаляет файл или пустой каталог | `ENOENT`, `ENOTEMPTY`, `EACCES`, `EROFS`, `EBUSY` (точка монтирования) |
 | 16 | `rename(old, old_len, new, new_len)` | переименовывает или переносит; существующий файл (или пустой каталог) на новом месте заменяется | `ENOENT`, `EXDEV`, `EINVAL`, `ENOTEMPTY`, `EISDIR`, `ENOTDIR`, `EACCES`, `EBUSY` |
+| 17 | `pipe(fds)` | создаёт канал (буфер 64 КиБ); пишет два `u64`: `fds[0]` — чтение, `fds[1]` — запись | `EMFILE`, `EFAULT` |
+| 18 | `dup2(old, new)` | `new` указывает на тот же открытый файл, что `old` (прежний `new` закрывается) | `EBADF` |
+| 19 | `chdir(path, path_len)` | меняет рабочий каталог (нужно право `x`) | `ENOENT`, `ENOTDIR`, `EACCES` |
+| 20 | `kill(pid, status)` | завершает процесс с кодом `status`; root — любой, остальные — только свои | `ESRCH`, `EPERM` |
 | 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): время с загрузки; `clock = 0` (REALTIME, с этапа 6): время UTC с 1970 года по часам RTC; `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EAGAIN` (время неизвестно), `EFAULT` |
+| 22 | `sysinfo(out)` | пишет `SysInfo` (112 байт): время работы, память всего и занято, число процессов, время загрузки, число CPU, версия, модель CPU | `EFAULT` |
+| 23 | `reboot(cmd)` | только root: `0` — перезагрузка, `1` — выключение (ACPI S5); перед этим данные ФС записываются на диски | `EPERM`, `EINVAL` |
+| 24 | `setuid(uid, gid)` | только root: меняет пользователя и группу процесса (обратно не вернуться) | `EPERM`, `EINVAL` |
 | 25 | `sleep_ms(ms)` | спит не меньше `ms` миллисекунд (точность — тик 10 мс) | — |
 | 26 | `fstat(fd, out)` | `Stat` открытого файла; для консоли — символьное устройство | `EBADF`, `EFAULT` |
 | 27 | `sync()` | записывает на диски всё, что файловые системы держат в памяти | `EIO` |
 | 28 | `ftruncate(fd, size)` | меняет размер файла; новая часть читается как нули | `EBADF`, `EISDIR`, `EINVAL`, `ENOSPC` |
 | 29 | `statfs(path, path_len, out)` | пишет `FsStat`: размер блока, блоки, свободные блоки, inode, тип ФС, только чтение | `ENOENT`, `EFAULT` |
+| 32 | `getcwd(buf, len)` | пишет рабочий каталог (без NUL), возвращает длину | `EINVAL` (мал буфер), `EFAULT` |
+| 33 | `getuid()` | `uid | gid << 32` | — |
+| 34 | `proclist(buf, len)` | записи `ProcEntry` (72 байта): pid, родитель, uid, состояние, потоки, память, имя | `EFAULT` |
+| 35 | `chmod(path, path_len, mode)` | права файла; владелец или root | `EPERM`, `EROFS`, `ENOENT` |
+| 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
+| 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
+| 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
 ### Файлы
 
-- Пути абсолютные. Относительный путь пока считается от `/` (рабочий
-  каталог и `chdir` появятся на этапе 8). `.` и `..` разбираются без
-  обращения к диску; символических ссылок нет.
+- Относительный путь отсчитывается от рабочего каталога процесса
+  (`chdir`, `getcwd`); так же ищется программа в `spawn`. `.` и `..`
+  разбираются без обращения к диску; символических ссылок нет.
 - Флаги `open`: режим доступа READ 0, WRITE 1, READ_WRITE 2; CREATE 0o100,
   EXCLUSIVE 0o200, TRUNCATE 0o1000, APPEND 0o2000, DIRECTORY 0o200000
   (значения как в Linux).
 - Права проверяются при открытии и при изменении каталогов: нужен поиск
   (`x`) во всех каталогах пути и запись (`w`) в каталоге, который меняется.
   root (uid 0) может читать и писать всё, а запускать — только файлы с
-  хотя бы одним битом `x`. Пока все процессы работают от root; `setuid`
-  появится на этапе 8.
-- Каждый процесс начинает с дескрипторами 0, 1 и 2 на консоли. При
-  завершении процесса все его файлы закрываются.
+  хотя бы одним битом `x`. Новый процесс получает пользователя, группу и
+  рабочий каталог родителя.
+- Новый процесс получает только дескрипторы 0, 1 и 2 родителя (на них
+  shell подставляет каналы и файлы перенаправлений); остальные не
+  наследуются. При завершении процесса все его файлы закрываются.
+
+### Консоль (терминал)
+
+- Строчный режим (по умолчанию): эхо, Backspace, строка отдаётся по Enter.
+  Ctrl+D в пустой строке — конец ввода (`read` возвращает 0).
+- `NO_ECHO`: без эха (ввод пароля).
+- `RAW`: клавиши отдаются сразу, без эха; стрелки, Home, End, Delete —
+  последовательности ANSI (`ESC [ A` и т. д.), Backspace — 0x7f. Так vsh
+  сам редактирует строку.
+- Ctrl+C в строчном режиме при заданном процессе переднего плана
+  завершает его со статусом 130 сразу, даже если он не читает клавиатуру.
 - Программы запускаются с любой файловой системы; нужен бит `x`
   (иначе `EACCES`).
 
@@ -111,20 +137,13 @@ ESPIPE 29, EROFS 30, ENAMETOOLONG 36, ENOSYS 38, ENOTEMPTY 39, EUCLEAN 117`
 
 | № | Вызов | Этап |
 |---|---|---|
-| 17 | `pipe(fds)` | 8 |
-| 18 | `dup2(old, new)` | 8 |
-| 19 | `chdir(path)` | 8 |
-| 20 | `kill(pid, sig)` | 8 |
-| 22 | `sysinfo(buf)` | 8 |
-| 23 | `reboot(cmd)` | 8 |
-| 24 | `setuid(uid)` / `getuid()` | 8 |
 | 30 | `mount` / `umount` (для установщика) | 9 |
 
 Изменения фиксируются здесь и в [decisions.md](decisions.md).
 
 ## English
 
-Status: the calls in the "Implemented" table work (stages 4–7). Numbers and
+Status: the calls in the "Implemented" table work (stages 4–8). Numbers and
 error codes are defined in the `velora-abi` crate (`kernel/abi`), shared by
 the kernel and the future vlibc.
 
@@ -169,8 +188,23 @@ the kernel and the future vlibc.
 | 28 | `ftruncate(fd, size)` | changes the file size; a new part reads as zeros | `EBADF`, `EISDIR`, `EINVAL`, `ENOSPC` |
 | 29 | `statfs(path, path_len, out)` | writes `FsStat`: block size, blocks, free blocks, inodes, file system type, read-only | `ENOENT`, `EFAULT` |
 
-Files: paths are absolute; a relative path is taken from `/` until working
-directories arrive in stage 8. `.` and `..` are resolved without touching the
+Stage 8 added: 17 `pipe(fds)` (64 KiB buffer; writes two `u64`, read end
+first), 18 `dup2(old, new)`, 19 `chdir(path, len)`, 20 `kill(pid, status)`
+(root any process, others only their own), 22 `sysinfo(out)` (112-byte
+`SysInfo`), 23 `reboot(cmd)` (root only: 0 restart, 1 power off via ACPI S5;
+file system data is synced first), 24 `setuid(uid, gid)` (root only, one
+way), 32 `getcwd(buf, len)`, 33 `getuid()` (`uid | gid << 32`), 34
+`proclist(buf, len)` (72-byte `ProcEntry` records), 35 `chmod`, 36 `chown`
+(root only), 37 `dup(fd)`, 38 `tty(op, arg)` (0 mode: `RAW` 1, `NO_ECHO` 2;
+1 the process Ctrl+C ends; 2 size `cols << 32 | rows`). The console has a
+line mode (echo, Backspace, Enter delivers the line, Ctrl+D on an empty line
+is the end of input), `NO_ECHO` for passwords, and a raw mode where keys
+arrive at once and special keys as ANSI sequences (Backspace as 0x7f). In
+line mode Ctrl+C ends the foreground process with status 130 even if it does
+not read the keyboard. A new process gets only descriptors 0–2 of its parent,
+plus its user, group and working directory.
+
+Files: a relative path starts at the working directory (also for `spawn`). `.` and `..` are resolved without touching the
 disk; there are no symbolic links. `open` flags: access mode READ 0, WRITE 1,
 READ_WRITE 2; CREATE 0o100, EXCLUSIVE 0o200, TRUNCATE 0o1000, APPEND 0o2000,
 DIRECTORY 0o200000 (Linux values). Permissions are checked on open and on

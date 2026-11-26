@@ -167,6 +167,24 @@
   Дескрипторы 0–2 открыты на консоли. Программы загружаются через VFS с
   проверкой бита `x`.
 
+### Пользовательское окружение (этап 8)
+
+- После загрузки ядро запускает `/bin/login` и перезапускает его после
+  каждого сеанса. `login` проверяет пароль по `/etc/passwd` и
+  `/etc/shadow` (хеши PBKDF2-HMAC-SHA-256, `libc/auth`), создаёт домашний
+  каталог, вызывает `setuid` и запускает оболочку.
+- Терминал консоли (`kernel/src/tty.rs`): строчный режим с эхом, режим без
+  эха для паролей и «сырой» режим для vsh. Ctrl+C обрабатывает отдельный
+  поток ядра (решение D29).
+- Каналы (`fs/pipe.rs`), `dup`/`dup2`, рабочий каталог. `spawn` передаёт
+  потомку только дескрипторы 0–2 (решение D31); fork нет.
+- vsh (`userland/vsh`): разбор языка и редактор строки — в `libc/shell`
+  с тестами на хосте. Команды — `userland/coreutils` (по программе на
+  команду, общий код в библиотеке crate).
+- Выключение и перезагрузка — `kernel/src/power.rs` (ACPI S5 по данным из
+  DSDT, регистр сброса ACPI, порт 0xCF9, контроллер клавиатуры).
+- В Live-режиме `/home` и `/root` — файловые системы в памяти (D32).
+
 ## English
 
 ### Overview
@@ -290,3 +308,20 @@ at boot is mounted at `/mnt/<disk>`. The VFS is behind one lock with interrupts
 off and each operation runs to completion (decision D25). Every process has a
 descriptor table (up to 64) and credentials (uid, gid); descriptors 0–2 start
 on the console. Programs are loaded through the VFS and need an `x` bit.
+
+### User environment (stage 8)
+
+After boot the kernel starts `/bin/login` and starts it again after every
+session. `login` checks the password against `/etc/passwd` and `/etc/shadow`
+(PBKDF2-HMAC-SHA-256 hashes, `libc/auth`), creates the home directory, calls
+`setuid` and starts the shell. The console terminal (`kernel/src/tty.rs`) has
+a line mode with echo, a no-echo mode for passwords and a raw mode for vsh;
+Ctrl+C is handled by a kernel thread (decision D29). There are pipes
+(`fs/pipe.rs`), `dup`/`dup2` and a working directory; `spawn` passes only
+descriptors 0–2 to the child (decision D31), there is no fork. vsh
+(`userland/vsh`) keeps its parser and line editor in `libc/shell`, tested on
+the host; the commands are in `userland/coreutils` (one program per command,
+shared code in the crate's library). Power off and restart are in
+`kernel/src/power.rs` (ACPI S5 from the DSDT, the ACPI reset register, port
+0xCF9, the keyboard controller). In the Live system `/home` and `/root` are
+file systems in memory (D32).
