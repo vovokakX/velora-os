@@ -1,11 +1,12 @@
 //! mkinitrd: builds the initramfs archive.
 //!
 //! ```text
-//! mkinitrd --out initramfs.tar --file DEST=SRC[:MODE] ...
+//! mkinitrd --out initramfs.tar --file DEST=SRC[:MODE] ... --dir DEST[:MODE] ...
 //! ```
 //!
 //! Parent directories of every DEST are added automatically. MODE is octal
-//! (default 644; use 755 for programs).
+//! (default 644 for files, 755 for directories; use 755 for programs).
+//! `--dir` adds an empty directory (mount points such as /mnt).
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
@@ -14,6 +15,7 @@ use velora_tar::Builder;
 fn run() -> Result<(), String> {
     let mut out = None;
     let mut files: Vec<(String, String, u32)> = Vec::new();
+    let mut extra_dirs: Vec<(String, u32)> = Vec::new();
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -35,8 +37,21 @@ fn run() -> Result<(), String> {
                 };
                 files.push((dest.trim_start_matches('/').to_string(), src, mode));
             }
+            "--dir" => {
+                let v = it.next().ok_or("--dir needs DEST[:MODE]")?;
+                let (dest, mode) = match v.rsplit_once(':') {
+                    Some((d, m)) => (
+                        d.to_string(),
+                        u32::from_str_radix(m, 8).map_err(|_| format!("bad mode in '{v}'"))?,
+                    ),
+                    None => (v.clone(), 0o755),
+                };
+                extra_dirs.push((dest.trim_matches('/').to_string(), mode));
+            }
             "-h" | "--help" => {
-                println!("usage: mkinitrd --out FILE --file DEST=SRC[:MODE] ...");
+                println!(
+                    "usage: mkinitrd --out FILE --file DEST=SRC[:MODE] ... --dir DEST[:MODE] ..."
+                );
                 return Ok(());
             }
             other => return Err(format!("unknown argument '{other}'")),
@@ -57,7 +72,14 @@ fn run() -> Result<(), String> {
     }
     let mut b = Builder::new();
     for d in &dirs {
-        b.add_dir(d, 0o755).map_err(|e| format!("{d}: {e:?}"))?;
+        let mode = extra_dirs
+            .iter()
+            .find(|(x, _)| x == d)
+            .map_or(0o755, |(_, m)| *m);
+        b.add_dir(d, mode).map_err(|e| format!("{d}: {e:?}"))?;
+    }
+    for (d, mode) in extra_dirs.iter().filter(|(d, _)| !dirs.contains(d)) {
+        b.add_dir(d, *mode).map_err(|e| format!("{d}: {e:?}"))?;
     }
     for (dest, src, mode) in &files {
         let data = std::fs::read(src).map_err(|e| format!("cannot read {src}: {e}"))?;

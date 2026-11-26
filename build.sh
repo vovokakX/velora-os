@@ -69,7 +69,7 @@ cargo run -q -p mkinitrd --release -- \
     --out "$INITRD" \
     --file "bin/hello=$UBIN/hello:755" \
     --file "bin/vtest=$UBIN/vtest:755" \
-    --file "etc/motd=userland/rootfs/etc/motd:644"
+    --file "etc/motd=userland/rootfs/etc/motd:644"     --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home"
 
 # 4. Bootloader config.
 CONF="$BUILD/limine-$MODE.conf"
