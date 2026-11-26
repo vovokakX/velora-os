@@ -1,0 +1,11 @@
+[package]
+name = "mkpasswd"
+description = "Writes /etc/shadow with PBKDF2 hashes for the initramfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-auth = { path = "../../libc/auth" }
