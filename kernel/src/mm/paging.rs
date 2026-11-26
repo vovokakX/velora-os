@@ -458,6 +458,63 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Removes the mapping of one user page and frees its frame (unless
+    /// it is borrowed). Returns false if nothing was mapped there.
+    pub fn unmap(&self, virt: u64) -> bool {
+        assert!(virt < USER_HALF_END, "user unmap in the kernel half");
+        let _guard = LOCK.lock();
+        let [i4, i3, i2, i1] = indices(virt);
+        let e4 = table(self.pml4)[i4];
+        if e4 & PRESENT == 0 {
+            return false;
+        }
+        let e3 = table(e4 & ADDR_MASK)[i3];
+        if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+            return false;
+        }
+        let e2 = table(e3 & ADDR_MASK)[i2];
+        if e2 & PRESENT == 0 || e2 & HUGE != 0 {
+            return false;
+        }
+        let e = &mut table(e2 & ADDR_MASK)[i1];
+        if *e & PRESENT == 0 {
+            return false;
+        }
+        let leaf = *e;
+        *e = 0;
+        if cpu::read_cr3() & ADDR_MASK == self.pml4 {
+            cpu::invlpg(virt);
+        }
+        if leaf & BORROWED == 0 {
+            frame::free(leaf & ADDR_MASK);
+        }
+        true
+    }
+
+    /// Copies `data` into this address space at `virt` through the HHDM.
+    /// The pages must already be mapped. Works whether or not the address
+    /// space is active.
+    pub fn write_bytes(&self, virt: u64, data: &[u8]) -> Result<(), MapError> {
+        let mut done = 0usize;
+        while done < data.len() {
+            let va = virt + done as u64;
+            let (phys, _) = self.translate(va).ok_or(MapError::AlreadyMapped)?;
+            let in_page = (PAGE_SIZE - (va & (PAGE_SIZE - 1))) as usize;
+            let n = in_page.min(data.len() - done);
+            // SAFETY: `phys` is a frame of this address space, mapped in
+            // the HHDM; the copy stays inside that page.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    data[done..].as_ptr(),
+                    super::phys_to_virt(phys) as *mut u8,
+                    n,
+                )
+            };
+            done += n;
+        }
+        Ok(())
+    }
+
     /// Physical address and flags for a user address.
     pub fn translate(&self, virt: u64) -> Option<(u64, u64)> {
         let _guard = LOCK.lock();
