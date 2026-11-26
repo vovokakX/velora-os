@@ -26,6 +26,9 @@ static READERS: WaitQueue = WaitQueue::new();
 
 /// Adds an event. When the queue is full the event is dropped and counted.
 pub fn push(ev: KeyEvent) {
+    if crate::tty::intercept(&ev) {
+        return;
+    }
     let mut q = QUEUE.lock();
     if q.len == CAPACITY {
         DROPPED.fetch_add(1, Ordering::Relaxed);

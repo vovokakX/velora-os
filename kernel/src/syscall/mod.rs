@@ -3,6 +3,7 @@
 
 mod files;
 mod native;
+mod process;
 
 use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::sched::{self, Personality};

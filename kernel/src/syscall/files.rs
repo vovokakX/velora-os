@@ -1,7 +1,6 @@
 //! File system calls: descriptors, paths and directory listings.
 //!
-//! Paths must be absolute for now; a relative path is taken from `/`
-//! (working directories arrive with `chdir` in stage 8).
+//! Relative paths start at the process's working directory (`chdir`).
 
 use super::uaccess;
 use crate::fs::{self, FileRef, Handle, OpenFile};
@@ -26,8 +25,9 @@ fn as_bytes<T: Copy>(v: &T) -> &[u8] {
     unsafe { core::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) }
 }
 
-/// Copies a path from user memory. Relative paths start at `/`.
-fn user_path(ptr: u64, len: u64) -> Result<String, i64> {
+/// Copies a path from user memory. Relative paths start at the working
+/// directory.
+pub fn user_path(ptr: u64, len: u64) -> Result<String, i64> {
     if len == 0 {
         return Err(-errno::ENOENT);
     }
@@ -39,7 +39,7 @@ fn user_path(ptr: u64, len: u64) -> Result<String, i64> {
     Ok(if s.starts_with('/') {
         String::from(s)
     } else {
-        path::join("/", s)
+        path::join(&sched::current_cwd(), s)
     })
 }
 
@@ -50,8 +50,172 @@ fn file(fd: u64) -> Result<FileRef, i64> {
 fn node_of(f: &OpenFile) -> Result<(Node, Kind), i64> {
     match &f.handle {
         Handle::File { node, kind, .. } => Ok((*node, *kind)),
-        Handle::Console => Err(-errno::ESPIPE),
+        Handle::Console | Handle::Pipe { .. } => Err(-errno::ESPIPE),
     }
+}
+
+/// Reads from a pipe end without holding the open file's lock while
+/// waiting.
+pub fn read_pipe(f: &FileRef, buf: u64, len: u64) -> i64 {
+    let pipe = {
+        let of = f.lock();
+        match &of.handle {
+            Handle::Pipe { pipe, write: false } => pipe.clone(),
+            _ => return -errno::EBADF,
+        }
+    };
+    let data = pipe.read(len.min(MAX_IO) as usize);
+    if !uaccess::write(buf, &data) {
+        return -errno::EFAULT;
+    }
+    data.len() as i64
+}
+
+pub fn write_pipe(f: &FileRef, buf: u64, len: u64) -> i64 {
+    let pipe = {
+        let of = f.lock();
+        match &of.handle {
+            Handle::Pipe { pipe, write: true } => pipe.clone(),
+            _ => return -errno::EBADF,
+        }
+    };
+    let Some(data) = uaccess::read_slice(buf, len.min(MAX_IO)) else {
+        return -errno::EFAULT;
+    };
+    match pipe.write(data) {
+        Ok(n) => n as i64,
+        Err(_) => -errno::EPIPE,
+    }
+}
+
+pub fn pipe(out: u64) -> i64 {
+    if !uaccess::write(out, &[0u8; 16]) {
+        return -errno::EFAULT;
+    }
+    let (r, w) = fs::new_pipe();
+    let Some(rfd) = sched::fd_install(Arc::new(SpinLock::new(r))) else {
+        return -errno::EMFILE;
+    };
+    let Some(wfd) = sched::fd_install(Arc::new(SpinLock::new(w))) else {
+        drop(sched::fd_remove(rfd));
+        return -errno::EMFILE;
+    };
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&rfd.to_le_bytes());
+    bytes[8..].copy_from_slice(&wfd.to_le_bytes());
+    if uaccess::write(out, &bytes) {
+        0
+    } else {
+        -errno::EFAULT
+    }
+}
+
+pub fn dup(fd: u64) -> i64 {
+    let f = match file(fd) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    match sched::fd_install(f) {
+        Some(n) => n as i64,
+        None => -errno::EMFILE,
+    }
+}
+
+pub fn dup2(old: u64, new: u64) -> i64 {
+    let f = match file(old) {
+        Ok(f) => f,
+        Err(e) => return e,
+    };
+    if old == new {
+        return new as i64;
+    }
+    match sched::fd_set(new, f) {
+        Some(previous) => {
+            drop(previous);
+            new as i64
+        }
+        None => -errno::EBADF,
+    }
+}
+
+pub fn chdir(ptr: u64, len: u64) -> i64 {
+    let p = match user_path(ptr, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let Ok(norm) = path::normalize(&p) else {
+        return -errno::EINVAL;
+    };
+    let cred = sched::current_cred();
+    let r = fs::with(|v| {
+        let n = v.resolve(&norm, &cred)?;
+        let st = v.stat(n)?;
+        if st.kind != Kind::Dir {
+            return Err(FsError::NotDir);
+        }
+        if !velora_vfs::may_access(&st, &cred, velora_vfs::access::EXEC) {
+            return Err(FsError::Access);
+        }
+        Ok(())
+    });
+    match r {
+        Ok(()) => {
+            sched::set_cwd(norm);
+            0
+        }
+        Err(e) => err(e),
+    }
+}
+
+pub fn getcwd(buf: u64, len: u64) -> i64 {
+    let cwd = sched::current_cwd();
+    if (len as usize) < cwd.len() {
+        return -errno::EINVAL;
+    }
+    if uaccess::write(buf, cwd.as_bytes()) {
+        cwd.len() as i64
+    } else {
+        -errno::EFAULT
+    }
+}
+
+fn set_attr(ptr: u64, len: u64, attr: velora_vfs::SetAttr) -> i64 {
+    let p = match user_path(ptr, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let cred = sched::current_cred();
+    let now = fs::now();
+    match fs::with(|v| v.setattr(&p, attr, &cred, now)) {
+        Ok(()) => 0,
+        Err(e) => err(e),
+    }
+}
+
+pub fn chmod(ptr: u64, len: u64, mode: u64) -> i64 {
+    set_attr(
+        ptr,
+        len,
+        velora_vfs::SetAttr {
+            mode: Some(mode as u32 & 0o7777),
+            ..Default::default()
+        },
+    )
+}
+
+pub fn chown(ptr: u64, len: u64, uid: u64, gid: u64) -> i64 {
+    if sched::current_cred().uid != 0 {
+        return -errno::EPERM;
+    }
+    set_attr(
+        ptr,
+        len,
+        velora_vfs::SetAttr {
+            uid: Some(uid as u32),
+            gid: Some(gid as u32),
+            mode: None,
+        },
+    )
 }
 
 pub fn open(ptr: u64, len: u64, flags: u64, mode: u64) -> i64 {
@@ -210,6 +374,11 @@ pub fn fstat(fd: u64, out: u64) -> i64 {
     let of = f.lock();
     let st = match &of.handle {
         Handle::Console => console_stat(),
+        Handle::Pipe { .. } => Stat {
+            mode: velora_abi::mode::FIFO | 0o600,
+            nlink: 1,
+            ..Default::default()
+        },
         Handle::File { node, .. } => match fs::with(|v| v.stat(*node)) {
             Ok(st) => abi_stat(*node, &st),
             Err(e) => return err(e),
@@ -240,8 +409,7 @@ pub fn readdir(fd: u64, buf: u64, len: u64) -> i64 {
             kind: Kind::Dir,
             path,
         } => (*node, path.clone()),
-        Handle::File { .. } => return -errno::ENOTDIR,
-        Handle::Console => return -errno::ENOTDIR,
+        _ => return -errno::ENOTDIR,
     };
     let cap = len.min(64 * 1024) as usize;
     let mut out = vec![0u8; cap];

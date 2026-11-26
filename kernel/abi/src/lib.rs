@@ -38,7 +38,21 @@ pub mod nr {
     pub const UNLINK: u64 = 15;
     /// rename(old, old_len, new, new_len) -> 0
     pub const RENAME: u64 = 16;
+    /// pipe(fds: *mut [u64; 2]) -> 0; fds[0] reads, fds[1] writes
+    pub const PIPE: u64 = 17;
+    /// dup2(old, new) -> new
+    pub const DUP2: u64 = 18;
+    /// chdir(path, path_len) -> 0
+    pub const CHDIR: u64 = 19;
+    /// kill(pid, status) -> 0: ends the process with `status`
+    pub const KILL: u64 = 20;
     pub const CLOCK_GETTIME: u64 = 21;
+    /// sysinfo(out: *mut SysInfo) -> 0
+    pub const SYSINFO: u64 = 22;
+    /// reboot(cmd) (root only): `reboot::RESTART` or `reboot::POWER_OFF`
+    pub const REBOOT: u64 = 23;
+    /// setuid(uid, gid) -> 0 (root only): sets user and group
+    pub const SETUID: u64 = 24;
     pub const SLEEP_MS: u64 = 25;
     /// fstat(fd, out: *mut Stat) -> 0
     pub const FSTAT: u64 = 26;
@@ -48,6 +62,21 @@ pub mod nr {
     pub const FTRUNCATE: u64 = 28;
     /// statfs(path, path_len, out: *mut FsStat) -> 0
     pub const STATFS: u64 = 29;
+    // 30, 31: mount and umount (stage 9).
+    /// getcwd(buf, len) -> length of the path (no NUL)
+    pub const GETCWD: u64 = 32;
+    /// getuid() -> uid | gid << 32
+    pub const GETUID: u64 = 33;
+    /// proclist(buf, len) -> bytes written (`ProcEntry` records)
+    pub const PROCLIST: u64 = 34;
+    /// chmod(path, path_len, mode) -> 0
+    pub const CHMOD: u64 = 35;
+    /// chown(path, path_len, uid, gid) -> 0 (root only)
+    pub const CHOWN: u64 = 36;
+    /// dup(fd) -> new fd (lowest free)
+    pub const DUP: u64 = 37;
+    /// tty(op, arg): console terminal control, see [`super::tty`]
+    pub const TTY: u64 = 38;
 }
 
 /// Error numbers (returned negated).
@@ -78,6 +107,7 @@ pub mod errno {
     pub const EROFS: i64 = 30;
     pub const ENAMETOOLONG: i64 = 36;
     pub const ENOSYS: i64 = 38;
+    pub const EPIPE: i64 = 32;
     pub const ENOTEMPTY: i64 = 39;
     /// The file system found inconsistent metadata (Linux: EUCLEAN).
     pub const EUCLEAN: i64 = 117;
@@ -115,6 +145,7 @@ pub mod mode {
     pub const FILE: u32 = 0o100000;
     pub const CHAR_DEVICE: u32 = 0o020000;
     pub const BLOCK_DEVICE: u32 = 0o060000;
+    pub const FIFO: u32 = 0o010000;
     /// Permission bits (rwx for owner, group, others) plus setuid/setgid/sticky.
     pub const PERM_MASK: u32 = 0o7777;
 }
@@ -164,6 +195,77 @@ pub struct DirentHeader {
     /// File type bits (`mode::DIR`, `mode::FILE`, ...) shifted right by 12.
     pub kind: u8,
     pub _pad: [u8; 3],
+}
+
+/// `reboot` commands.
+pub mod reboot {
+    pub const RESTART: u64 = 0;
+    pub const POWER_OFF: u64 = 1;
+}
+
+/// `tty` operations on the console.
+pub mod tty {
+    /// Set the mode bits (`RAW`, `NO_ECHO`); returns the old ones.
+    pub const SET_MODE: u64 = 0;
+    /// The process that Ctrl+C ends in line mode (0 = none).
+    pub const SET_FOREGROUND: u64 = 1;
+    /// Returns columns << 32 | rows.
+    pub const SIZE: u64 = 2;
+    /// Mode bit: deliver every key at once, without echo or line editing.
+    /// Special keys arrive as ANSI sequences (arrows `ESC [ A`..`D`, Home
+    /// `ESC [ H`, End `ESC [ F`, Delete `ESC [ 3 ~`), Backspace as 0x7f.
+    pub const RAW: u64 = 1;
+    /// Mode bit (line mode): do not echo typed characters (passwords).
+    pub const NO_ECHO: u64 = 2;
+}
+
+/// System information written by `sysinfo`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SysInfo {
+    pub uptime_ns: u64,
+    /// Memory managed by the kernel and in use, in bytes.
+    pub mem_total: u64,
+    pub mem_used: u64,
+    pub processes: u64,
+    /// Milliseconds from kernel start to the end of boot.
+    pub boot_ms: u64,
+    pub cpus: u64,
+    /// NUL-padded ASCII.
+    pub version: [u8; 16],
+    pub cpu: [u8; 48],
+}
+
+impl Default for SysInfo {
+    fn default() -> Self {
+        Self {
+            uptime_ns: 0,
+            mem_total: 0,
+            mem_used: 0,
+            processes: 0,
+            boot_ms: 0,
+            cpus: 0,
+            version: [0; 16],
+            cpu: [0; 48],
+        }
+    }
+}
+
+/// One process in the `proclist` output.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcEntry {
+    pub pid: u64,
+    pub parent: u64,
+    pub uid: u32,
+    /// 0 = running, 1 = exited (not yet collected).
+    pub state: u32,
+    pub threads: u32,
+    pub _pad: u32,
+    /// User memory in bytes.
+    pub memory: u64,
+    /// NUL-padded program name.
+    pub name: [u8; 32],
 }
 
 /// Most file descriptors one process can have open.
@@ -254,6 +356,8 @@ mod tests {
         assert_eq!(core::mem::size_of::<Stat>(), 64);
         assert_eq!(core::mem::size_of::<DirentHeader>(), 16);
         assert_eq!(core::mem::size_of::<FsStat>(), 64);
+        assert_eq!(core::mem::size_of::<SysInfo>(), 112);
+        assert_eq!(core::mem::size_of::<ProcEntry>(), 72);
     }
 
     #[test]
@@ -282,6 +386,20 @@ mod tests {
             nr::SYNC,
             nr::FTRUNCATE,
             nr::STATFS,
+            nr::PIPE,
+            nr::DUP2,
+            nr::CHDIR,
+            nr::KILL,
+            nr::SYSINFO,
+            nr::REBOOT,
+            nr::SETUID,
+            nr::GETCWD,
+            nr::GETUID,
+            nr::PROCLIST,
+            nr::CHMOD,
+            nr::CHOWN,
+            nr::DUP,
+            nr::TTY,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "duplicate syscall number {a}");

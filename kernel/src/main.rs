@@ -16,16 +16,16 @@ mod exec;
 mod fs;
 mod initramfs;
 mod input;
-#[cfg(not(feature = "ktest"))]
-mod kbdtest;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod mm;
 mod panic;
+mod power;
 mod sched;
 mod sync;
 mod syscall;
 mod time;
+mod tty;
 #[cfg(feature = "ktest")]
 mod userprog;
 
@@ -109,6 +109,7 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
         Err(e) => kwarn!("initramfs: {}", e),
     }
     drivers::init();
+    tty::init();
     fs::init();
     fs::automount();
     arch::cpu::enable_interrupts();
@@ -122,27 +123,29 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
 
     #[cfg(not(feature = "ktest"))]
     {
-        run_first_user_program();
+        time::mark_boot_done();
         kok!("boot complete in {} ms", time::uptime_ms());
-        kbdtest::run()
+        run_sessions()
     }
 }
 
-/// Runs /bin/hello from the initramfs to show that programs load from
-/// files and run in user mode.
+/// Starts `/bin/login` on the console, again each time a session ends.
 #[cfg(not(feature = "ktest"))]
-fn run_first_user_program() {
-    let argv = ["/bin/hello", "from", "initramfs"];
-    let envp = ["PATH=/bin", "HOME=/"];
-    match exec::spawn("/bin/hello", &argv, &envp) {
-        Ok(pid) => match sched::wait_pid(pid) {
-            Some(0) => kok!(
-                "user mode works: /bin/hello (pid {}) exited with status 0",
-                pid
-            ),
-            other => kwarn!("/bin/hello (pid {}) ended with {:?}", pid, other),
-        },
-        Err(e) => kwarn!("cannot start /bin/hello: {:?}", e),
+fn run_sessions() -> ! {
+    loop {
+        tty::reset();
+        match exec::spawn("/bin/login", &["/bin/login"], &["PATH=/bin"]) {
+            Ok(pid) => {
+                sched::wait_pid(pid);
+            }
+            Err(e) => {
+                kwarn!("cannot start /bin/login: {:?}", e);
+                kprintln!("No login program; the system is idle.");
+                loop {
+                    sched::sleep_ms(60_000);
+                }
+            }
+        }
     }
 }
 

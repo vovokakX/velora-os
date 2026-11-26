@@ -81,3 +81,23 @@ macro_rules! eprintln {
     () => { $crate::eprint!("\n") };
     ($($arg:tt)*) => { $crate::io::_eprint(format_args!("{}\n", format_args!($($arg)*))) };
 }
+
+/// Creates a pipe: (read end, write end).
+pub fn pipe() -> Result<(u64, u64), Errno> {
+    let mut fds = [0u64; 2];
+    // SAFETY: `fds` is writable and 16 bytes long.
+    check(unsafe { crate::sys::syscall1(nr::PIPE, fds.as_mut_ptr() as u64) })?;
+    Ok((fds[0], fds[1]))
+}
+
+/// A new descriptor for the same open file (lowest free number).
+pub fn dup(fd: u64) -> Result<u64, Errno> {
+    // SAFETY: no pointers.
+    check(unsafe { crate::sys::syscall1(nr::DUP, fd) })
+}
+
+/// Makes `new` refer to the same open file as `old` (closing `new` first).
+pub fn dup2(old: u64, new: u64) -> Result<u64, Errno> {
+    // SAFETY: no pointers.
+    check(unsafe { crate::sys::syscall2(nr::DUP2, old, new) })
+}

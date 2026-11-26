@@ -83,6 +83,15 @@ pub fn init() -> Result<&'static Acpi, &'static str> {
     Ok(get())
 }
 
+/// The DSDT as bytes, if the FADT points to a valid one.
+pub fn dsdt() -> Option<&'static [u8]> {
+    let a = get();
+    if a.fadt.dsdt == 0 {
+        return None;
+    }
+    table_at(a.fadt.dsdt).ok().map(|(b, _)| b)
+}
+
 pub fn get() -> &'static Acpi {
     assert!(READY.load(Ordering::SeqCst), "ACPI used before init");
     // SAFETY: read-only after init.

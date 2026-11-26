@@ -368,6 +368,56 @@ pub struct Fadt {
     pub century_register: u8,
     /// IA-PC boot architecture flags (bit 1: 8042 present).
     pub iapc_boot_flags: u16,
+    /// Physical address of the DSDT (X_DSDT when present), 0 if none.
+    pub dsdt: u64,
+    /// PM1a/PM1b control register I/O ports (0 = absent).
+    pub pm1a_cnt: u32,
+    pub pm1b_cnt: u32,
+    /// Fixed feature flags (bit 10: reset register supported).
+    pub flags: u32,
+    /// Reset register (generic address) and the value to write.
+    pub reset_space: u8,
+    pub reset_address: u64,
+    pub reset_value: u8,
+}
+
+impl Fadt {
+    pub const RESET_REG_SUPPORTED: u32 = 1 << 10;
+}
+
+/// Sleep type values of the \_S5 (soft off) state, found in the DSDT
+/// without an AML interpreter: the usual `Name (_S5, Package {a, b, ...})`
+/// encoding is decoded directly. Returns (SLP_TYPa, SLP_TYPb).
+pub fn find_s5(dsdt: &[u8]) -> Option<(u8, u8)> {
+    let pos = dsdt.windows(4).position(|w| w == b"_S5_")?;
+    let mut i = pos + 4;
+    // Optional NameOp (0x08) before the name is already behind us; the
+    // package follows: PackageOp, PkgLength, NumElements.
+    if *dsdt.get(i)? != 0x12 {
+        return None;
+    }
+    i += 1;
+    let lead = *dsdt.get(i)?;
+    i += 1 + (lead >> 6) as usize; // PkgLength: 1 + extra bytes
+    i += 1; // NumElements
+    let value = |i: &mut usize| -> Option<u8> {
+        let b = *dsdt.get(*i)?;
+        *i += 1;
+        match b {
+            0x0a => {
+                let v = *dsdt.get(*i)?;
+                *i += 1;
+                Some(v)
+            }
+            0x00 => Some(0),
+            0x01 => Some(1),
+            0xff => Some(0xff),
+            v => Some(v),
+        }
+    };
+    let a = value(&mut i)?;
+    let b = value(&mut i)?;
+    Some((a & 7, b & 7))
 }
 
 pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
@@ -376,9 +426,22 @@ pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
         return Err(Error::BadSignature);
     }
     let len = h.length as usize;
+    let u32_if = |o: usize| if len >= o + 4 { u32_at(table, o) } else { 0 };
+    let x_dsdt = if len >= 148 { u64_at(table, 140) } else { 0 };
     Ok(Fadt {
         century_register: if len > 108 { table[108] } else { 0 },
         iapc_boot_flags: if len > 110 { u16_at(table, 109) } else { 0 },
+        dsdt: if x_dsdt != 0 {
+            x_dsdt
+        } else {
+            u32_if(40) as u64
+        },
+        pm1a_cnt: u32_if(64),
+        pm1b_cnt: u32_if(68),
+        flags: u32_if(112),
+        reset_space: if len > 116 { table[116] } else { 0 },
+        reset_address: if len >= 128 { u64_at(table, 120) } else { 0 },
+        reset_value: if len > 128 { table[128] } else { 0 },
     })
 }
 
@@ -588,5 +651,41 @@ mod tests {
         let f = parse_fadt(&table(b"FACP", &body)).unwrap();
         assert_eq!(f.century_register, 0x32);
         assert_eq!(f.iapc_boot_flags & 2, 2);
+    }
+
+    #[test]
+    fn fadt_power_fields() {
+        let mut body = vec![0u8; 244 - HEADER_LEN];
+        let at = |o: usize| o - HEADER_LEN;
+        body[at(40)..at(44)].copy_from_slice(&0x1234u32.to_le_bytes());
+        body[at(64)..at(68)].copy_from_slice(&0x604u32.to_le_bytes());
+        body[at(112)..at(116)].copy_from_slice(&(1u32 << 10).to_le_bytes());
+        body[at(116)] = 1;
+        body[at(120)..at(128)].copy_from_slice(&0xcf9u64.to_le_bytes());
+        body[at(128)] = 6;
+        let f = parse_fadt(&table(b"FACP", &body)).unwrap();
+        assert_eq!((f.dsdt, f.pm1a_cnt, f.pm1b_cnt), (0x1234, 0x604, 0));
+        assert_eq!(
+            (f.reset_space, f.reset_address, f.reset_value),
+            (1, 0xcf9, 6)
+        );
+        assert!(f.flags & Fadt::RESET_REG_SUPPORTED != 0);
+        body[at(140)..at(148)].copy_from_slice(&0x5678u64.to_le_bytes());
+        assert_eq!(parse_fadt(&table(b"FACP", &body)).unwrap().dsdt, 0x5678);
+    }
+
+    #[test]
+    fn s5_package() {
+        // Name (_S5, Package (4) { 0x05, Zero, Zero, Zero }) as iasl emits it.
+        let aml = [
+            0x10, 0x08, b'_', b'S', b'5', b'_', 0x12, 0x0a, 0x04, 0x0a, 0x05, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(find_s5(&aml), Some((5, 0)));
+        // QEMU: Package { Zero, Zero, ... }
+        let aml = [
+            0x08, b'_', b'S', b'5', b'_', 0x12, 0x06, 0x04, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(find_s5(&aml), Some((0, 0)));
+        assert_eq!(find_s5(b"no sleep state here"), None);
     }
 }

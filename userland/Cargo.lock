@@ -3,31 +3,63 @@
 version = 4
 
 [[package]]
+name = "coreutils"
+version = "0.8.0"
+dependencies = [
+ "velora-auth",
+ "vlibc",
+]
+
+[[package]]
 name = "hello"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "vlibc",
 ]
 
 [[package]]
+name = "login"
+version = "0.8.0"
+dependencies = [
+ "velora-auth",
+ "vlibc",
+]
+
+[[package]]
 name = "velora-abi"
-version = "0.7.0"
+version = "0.8.0"
+
+[[package]]
+name = "velora-auth"
+version = "0.8.0"
 
 [[package]]
 name = "velora-mm"
-version = "0.7.0"
+version = "0.8.0"
+
+[[package]]
+name = "velora-shell"
+version = "0.8.0"
 
 [[package]]
 name = "vlibc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "velora-abi",
  "velora-mm",
 ]
 
 [[package]]
+name = "vsh"
+version = "0.8.0"
+dependencies = [
+ "velora-shell",
+ "vlibc",
+]
+
+[[package]]
 name = "vtest"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "vlibc",
 ]

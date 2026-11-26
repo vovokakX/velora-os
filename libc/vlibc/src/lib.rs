@@ -5,7 +5,9 @@
 //! - console I/O with `print!`/`println!`/`eprintln!`
 //! - files and directories ([`fs`])
 //! - a heap (`alloc` works) on top of `mmap`
-//! - processes: `spawn`, `wait`, `exit`, `getpid`, sleep, time
+//! - processes: `spawn`, `wait`, `exit`, `getpid`, `kill`, users, process
+//!   list, system information, sleep, time
+//! - the console terminal ([`term`])
 //! - optional C API (feature `cabi`, see `include/vlibc.h`)
 //!
 //! Programs are single-threaded for now; the heap is not thread-safe.
@@ -22,6 +24,7 @@ pub mod mem;
 pub mod process;
 mod rt;
 pub mod sys;
+pub mod term;
 pub mod time;
 
 #[cfg(feature = "cabi")]
@@ -38,6 +41,7 @@ impl Errno {
         use velora_abi::errno::*;
         match self.0 {
             EPERM => "EPERM",
+            EPIPE => "EPIPE",
             ENOENT => "ENOENT",
             ESRCH => "ESRCH",
             EINTR => "EINTR",

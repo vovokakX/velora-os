@@ -20,6 +20,7 @@ mod fs;
 mod irq;
 mod mm;
 mod sched;
+mod user;
 
 struct Test {
     name: &'static str,
@@ -120,6 +121,13 @@ static TESTS: &[Test] = tests![
     fs::programs_need_execute_permission,
     fs::velorafs_on_disk,
     fs::fat32_on_disk,
+    // stage 8: shell, commands, users
+    user::pipe_buffer,
+    user::acpi_power_off_data,
+    user::passwords_are_hashed,
+    user::shell_pipelines_and_variables,
+    user::shell_script_and_exit_status,
+    user::commands_work,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);

@@ -14,7 +14,7 @@ bench = false
 
 [features]
 # Build the in-kernel test runner instead of the normal boot path.
-ktest = []
+ktest = ["dep:velora-auth"]
 
 [dependencies]
 velora-mm = { path = "mm" }
@@ -25,6 +25,8 @@ velora-tar = { path = "../fs/tar" }
 velora-vfs = { path = "../fs/vfs" }
 velora-fat = { path = "../fs/fat" }
 velorafs = { path = "../fs/velorafs" }
+# Only the kernel tests read /etc/shadow.
+velora-auth = { path = "../libc/auth", optional = true }
 velora-pci = { path = "../drivers/pci" }
 velora-rtc = { path = "../drivers/rtc" }
 velora-input = { path = "../drivers/input" }

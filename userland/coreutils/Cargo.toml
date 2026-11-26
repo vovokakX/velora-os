@@ -1,0 +1,17 @@
+[package]
+name = "coreutils"
+description = "Basic commands: ls, cat, cp, mv, rm, mkdir, echo, ps, kill, mem, uptime, date, ..."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "../build-support.rs"
+
+[lib]
+path = "src/lib.rs"
+test = false
+bench = false
+
+[dependencies]
+vlibc = { path = "../../libc/vlibc" }
+velora-auth = { path = "../../libc/auth" }
