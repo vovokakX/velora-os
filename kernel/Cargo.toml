@@ -22,4 +22,6 @@ velora-acpi = { path = "acpi" }
 velora-abi = { path = "abi" }
 velora-exe = { path = "exe" }
 velora-tar = { path = "../fs/tar" }
+velora-pci = { path = "../drivers/pci" }
+velora-rtc = { path = "../drivers/rtc" }
 velora-input = { path = "../drivers/input" }
