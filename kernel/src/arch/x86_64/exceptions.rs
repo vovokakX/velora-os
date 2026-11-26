@@ -124,7 +124,42 @@ pub fn handle(frame: &mut InterruptFrame) {
         return;
     }
 
+    if frame.cs & 3 == 3 {
+        user_fault(frame, cr2);
+    }
+
     fatal(frame, cr2);
+}
+
+/// A user program caused an exception: report it and end the process.
+/// The kernel keeps running.
+fn user_fault(frame: &InterruptFrame, cr2: u64) -> ! {
+    let (mnemonic, name) = name(frame.vector);
+    let pid = crate::sched::current_pid();
+    let pname = crate::sched::current_name();
+    if frame.vector == PAGE_FAULT {
+        crate::kwarn!(
+            "process {} ({}) killed: {} {} at rip {:#x}, address {:#x} ({})",
+            pid,
+            pname,
+            mnemonic,
+            name,
+            frame.rip,
+            cr2,
+            describe_page_fault(frame.error_code)
+        );
+    } else {
+        crate::kwarn!(
+            "process {} ({}) killed: {} {} at rip {:#x}, error code {:#x}",
+            pid,
+            pname,
+            mnemonic,
+            name,
+            frame.rip,
+            frame.error_code
+        );
+    }
+    crate::sched::exit_process(velora_abi::fault_exit_status(frame.vector as u8))
 }
 
 fn fatal(frame: &InterruptFrame, cr2: u64) -> ! {
