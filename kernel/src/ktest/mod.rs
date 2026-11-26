@@ -14,6 +14,7 @@ use core::arch::asm;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+mod exec;
 mod irq;
 mod mm;
 mod sched;
@@ -91,6 +92,15 @@ static TESTS: &[Test] = tests![
     sched::user_clock_gettime,
     sched::processes_do_not_leak_memory,
     sched::wait_for_unknown_process,
+    // stage 5: programs from files
+    exec::initramfs_has_programs,
+    exec::elf_program_runs,
+    exec::user_space_test_suite,
+    exec::missing_and_non_executable_files,
+    exec::pe_files_are_recognised_but_not_run,
+    exec::broken_elf_is_rejected,
+    exec::too_many_arguments_are_refused,
+    exec::programs_do_not_leak_memory,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
