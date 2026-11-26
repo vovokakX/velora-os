@@ -25,6 +25,7 @@ fn main() -> i32 {
     println!("  kill [-s N] PID...    end processes");
     println!("  mem, uptime, date     memory, time since boot, date (UTC)");
     println!("  whoami                current user");
+    println!("  dmesg                 kernel messages since boot");
     println!("  velofetch             system summary");
     println!("  reboot, shutdown      restart / power off (root)");
     println!();
