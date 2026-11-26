@@ -1,0 +1,8 @@
+[package]
+name = "velora-tar"
+description = "ustar archive reader and writer (initramfs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
