@@ -1,0 +1,13 @@
+[package]
+name = "velora-fsck"
+description = "Checks VeloraFS and FAT volumes in disk images on the host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-vfs = { path = "../../fs/vfs" }
+velorafs = { path = "../../fs/velorafs" }
+velora-fat = { path = "../../fs/fat" }
