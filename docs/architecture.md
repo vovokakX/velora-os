@@ -83,6 +83,26 @@
   ожидаемого исключения. Сейчас его используют тесты, позже на нём будет
   построено безопасное копирование из памяти пользователя.
 
+### Прерывания и время (этап 3)
+
+| Вектор | Источник |
+|---|---|
+| 0x00–0x1f | исключения процессора |
+| 0x20 | таймер локального APIC, 100 Гц |
+| 0x21 | клавиатура (ISA IRQ 1 через IOAPIC) |
+| 0x30–0x6f | прерывания устройств (с этапа 6) |
+| 0x70–0x7f | ложные прерывания от замаскированных 8259 (игнорируются) |
+| 0xfe | ошибка APIC |
+| 0xff | ложное прерывание APIC |
+
+- `arch/x86_64/irq.rs`: таблица обработчиков по векторам; EOI отправляется
+  после обработчика, ложные прерывания не подтверждаются.
+- `acpi.rs` находит MADT, `ioapic.rs` направляет GSI на векторы с учётом
+  переназначений.
+- `time.rs`: время с загрузки по TSC, тики, `sleep_ms` (CPU спит в `hlt`).
+- Ввод: драйвер PS/2 → `velora-input` → очередь событий ядра (`input.rs`).
+  Временный потребитель — строка ввода `kbdtest.rs`, на этапе 8 её заменит vsh.
+
 ## English
 
 ### Overview
@@ -141,3 +161,13 @@ Stage 1 only has the first form of `Display`:
   stack overflow.
 - The recovery hook (`arm_recovery`) lets the kernel continue after an expected
   exception. Tests use it now; later it will back safe copies from user memory.
+
+### Interrupts and time (stage 3)
+
+See the vector table in the Russian section. `arch/x86_64/irq.rs` keeps a
+per-vector handler table and sends EOI after the handler (spurious interrupts
+are not acknowledged); `acpi.rs` finds the MADT and `ioapic.rs` routes GSIs
+to vectors honouring overrides; `time.rs` provides TSC-based time since boot,
+ticks and `sleep_ms` (the CPU halts in `hlt`). Input flows from the PS/2
+driver through `velora-input` into the kernel event queue (`input.rs`); the
+temporary consumer is the `kbdtest.rs` line editor, replaced by vsh in stage 8.
