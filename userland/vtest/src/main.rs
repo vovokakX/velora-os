@@ -4,7 +4,8 @@
 //! failures. `vtest files DIR` runs only the file checks inside DIR (used
 //! on disk file systems). The other modes are children started by the
 //! checks: `child-exit N`, `child-args ...`, `child-env`, `child-segv`,
-//! `child-hold PATH`.
+//! `child-hold PATH`, `child-echo TEXT`, `child-fds`, `child-user DIR`,
+//! `child-wait`.
 
 #![no_std]
 #![no_main]
@@ -46,6 +47,24 @@ fn main() -> i32 {
         Some("child-env") => match env::var("VELORA_TEST") {
             Some("yes") => 0,
             _ => 1,
+        },
+        Some("child-echo") => {
+            println!("{}", args.get(2).unwrap_or(""));
+            0
+        }
+        Some("child-fds") => (3..16)
+            .filter(|&fd| {
+                let mut st = fs::Stat::default();
+                // SAFETY: `st` is writable and has the kernel's layout.
+                unsafe {
+                    vlibc::sys::syscall2(vlibc::abi::nr::FSTAT, fd, &mut st as *mut fs::Stat as u64)
+                        == 0
+                }
+            })
+            .count() as i32,
+        Some("child-user") => child_user(args.get(2).unwrap_or("/tmp")),
+        Some("child-wait") => loop {
+            time::sleep_ms(1000);
         },
         Some("child-hold") => {
             // Exits with the file still open: the kernel must close it.
@@ -115,6 +134,16 @@ fn run_all() -> i32 {
     file_checks(&mut r, "/tmp");
     r.check("read-only root and devices", root_and_devices());
     r.check("standard descriptors are the console", std_descriptors());
+    r.check("pipes: data, end of input, EPIPE", pipe_basics());
+    r.check("pipe to a child's standard output", pipe_to_child());
+    r.check("dup and dup2", dup_and_dup2());
+    r.check("working directory and relative paths", working_directory());
+    r.check(
+        "users: setuid, permissions, chmod, chown",
+        users_and_permissions(),
+    );
+    r.check("kill a process", kill_a_process());
+    r.check("process list and system information", system_information());
     println!("vtest: {} passed, {} failed", r.passed, r.failed);
     r.failed as i32
 }
@@ -610,5 +639,228 @@ fn std_descriptors() -> Result<(), String> {
     }
     let console = File::open_with("/dev/console", flags::WRITE, 0).map_err(e)?;
     io::write_all(console.fd(), b"vtest: written through /dev/console\n").map_err(e)?;
+    Ok(())
+}
+
+// --- stage 8: pipes, descriptors, directories, users, processes -----------
+
+fn read_to_end(fd: u64) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 256];
+    loop {
+        let n = io::read(fd, &mut buf).map_err(e)?;
+        if n == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
+}
+
+fn pipe_basics() -> Result<(), String> {
+    let (r, w) = io::pipe().map_err(e)?;
+    io::write_all(w, b"through the pipe").map_err(e)?;
+    fs::close(w).map_err(e)?;
+    ensure!(read_to_end(r)? == b"through the pipe", "pipe content");
+    fs::close(r).map_err(e)?;
+    // Writing when nobody reads fails with EPIPE.
+    let (r, w) = io::pipe().map_err(e)?;
+    fs::close(r).map_err(e)?;
+    expect_err(
+        io::write(w, b"x"),
+        errno::EPIPE,
+        "write to a pipe without readers",
+    )?;
+    fs::close(w).map_err(e)?;
+    // A large write blocks until a reader... here it fits the 64 KiB buffer.
+    let (r, w) = io::pipe().map_err(e)?;
+    let big = pattern(60_000, 3);
+    io::write_all(w, &big).map_err(e)?;
+    fs::close(w).map_err(e)?;
+    ensure!(read_to_end(r)? == big, "60 KB through a pipe");
+    fs::close(r).map_err(e)?;
+    Ok(())
+}
+
+/// Runs `vtest ARGS` with its stdout on a pipe and returns the output.
+fn child_output(args: &[&str]) -> Result<(Vec<u8>, i64), String> {
+    let (r, w) = io::pipe().map_err(e)?;
+    let saved = io::dup(1).map_err(e)?;
+    io::dup2(w, 1).map_err(e)?;
+    let spawned = process::spawn(SELF, args, &[]);
+    io::dup2(saved, 1).map_err(e)?;
+    fs::close(saved).map_err(e)?;
+    fs::close(w).map_err(e)?;
+    let pid = spawned.map_err(e)?;
+    let out = read_to_end(r)?;
+    fs::close(r).map_err(e)?;
+    let status = process::wait(pid).map_err(e)?;
+    Ok((out, status))
+}
+
+fn pipe_to_child() -> Result<(), String> {
+    let (out, status) = child_output(&[SELF, "child-echo", "hello parent"])?;
+    ensure!(status == 0, "child status {}", status);
+    ensure!(
+        out == b"hello parent\n",
+        "child wrote {:?}",
+        String::from_utf8_lossy(&out)
+    );
+    // Only descriptors 0-2 are inherited.
+    let extra = File::open("/etc/motd").map_err(e)?;
+    let (_, status) = child_output(&[SELF, "child-fds"])?;
+    drop(extra);
+    ensure!(status == 0, "child saw {} extra descriptors", status);
+    Ok(())
+}
+
+fn dup_and_dup2() -> Result<(), String> {
+    let d = io::dup(1).map_err(e)?;
+    ensure!(d > 2, "dup returned {}", d);
+    io::write_all(d, b"vtest: written through a dup of stdout\n").map_err(e)?;
+    ensure!(io::dup2(d, 20).map_err(e)? == 20, "dup2 result");
+    io::write_all(20, b"vtest: written through descriptor 20\n").map_err(e)?;
+    fs::close(20).map_err(e)?;
+    fs::close(d).map_err(e)?;
+    expect_err(io::dup(40), errno::EBADF, "dup of a closed descriptor")?;
+    expect_err(io::dup2(1, 64), errno::EBADF, "dup2 past the limit")?;
+    Ok(())
+}
+
+fn working_directory() -> Result<(), String> {
+    let dir = format!("/tmp/vtest-cwd-{}", process::getpid());
+    fs::mkdir(&dir, 0o755).map_err(e)?;
+    fs::chdir(&dir).map_err(e)?;
+    ensure!(fs::getcwd().map_err(e)? == dir, "getcwd after chdir");
+    fs::write("rel.txt", b"relative").map_err(e)?;
+    ensure!(
+        fs::read(&format!("{}/rel.txt", dir)).map_err(e)? == b"relative",
+        "relative write"
+    );
+    fs::chdir("..").map_err(e)?;
+    ensure!(fs::getcwd().map_err(e)? == "/tmp", "chdir ..");
+    expect_err(fs::chdir("/etc/motd"), errno::ENOTDIR, "chdir to a file")?;
+    expect_err(
+        fs::chdir("/nothing"),
+        errno::ENOENT,
+        "chdir to a missing directory",
+    )?;
+    // Relative program paths start at the working directory.
+    fs::chdir("/bin").map_err(e)?;
+    let pid = process::spawn("./hello", &["./hello"], &[]).map_err(e)?;
+    ensure!(process::wait(pid).map_err(e)? == 0, "./hello status");
+    fs::chdir("/").map_err(e)?;
+    fs::remove(&format!("{}/rel.txt", dir)).map_err(e)?;
+    fs::remove(&dir).map_err(e)?;
+    Ok(())
+}
+
+fn users_and_permissions() -> Result<(), String> {
+    ensure!(
+        process::getuid() == (0, 0),
+        "tests run as root, got {:?}",
+        process::getuid()
+    );
+    let dir = format!("/tmp/vtest-users-{}", process::getpid());
+    fs::mkdir(&dir, 0o777).map_err(e)?;
+    let (out, status) = child_output(&[SELF, "child-user", &dir])?;
+    ensure!(
+        status == 0,
+        "child-user failed: {}",
+        String::from_utf8_lossy(&out)
+    );
+    let st = fs::stat(&format!("{}/owned", dir)).map_err(e)?;
+    ensure!(
+        (st.uid, st.gid) == (1000, 1000),
+        "owner {}:{}",
+        st.uid,
+        st.gid
+    );
+    // Root may change mode and owner.
+    let f = format!("{}/owned", dir);
+    fs::chmod(&f, 0o600).map_err(e)?;
+    fs::chown(&f, 0, 0).map_err(e)?;
+    let st = fs::stat(&f).map_err(e)?;
+    ensure!(st.mode & 0o777 == 0o600 && st.uid == 0, "chmod/chown");
+    fs::remove(&f).map_err(e)?;
+    fs::remove(&dir).map_err(e)?;
+    Ok(())
+}
+
+/// Child: becomes user 1000 and checks what it may no longer do.
+fn child_user(dir: &str) -> i32 {
+    let r = (|| -> Result<(), String> {
+        process::setuid(1000, 1000).map_err(e)?;
+        ensure!(process::getuid() == (1000, 1000), "getuid after setuid");
+        expect_err(process::setuid(0, 0), errno::EPERM, "setuid back to root")?;
+        expect_err(File::open("/etc/shadow"), errno::EACCES, "read /etc/shadow")?;
+        expect_err(
+            fs::chown("/tmp", 1000, 1000),
+            errno::EPERM,
+            "chown as a user",
+        )?;
+        let e2 = process::reboot(vlibc::abi::reboot::RESTART);
+        ensure!(e2 == Errno(errno::EPERM), "reboot as a user: {}", e2);
+        fs::write(&format!("{}/owned", dir), b"mine").map_err(e)?;
+        expect_err(
+            fs::chmod("/tmp", 0o777),
+            errno::EPERM,
+            "chmod of root's directory",
+        )?;
+        Ok(())
+    })();
+    match r {
+        Ok(()) => 0,
+        Err(msg) => {
+            println!("{}", msg);
+            1
+        }
+    }
+}
+
+fn kill_a_process() -> Result<(), String> {
+    let pid = process::spawn(SELF, &[SELF, "child-wait"], &[]).map_err(e)?;
+    time::sleep_ms(20);
+    ensure!(
+        process::list()
+            .map_err(e)?
+            .iter()
+            .any(|p| p.pid == pid && p.state == 0),
+        "child not listed as running"
+    );
+    process::kill(pid, 77).map_err(e)?;
+    ensure!(process::wait(pid).map_err(e)? == 77, "status after kill");
+    expect_err(
+        process::kill(999_999, 1),
+        errno::ESRCH,
+        "kill of a missing process",
+    )?;
+    Ok(())
+}
+
+fn system_information() -> Result<(), String> {
+    let me = process::getpid();
+    let list = process::list().map_err(e)?;
+    let mine = list
+        .iter()
+        .find(|p| p.pid == me)
+        .ok_or("own process not listed")?;
+    ensure!(
+        process::field_str(&mine.name) == "vtest",
+        "own name {:?}",
+        process::field_str(&mine.name)
+    );
+    ensure!(mine.memory > 0 && mine.threads == 1, "own entry {:?}", mine);
+    let s = process::sysinfo().map_err(e)?;
+    ensure!(
+        s.mem_total > s.mem_used && s.mem_used > 0,
+        "memory {} / {}",
+        s.mem_used,
+        s.mem_total
+    );
+    ensure!(process::field_str(&s.version).starts_with("0."), "version");
+    ensure!(s.processes >= 1 && s.cpus >= 1 && s.uptime_ns > 0, "counts");
+    let (cols, rows) = vlibc::term::size();
+    ensure!(cols >= 40 && rows >= 10, "console size {}x{}", cols, rows);
+    ensure!(vlibc::term::is_console(1), "stdout is not the console");
     Ok(())
 }

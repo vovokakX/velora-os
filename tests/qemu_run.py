@@ -9,8 +9,10 @@ Modes:
          and that the journal was replayed. After each boot the disk writes
          and both file systems are checked on the host (velora-fsck, and
          fsck.fat when it is installed).
-  boot   Boot velora.iso and wait until the kernel reports boot complete.
-         Measures the time from QEMU start to that line.
+  boot   Boot velora.iso, measure the time to the login prompt, then log
+         in through the emulated keyboard and run a shell scenario
+         (commands, pipes, redirection, Tab, history, Ctrl+C, RU layout),
+         log out, log in as root and power off with `shutdown`.
 
 Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL,
 VELORA_QEMU_EXTRA (extra QEMU arguments, e.g. "-trace virtio*"),
@@ -206,46 +208,88 @@ class Monitor:
             self.sock.close()
 
 
+KEY_NAMES = {
+    " ": "spc", "\n": "ret", "\t": "tab", ".": "dot", ",": "comma", "-": "minus",
+    "=": "equal", "/": "slash", ";": "semicolon", "'": "apostrophe", "`": "grave_accent",
+    "[": "bracket_left", "]": "bracket_right", "\\": "backslash",
+    "_": "shift-minus", "+": "shift-equal", "?": "shift-slash", ":": "shift-semicolon",
+    '"': "shift-apostrophe", "~": "shift-grave_accent", "{": "shift-bracket_left",
+    "}": "shift-bracket_right", "|": "shift-backslash", "<": "shift-comma", ">": "shift-dot",
+    "!": "shift-1", "@": "shift-2", "#": "shift-3", "$": "shift-4", "%": "shift-5",
+    "^": "shift-6", "&": "shift-7", "*": "shift-8", "(": "shift-9", ")": "shift-0",
+}
+
+
 def text_keys(text):
-    """QEMU key names for plain lowercase text (US positions)."""
-    names = {" ": "spc", "\n": "ret", ".": "dot", ",": "comma", "-": "minus"}
-    return [names.get(c, c) for c in text]
+    """QEMU key names for ASCII text (US positions)."""
+    out = []
+    for c in text:
+        if c in KEY_NAMES:
+            out.append(KEY_NAMES[c])
+        elif c.isupper():
+            out.append("shift-" + c.lower())
+        else:
+            out.append(c)
+    return out
 
 
 class SerialReader:
-    """Collects QEMU's stdout (the serial port) in a background thread."""
+    """Collects QEMU's stdout (the serial port) in a background thread.
+    Complete lines go to `lines`; text after the last newline (a prompt
+    such as "login: ") is kept in `partial` and is searched as well."""
 
     def __init__(self, proc, log_path):
         self.proc = proc
         self.lines = []
-        self.first_seen = {}
+        self.partial = ""
         self.start = time.monotonic()
         self.lock = threading.Lock()
         self.log = open(log_path, "w", encoding="utf-8", errors="replace")
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
+    def _emit(self, line):
+        self.log.write(line + "\n")
+        self.log.flush()
+        stamp = "%6.2f " % (time.monotonic() - self.start) if TIMESTAMPS else ""
+        sys.stdout.write("  | " + stamp + line + "\n")
+        sys.stdout.flush()
+
     def _run(self):
-        for raw in iter(self.proc.stdout.readline, b""):
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        pending = b""
+        while True:
+            chunk = self.proc.stdout.read1(4096)
+            if not chunk:
+                break
+            pending += chunk
+            while b"\n" in pending:
+                raw, pending = pending.split(b"\n", 1)
+                line = raw.decode("utf-8", errors="replace").rstrip("\r")
+                with self.lock:
+                    self.lines.append((time.monotonic() - self.start, line))
+                    self.partial = ""
+                self._emit(line)
+            with self.lock:
+                self.partial = pending.decode("utf-8", errors="ignore")
+        if pending:
+            line = pending.decode("utf-8", errors="replace")
             with self.lock:
                 self.lines.append((time.monotonic() - self.start, line))
-            self.log.write(line + "\n")
-            self.log.flush()
-            stamp = "%6.2f " % (time.monotonic() - self.start) if TIMESTAMPS else ""
-            sys.stdout.write("  | " + stamp + line + "\n")
-            sys.stdout.flush()
+                self.partial = ""
+            self._emit(line)
 
     def find(self, text):
         with self.lock:
             for t, line in self.lines:
                 if text in line:
                     return t
+            if text in self.partial:
+                return time.monotonic() - self.start
         return None
 
     def text(self):
         with self.lock:
-            return "\n".join(line for _, line in self.lines)
+            return "\n".join([line for _, line in self.lines] + [self.partial])
 
 
 def host_fsck(path, offset, size, what):
@@ -379,7 +423,7 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 25 passed, 0 failed",
+        "vtest: 32 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
@@ -397,45 +441,130 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
     return 0
 
 
+class Session:
+    """Types into the console and waits for output that appears after the
+    previous step (so text from earlier commands does not count)."""
+
+    def __init__(self, proc, reader, monitor, deadline):
+        self.proc, self.reader, self.monitor, self.deadline = proc, reader, monitor, deadline
+        self.mark = 0
+
+    def lines(self):
+        with self.reader.lock:
+            return [line for _, line in self.reader.lines[self.mark:]] + [self.reader.partial]
+
+    def wait(self, text, exact=False, timeout=60.0):
+        end = min(self.deadline, time.monotonic() + timeout)
+        while time.monotonic() < end:
+            for i, line in enumerate(self.lines()):
+                clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line).split("\r")[-1]
+                if (clean.strip() == text) if exact else (text in line):
+                    self.mark += i + 1
+                    return True
+            if self.proc.poll() is not None:
+                return False
+            time.sleep(0.05)
+        return False
+
+    def type(self, text):
+        self.monitor.keys(text_keys(text), delay=0.03)
+
+    def keys(self, names):
+        self.monitor.keys(names, delay=0.05)
+
+    def run(self, command, expect, exact=False):
+        self.type(command + "\n")
+        if not self.wait(expect, exact):
+            raise AssertionError("no '%s' after typing: %s" % (expect, command))
+
+
 def check_boot(proc, reader, monitor, deadline, max_seconds):
-    marker = "boot complete"
-    while time.monotonic() < deadline:
-        t = reader.find(marker)
-        if t is not None:
-            break
-        if proc.poll() is not None:
-            break
-        time.sleep(0.05)
-    t = reader.find(marker)
-    out = reader.text()
-    for bad in ("KERNEL PANIC", "CPU EXCEPTION"):
-        if bad in out:
-            return fail("'%s' in boot log" % bad)
-    if t is None:
-        return fail("kernel did not report '%s'" % marker)
-    print("qemu_run: boot complete after %.2f s (QEMU start, firmware included)" % t)
-    m = re.search(r"memory in use: (\d+) KiB of (\d+) KiB", out)
+    out_bad = ("KERNEL PANIC", "CPU EXCEPTION")
+    if not wait_for(proc, reader, "boot complete", deadline):
+        return fail("kernel did not report 'boot complete'")
+    m = re.search(r"memory in use: (\d+) KiB of (\d+) KiB", reader.text())
     if not m:
         return fail("kernel did not report memory use")
     used_kib = int(m.group(1))
     print("qemu_run: memory in use after boot: %d KiB (%.1f MiB)" % (used_kib, used_kib / 1024))
     if used_kib >= 64 * 1024:
         return fail("idle memory use %d KiB is not below 64 MiB" % used_kib)
+    if not wait_for(proc, reader, "velora login:", deadline):
+        return fail("no login prompt")
+    t = reader.find("velora login:")
+    print("qemu_run: login prompt after %.2f s (QEMU start, firmware included)" % t)
     if max_seconds and t > max_seconds:
-        return fail("boot took %.2f s, limit %.2f s" % (t, max_seconds))
-    if "Hello from /bin/hello" not in out or "/bin/hello (pid 1) exited with status 0" not in out:
-        return fail("the first user program did not run")
-    # Keyboard: type a line in each layout and check the echo.
-    if not wait_for(proc, reader, "keyboard test ready", deadline):
-        return fail("keyboard test did not start")
-    monitor.keys(text_keys("hello world\n"))
-    if not wait_for(proc, reader, "echo: hello world", deadline):
-        return fail("typed text was not echoed")
-    monitor.keys(["alt-shift"] + text_keys("ghbdtn\n"))
-    if not wait_for(proc, reader, "echo: привет", deadline):
-        return fail("Russian layout input was not echoed")
-    print("qemu_run: keyboard input works (EN and RU)")
-    print("qemu_run: PASS (boot)")
+        return fail("login prompt after %.2f s, limit %.2f s" % (t, max_seconds))
+
+    s = Session(proc, reader, monitor, deadline)
+    try:
+        # A wrong password is refused.
+        s.type("user\n")
+        assert s.wait("Password:"), "no password prompt"
+        s.type("wrong\n")
+        assert s.wait("Login incorrect"), "wrong password accepted"
+        assert s.wait("velora login:"), "no second login prompt"
+        s.type("user\n")
+        assert s.wait("Password:"), "no password prompt"
+        s.type("velora\n")
+        assert s.wait("user@velora"), "no shell prompt after login"
+        print("qemu_run: logged in as user")
+
+        s.run("X=abc; echo $X$X", "abcabc")
+        s.run("pwd", "/home/user", exact=True)
+        s.run("mkdir -p docs/notes && cd docs/notes && pwd", "/home/user/docs/notes", exact=True)
+        s.run("echo first > a.txt; echo second >> a.txt; A=pipe; cat a.txt | cat > b.txt; echo ${A}-ok", "pipe-ok")
+        s.run("cat b.txt", "second", exact=True)
+        s.run("ls -l", "b.txt")
+        s.run("ls /bin", "velofetch")
+        s.run("ls -l /etc", "-rw------- ")
+        s.run("cat /etc/shadow", "permission denied")
+        s.run("nosuchcmd", "command not found")
+        s.run("false_status=1; ls /nothing || echo $?$?", "11")
+        s.run("date", " UTC")
+        s.run("uptime", "processes, boot took")
+        s.run("mem", "total:")
+        s.run("ps", "PID  PPID")
+        s.run("velofetch", "Memory:")
+        # Tab completion and history.
+        s.type("velof\t\n")
+        assert s.wait("Memory:"), "Tab completion did not run velofetch"
+        s.keys(["up", "ret"])
+        assert s.wait("Memory:"), "history (Up) did not repeat the command"
+        # Russian layout.
+        s.type("echo ")
+        s.keys(["alt-shift"])
+        s.type("ghbdtn")
+        s.keys(["alt-shift"])
+        s.type("\n")
+        assert s.wait("привет", exact=True), "Russian input was not echoed"
+        # Ctrl+C ends a program that waits for input.
+        s.type("cat\n")
+        time.sleep(1.0)
+        s.keys(["ctrl-c"])
+        s.run("echo status-$?", "status-130")
+        s.run("exit", "velora login:")
+        print("qemu_run: shell commands, pipes, redirection, Tab, history and Ctrl+C work")
+
+        # Root can power the machine off.
+        s.type("root\n")
+        assert s.wait("Password:"), "no password prompt"
+        s.type("velora\n")
+        assert s.wait("root@velora"), "no root prompt"
+        s.run("whoami", "root", exact=True)
+        s.type("shutdown\n")
+        end = time.monotonic() + 30
+        while proc.poll() is None and time.monotonic() < end:
+            time.sleep(0.1)
+        assert proc.poll() is not None, "QEMU still running after shutdown"
+        print("qemu_run: shutdown powered the machine off")
+    except AssertionError as e:
+        return fail(str(e))
+    out = reader.text()
+    for bad in out_bad:
+        if bad in out:
+            return fail("'%s' in boot log" % bad)
+    print("qemu_run: PASS (boot, login and shell)")
     return 0
 
 
