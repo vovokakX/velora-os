@@ -65,11 +65,30 @@ USER_TARGET="target/user"
     cargo build --release --target x86_64-unknown-none)
 UBIN="$USER_TARGET/x86_64-unknown-none/release"
 INITRD="$BUILD/initramfs.tar"
+
+# Password hashes for the Live system's accounts. Only hashes go into the
+# image; the passwords come from the environment (defaults are documented
+# in README.md and are meant to be changed by the installer).
+: "${VELORA_ROOT_PASSWORD:=velora}"
+: "${VELORA_USER_PASSWORD:=velora}"
+export VELORA_ROOT_PASSWORD VELORA_USER_PASSWORD
+SHADOW="$BUILD/shadow"
+cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
+    root=VELORA_ROOT_PASSWORD user=VELORA_USER_PASSWORD
+
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch"
+FILES=()
+for p in $PROGRAMS; do
+    FILES+=(--file "bin/$p=$UBIN/$p:755")
+done
 cargo run -q -p mkinitrd --release -- \
     --out "$INITRD" \
-    --file "bin/hello=$UBIN/hello:755" \
-    --file "bin/vtest=$UBIN/vtest:755" \
-    --file "etc/motd=userland/rootfs/etc/motd:644"     --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home"
+    "${FILES[@]}" \
+    --file "etc/motd=userland/rootfs/etc/motd:644" \
+    --file "etc/passwd=userland/rootfs/etc/passwd:644" \
+    --file "etc/group=userland/rootfs/etc/group:644" \
+    --file "etc/shadow=$SHADOW:600" \
+    --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.
 CONF="$BUILD/limine-$MODE.conf"
