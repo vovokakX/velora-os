@@ -128,3 +128,42 @@ pub fn tty(what: u64, arg: u64) -> i64 {
         _ => -errno::EINVAL,
     }
 }
+
+/// Random bytes from RDRAND when the CPU has it, mixed with the TSC; a
+/// TSC-based generator otherwise. Used for salts and GUIDs.
+pub fn getrandom(buf: u64, len: u64) -> i64 {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static STATE: AtomicU64 = AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+    let n = len.min(256) as usize;
+    let has_rdrand = arch::cpu::cpuid(1, 0).ecx & (1 << 30) != 0;
+    let mut out = alloc::vec![0u8; n];
+    for chunk in out.chunks_mut(8) {
+        let mut v = 0u64;
+        if has_rdrand {
+            for _ in 0..10 {
+                let ok: u8;
+                // SAFETY: RDRAND is available (CPUID.1:ECX[30]).
+                unsafe {
+                    core::arch::asm!("rdrand {v}", "setc {ok}", v = out(reg) v, ok = out(reg_byte) ok)
+                };
+                if ok != 0 {
+                    break;
+                }
+            }
+        }
+        // splitmix64 over the TSC and a running state.
+        let mut z = STATE
+            .fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed)
+            .wrapping_add(arch::cpu::rdtsc());
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        let bytes = (v ^ z).to_le_bytes();
+        chunk.copy_from_slice(&bytes[..chunk.len()]);
+    }
+    if uaccess::write(buf, &out) {
+        n as i64
+    } else {
+        -errno::EFAULT
+    }
+}

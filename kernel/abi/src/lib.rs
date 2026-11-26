@@ -77,6 +77,8 @@ pub mod nr {
     pub const DUP: u64 = 37;
     /// tty(op, arg): console terminal control, see [`super::tty`]
     pub const TTY: u64 = 38;
+    /// getrandom(buf, len) -> bytes written (at most 256 per call)
+    pub const GETRANDOM: u64 = 39;
 }
 
 /// Error numbers (returned negated).
@@ -400,6 +402,7 @@ mod tests {
             nr::CHOWN,
             nr::DUP,
             nr::TTY,
+            nr::GETRANDOM,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "duplicate syscall number {a}");

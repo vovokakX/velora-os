@@ -54,6 +54,7 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::GETUID => process::getuid(),
         nr::PROCLIST => process::proclist(a0, a1),
         nr::TTY => process::tty(a0, a1),
+        nr::GETRANDOM => process::getrandom(a0, a1),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
