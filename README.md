@@ -29,7 +29,8 @@ VeloraFS (права, журнал, контрольные суммы, пров�
 загрузки появляется приглашение входа; оболочка vsh поддерживает историю,
 Tab-дополнение, конвейеры и перенаправления, есть основные команды (`ls`,
 `cat`, `cp`, `mv`, `rm`, `ps`, `kill`, `velofetch` и другие). После
-загрузки занято 6,4 МиБ (вместе с initramfs).
+загрузки занято 6,5 МиБ (вместе с initramfs), приглашение входа появляется
+через 1,75 с после запуска QEMU с KVM.
 
 Вход в Live-образе: пользователь `user` или `root`, пароль `velora`. Пароль
 можно задать при сборке переменными `VELORA_ROOT_PASSWORD` и
@@ -139,8 +140,9 @@ VeloraFS (permissions, journal, checksums, integrity check) and FAT16/FAT32 with
 read and write. The initramfs is mounted at `/`, disks under `/mnt`. Boot ends
 at a login prompt; the vsh shell has history, Tab completion, pipes and
 redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
-`ps`, `kill`, `velofetch` and others). 6.4 MiB are in use after boot
-(initramfs included).
+`ps`, `kill`, `velofetch` and others). 6.5 MiB are in use after boot
+(initramfs included); the login prompt appears 1.75 s after QEMU starts with
+KVM.
 
 Live image login: user `user` or `root`, password `velora`. The passwords
 can be set at build time with `VELORA_ROOT_PASSWORD` and
