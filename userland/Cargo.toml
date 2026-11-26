@@ -3,7 +3,7 @@
 # lower-half addresses, static relocation model, linked by link.ld.
 [workspace]
 resolver = "3"
-members = ["hello", "vtest"]
+members = ["hello", "vtest", "coreutils", "login", "vsh"]
 
 [workspace.package]
 version = "0.7.0"
