@@ -60,3 +60,54 @@ pub fn wait(pid: u64) -> Result<i64, Errno> {
     check(unsafe { syscall2(nr::WAIT, pid, &mut status as *mut i64 as u64) })?;
     Ok(status)
 }
+
+/// Ends process `pid` with exit status `status`.
+pub fn kill(pid: u64, status: i32) -> Result<(), Errno> {
+    // SAFETY: no pointers.
+    check(unsafe { crate::sys::syscall2(nr::KILL, pid, status as i64 as u64) }).map(|_| ())
+}
+
+/// (uid, gid) of this process.
+pub fn getuid() -> (u32, u32) {
+    // SAFETY: no arguments.
+    let r = unsafe { syscall0(nr::GETUID) } as u64;
+    (r as u32, (r >> 32) as u32)
+}
+
+/// Becomes user `uid` in group `gid` (root only, cannot be undone).
+pub fn setuid(uid: u32, gid: u32) -> Result<(), Errno> {
+    // SAFETY: no pointers.
+    check(unsafe { syscall2(nr::SETUID, uid as u64, gid as u64) }).map(|_| ())
+}
+
+/// Every process the kernel knows.
+pub fn list() -> Result<Vec<velora_abi::ProcEntry>, Errno> {
+    let mut v = alloc::vec![velora_abi::ProcEntry::default(); 256];
+    let bytes = v.len() * size_of::<velora_abi::ProcEntry>();
+    // SAFETY: the buffer is writable for `bytes` bytes.
+    let n = check(unsafe { syscall2(nr::PROCLIST, v.as_mut_ptr() as u64, bytes as u64) })?;
+    v.truncate(n as usize / size_of::<velora_abi::ProcEntry>());
+    Ok(v)
+}
+
+pub fn sysinfo() -> Result<velora_abi::SysInfo, Errno> {
+    let mut s = velora_abi::SysInfo::default();
+    // SAFETY: `s` is writable and has the kernel's layout.
+    check(unsafe { syscall1(nr::SYSINFO, &mut s as *mut velora_abi::SysInfo as u64) })?;
+    Ok(s)
+}
+
+/// Restarts or powers off the machine (root only). Returns only on error.
+pub fn reboot(cmd: u64) -> Errno {
+    // SAFETY: no pointers.
+    match check(unsafe { syscall1(nr::REBOOT, cmd) }) {
+        Err(e) => e,
+        Ok(_) => Errno(velora_abi::errno::EIO),
+    }
+}
+
+/// Text of a NUL-padded name field.
+pub fn field_str(b: &[u8]) -> &str {
+    let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    core::str::from_utf8(&b[..n]).unwrap_or("?")
+}

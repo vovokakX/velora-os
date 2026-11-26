@@ -275,3 +275,51 @@ impl Iterator for ReadDir {
         }))
     }
 }
+
+/// Changes the working directory.
+pub fn chdir(path: &str) -> Result<(), Errno> {
+    // SAFETY: the path is valid for its length.
+    check(unsafe { syscall2(nr::CHDIR, path.as_ptr() as u64, path.len() as u64) }).map(|_| ())
+}
+
+/// The working directory.
+pub fn getcwd() -> Result<String, Errno> {
+    let mut buf = vec![0u8; velora_abi::MAX_PATH];
+    // SAFETY: the buffer is writable for its length.
+    let n = check(unsafe { syscall2(nr::GETCWD, buf.as_mut_ptr() as u64, buf.len() as u64) })?;
+    buf.truncate(n as usize);
+    String::from_utf8(buf).map_err(|_| Errno(errno::EIO))
+}
+
+pub fn chmod(path: &str, perm: u32) -> Result<(), Errno> {
+    // SAFETY: the path is valid for its length.
+    check(unsafe {
+        syscall3(
+            nr::CHMOD,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            perm as u64,
+        )
+    })
+    .map(|_| ())
+}
+
+/// Changes owner and group (root only).
+pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), Errno> {
+    // SAFETY: the path is valid for its length.
+    check(unsafe {
+        syscall4(
+            nr::CHOWN,
+            path.as_ptr() as u64,
+            path.len() as u64,
+            uid as u64,
+            gid as u64,
+        )
+    })
+    .map(|_| ())
+}
+
+/// True if the path exists.
+pub fn exists(path: &str) -> bool {
+    stat(path).is_ok()
+}
