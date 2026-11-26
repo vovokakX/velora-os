@@ -60,7 +60,6 @@ jobs:
       - name: Tests (host unit tests, kernel tests in QEMU, boot test)
         env:
           VELORA_QEMU_EXTRA: -trace virtio_queue_notify -trace virtio_set_status -trace virtio_blk_* -trace virtqueue_pop
-          VELORA_VIRTIO_OPTS: ",ioeventfd=off"
         run: ./test.sh
 
       - name: Upload ISO

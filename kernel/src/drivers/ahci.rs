@@ -17,6 +17,7 @@ use velora_pci::Device;
 const GHC: u64 = 0x04;
 const PI: u64 = 0x0c;
 const GHC_AE: u32 = 1 << 31;
+const GHC_HR: u32 = 1 << 0;
 
 const P_CLB: u64 = 0x00;
 const P_CLBU: u64 = 0x04;
@@ -66,6 +67,13 @@ pub struct AhciDisk {
     model: String,
     sectors: u64,
     port: SpinLock<Port>,
+}
+
+impl Drop for Port {
+    /// Stops the port before its DMA buffers are freed.
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
 }
 
 impl Port {
@@ -216,9 +224,28 @@ fn probe_controller(d: &Device, first_index: usize) -> Result<usize, &'static st
     let (abar, size) = d.bars[5].memory().ok_or("BAR5 (ABAR) missing")?;
     let base = mmio::map(abar, size.max(0x1100)).ok_or("cannot map ABAR")?;
     // SAFETY: ABAR is the controller's mapped register block.
-    let (pi, ghc) = unsafe { (mmio::read32(base + PI), mmio::read32(base + GHC)) };
-    // SAFETY: as above.
-    unsafe { mmio::write32(base + GHC, ghc | GHC_AE) };
+    // Reset the whole HBA first. The firmware may have left ports running
+    // (for example the CD port it booted from) with DMA pointing into
+    // memory the kernel now owns.
+    // SAFETY (register accesses below): ABAR is the controller's mapped
+    // register block.
+    unsafe {
+        mmio::write32(base + GHC, mmio::read32(base + GHC) | GHC_AE);
+        mmio::write32(base + GHC, mmio::read32(base + GHC) | GHC_HR);
+    }
+    block::poll(1000, || unsafe { mmio::read32(base + GHC) } & GHC_HR == 0)
+        .map_err(|_| "HBA reset timed out")?;
+    let pi = unsafe {
+        mmio::write32(base + GHC, mmio::read32(base + GHC) | GHC_AE);
+        mmio::read32(base + PI)
+    };
+    // Links renegotiate after the reset; give them time to come up.
+    let all_up = || {
+        (0..32)
+            .filter(|p| pi & (1 << p) != 0)
+            .all(|p| unsafe { mmio::read32(base + 0x100 + p as u64 * 0x80 + P_SSTS) } & 0xf == 3)
+    };
+    let _ = block::poll(50, all_up);
     let mut found = 0;
     for port in 0..32 {
         if pi & (1 << port) == 0 {
@@ -226,10 +253,9 @@ fn probe_controller(d: &Device, first_index: usize) -> Result<usize, &'static st
         }
         let regs = base + 0x100 + port as u64 * 0x80;
         // SAFETY: an implemented port's register block.
-        let (ssts, sig) = unsafe { (mmio::read32(regs + P_SSTS), mmio::read32(regs + P_SIG)) };
-        let present = ssts & 0xf == 3 && (ssts >> 8) & 0xf == 1;
-        if !present || sig != SIG_ATA {
-            continue; // empty port or ATAPI (CD/DVD)
+        let ssts = unsafe { mmio::read32(regs + P_SSTS) };
+        if ssts & 0xf != 3 || (ssts >> 8) & 0xf != 1 {
+            continue; // no device
         }
         let (Some(mem), Some(data)) = (DmaBuffer::new(4096), DmaBuffer::new(BOUNCE)) else {
             return Err("out of memory");
@@ -238,6 +264,12 @@ fn probe_controller(d: &Device, first_index: usize) -> Result<usize, &'static st
         if p.start().is_err() {
             crate::kwarn!("ahci: port {} did not start", port);
             continue;
+        }
+        // The signature arrives with the device's first FIS after the
+        // port starts receiving.
+        let _ = block::poll(100, || p.r(P_SIG) != 0xffff_ffff);
+        if p.r(P_SIG) != SIG_ATA {
+            continue; // ATAPI (CD/DVD) or unknown: `p` is stopped on drop
         }
         if p.command(ATA_IDENTIFY, 0, 0, 512, false).is_err() {
             crate::kwarn!("ahci: port {} did not answer IDENTIFY", port);
