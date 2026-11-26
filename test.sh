@@ -26,7 +26,7 @@ echo "==> kernel tests in QEMU"
 
 echo "==> boot test in QEMU"
 ./build.sh
-"$PY" tests/qemu_run.py boot --max-boot-seconds "${VELORA_MAX_BOOT_SECONDS:-15}"
+"$PY" tests/qemu_run.py boot --timeout 300 --max-boot-seconds "${VELORA_MAX_BOOT_SECONDS:-15}"
 
 echo "==> network test in QEMU (DHCP, ping, TCP with the host)"
 "$PY" tests/qemu_run.py net --timeout 300
