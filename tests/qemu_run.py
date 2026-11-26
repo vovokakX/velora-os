@@ -681,7 +681,9 @@ def run_usb(args, work):
             s.run("ls /dev", "kmsg", exact=True)
             s.type("exit\n")
             login(s, "root", "velora", "root@velora")
-            s.type("shutdown\n")
+            # QEMU runs with -no-reboot, so a restart ends it.
+            s.type("reboot\n")
+            assert s.wait("Velora OS: restarting"), "reboot did not start"
             wait_exit(proc)
         except AssertionError as e:
             return fail(str(e))
@@ -689,7 +691,7 @@ def run_usb(args, work):
 
     r = run_once(args, work, None, args.log, check, iso=None, extra=extra)
     if r == 0:
-        print("qemu_run: PASS (boot from the USB image, PM timer, dmesg)")
+        print("qemu_run: PASS (boot from the USB image, PM timer, dmesg, reboot)")
     return r
 
 
@@ -948,12 +950,14 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
         s.type("velora\n")
         assert s.wait("root@velora"), "no root prompt"
         s.run("whoami", "root", exact=True)
-        s.type("shutdown\n")
+        # The ACPI power button (QEMU raises the fixed PWRBTN event).
+        s.monitor.command("system_powerdown")
+        assert s.wait("Power button pressed"), "the power button was not noticed"
         end = time.monotonic() + 30
         while proc.poll() is None and time.monotonic() < end:
             time.sleep(0.1)
-        assert proc.poll() is not None, "QEMU still running after shutdown"
-        print("qemu_run: shutdown powered the machine off")
+        assert proc.poll() is not None, "QEMU still running after the power button"
+        print("qemu_run: the power button powered the machine off")
     except AssertionError as e:
         return fail(str(e))
     out = reader.text()
