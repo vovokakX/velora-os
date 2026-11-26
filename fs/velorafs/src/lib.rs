@@ -1091,6 +1091,13 @@ impl<D: BlockIo> FileSystem for VeloraFs<D> {
         self.dev.flush()
     }
 
+    fn fsck(&mut self) -> Result<Vec<alloc::string::String>> {
+        if self.failed {
+            return Err(FsError::Io);
+        }
+        Ok(self.check().errors)
+    }
+
     fn statfs(&mut self) -> Result<FsStat> {
         Ok(FsStat {
             block_size: BLOCK as u64,

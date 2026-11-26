@@ -27,6 +27,7 @@ pub use vfs::{MountId, MountInfo, Node, Vfs};
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::vec::Vec;
 use velora_abi::errno;
 
 pub type Ino = u64;
@@ -280,6 +281,11 @@ pub trait FileSystem: Send {
     }
     fn statfs(&mut self) -> Result<FsStat> {
         Ok(FsStat::default())
+    }
+    /// Checks the whole file system and returns the problems found (empty
+    /// when it is consistent).
+    fn fsck(&mut self) -> Result<Vec<String>> {
+        Err(FsError::Unsupported)
     }
 }
 
