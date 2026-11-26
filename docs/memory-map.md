@@ -16,8 +16,19 @@
 | `0xffff_e000_0000_0000` – `0xffff_e0ff_ffff_ffff` | 1 ТиБ | стеки ядра для потоков, с защитными страницами | 4 |
 | `0xffff_ffff_8000_0000` – конец | 2 ГиБ | образ ядра (`.text`, `.rodata`, `.data`, `.bss`) | 1 |
 
-Сейчас (этап 1) действуют только HHDM и образ ядра. Таблицы страниц
-создал Limine. Свои таблицы страниц появятся на этапе 2.
+С этапа 2 ядро строит свои таблицы страниц (`kernel/src/mm/paging.rs`)
+и переключается на них сразу после запуска аллокатора страниц:
+
+- HHDM: все области карты памяти, кроме reserved и bad, с правами RW и NX.
+  Где позволяет выравнивание, используются страницы по 2 МиБ.
+  Framebuffer отображается с кешированием write-combining (PAT 5).
+- Образ ядра: страницы по 4 КиБ с правами по секциям (W^X).
+- Куча ядра растёт по требованию с `0xffff_c000_0000_0000`.
+- Стеки ядра выделяются с `0xffff_e000_0000_0000`. Под каждым стеком
+  остаётся неотображённая защитная страница.
+- Все 256 записей верхней половины PML4 создаются заранее (256 таблиц PDPT,
+  1 МиБ). Тогда на этапе 4 каждое адресное пространство процесса сможет
+  получить ядро простым копированием этих записей, и они больше не изменятся.
 
 ### Образ ядра
 
@@ -28,19 +39,26 @@
 
 ### Физическая память
 
-Ядро получает карту памяти от Limine (`MEMMAP`). Типы областей:
-usable, reserved, ACPI reclaimable, ACPI NVS, bad, bootloader reclaimable,
-executable and modules, framebuffer, reserved mapped. Пока физический
-аллокатор (этап 2) не готов, ядро только выводит сводку.
+Ядро получает карту памяти от Limine (`MEMMAP`) и копирует её вместе с
+остальными данными загрузчика в `boot::BootInfo`.
 
-На этапе 2 память типа «bootloader reclaimable» будет освобождена после
-того, как ядро перестанет пользоваться структурами Limine и стеком загрузки.
+Физические страницы учитывает битовая карта, по биту на страницу 4 КиБ
+(`velora-mm::bitmap`). Она лежит в начале первой подходящей области usable.
+Страница 0 никогда не выделяется.
+
+Порядок освобождения памяти загрузчика:
+1. данные Limine скопированы в `BootInfo`;
+2. ядро переключилось на свои таблицы страниц;
+3. ядро перешло на свой стек (64 КиБ с защитной страницей);
+4. области bootloader-reclaimable отдаются аллокатору. После этого обращение
+   к ответам Limine вызывает панику.
 
 ### Стеки
 
 | Стек | Размер | Где |
 |---|---|---|
-| загрузочный стек | 64 КиБ | от Limine, bootloader-reclaimable |
+| загрузочный стек | 64 КиБ | от Limine; освобождается после перехода на основной стек |
+| основной стек ядра | 64 КиБ + защитная страница | `0xffff_e000_0000_1000` |
 | IST1: double fault | 16 КиБ | `.bss` ядра |
 | IST2: NMI | 16 КиБ | `.bss` ядра |
 | IST3: machine check | 16 КиБ | `.bss` ядра |
@@ -56,8 +74,16 @@ kernel heap (`0xffff_c000…`, stage 2), device MMIO (`0xffff_d000…`) and kern
 thread stacks with guard pages (`0xffff_e000…`, stage 4) get 1 TiB windows each;
 the kernel image is in the top 2 GiB (`0xffff_ffff_8000_0000`).
 
-In stage 1 only the HHDM and the kernel image exist; the page tables are the
-ones Limine created. The kernel builds its own in stage 2.
+Since stage 2 the kernel builds its own page tables (`kernel/src/mm/paging.rs`)
+right after the frame allocator starts: the HHDM covers every memory map
+region except reserved and bad ones (RW, NX, 2 MiB pages where aligned,
+framebuffer write-combining via PAT 5); the kernel image uses 4 KiB pages
+with per-section W^X permissions; the heap grows on demand from
+`0xffff_c000_0000_0000`; kernel stacks start at `0xffff_e000_0000_0000`,
+each with an unmapped guard page below it. All 256 upper-half PML4 entries
+are created up front (256 PDPTs, 1 MiB), so in stage 4 every process address
+space can share the kernel half by copying these entries, which never change
+afterwards.
 
 ### Kernel image
 
@@ -68,12 +94,15 @@ The symbols `__text_start`, `__rodata_start`, `__data_start` and
 
 ### Physical memory
 
-The kernel gets the memory map from Limine (`MEMMAP`). Until the physical
-allocator exists (stage 2) the kernel only prints a summary. In stage 2,
-bootloader-reclaimable memory is freed once the kernel no longer uses Limine
-structures or the boot stack.
+The kernel copies the Limine memory map and other boot data into
+`boot::BootInfo`. Physical frames are tracked by a bitmap, one bit per 4 KiB
+frame (`velora-mm::bitmap`), stored at the start of the first suitable usable
+region; frame 0 is never handed out. Bootloader-reclaimable memory is released
+after (1) the boot data is copied, (2) the kernel runs on its own page tables
+and (3) on its own stack. After that, using a Limine response panics.
 
 ### Stacks
 
-Boot stack: 64 KiB from Limine. IST1 (double fault), IST2 (NMI) and IST3
+Boot stack: 64 KiB from Limine, released after the switch to the main kernel
+stack (64 KiB plus a guard page at `0xffff_e000_0000_1000`). IST1 (double fault), IST2 (NMI) and IST3
 (machine check): 16 KiB each in the kernel `.bss`.

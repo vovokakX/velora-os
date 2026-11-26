@@ -7,6 +7,15 @@
 
 use core::cell::UnsafeCell;
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Cleared once bootloader-reclaimable memory is handed to the allocator.
+static RESPONSES_VALID: AtomicBool = AtomicBool::new(true);
+
+/// Marks all responses as gone. Any later `response()` call panics.
+pub fn invalidate_responses() {
+    RESPONSES_VALID.store(false, Ordering::SeqCst);
+}
 
 const COMMON_MAGIC: [u64; 2] = [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b];
 const BASE_REVISION_MAGIC: [u64; 2] = [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc];
@@ -76,8 +85,12 @@ impl<R> Request<R> {
     }
 
     pub fn response(&self) -> Option<&'static R> {
+        assert!(
+            RESPONSES_VALID.load(Ordering::SeqCst),
+            "Limine response used after bootloader memory was released"
+        );
         // SAFETY: the pointer is either null or points at bootloader-owned
-        // memory that stays mapped (bootloader-reclaimable) for now.
+        // memory that stays mapped until `invalidate_responses`.
         unsafe {
             let p = ptr::read_volatile(self.response.get());
             p.as_ref()

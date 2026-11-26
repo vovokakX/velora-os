@@ -22,7 +22,7 @@ Lumi, the Win32 layer.
 
 ## Цели производительности / Performance targets
 
-| Цель / Target | Сейчас / Now (v0.1.0) |
+| Цель / Target | Сейчас / Now (v0.2.0) |
 |---|---|
-| ОЗУ в простое < 64 МиБ / idle RAM < 64 MiB | не измеряется до этапа 2 (нет аллокатора) / not measured until stage 2 (no allocator) |
-| Загрузка до приглашения входа < 3 с в QEMU / boot to login prompt < 3 s in QEMU | до конца загрузки ядра 2,8 с на TCG в Windows, включая прошивку; приглашения входа пока нет / 2.8 s to end of kernel boot on TCG under Windows, firmware included; there is no login prompt yet |
+| ОЗУ в простое < 64 МиБ / idle RAM < 64 MiB | 5,2 МиБ после загрузки (QEMU, 256 МиБ RAM); проверяется тестом загрузки / 5.2 MiB after boot (QEMU, 256 MiB RAM); checked by the boot test |
+| Загрузка до приглашения входа < 3 с в QEMU / boot to login prompt < 3 s in QEMU | ядро работает около 0,1 с; всего с прошивкой 2,2 с с KVM (CI) и 2,8–4,8 с на TCG в Windows; приглашения входа пока нет / the kernel itself takes about 0.1 s; with firmware 2.2 s with KVM (CI) and 2.8–4.8 s on TCG under Windows; no login prompt yet |

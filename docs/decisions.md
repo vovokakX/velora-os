@@ -130,3 +130,56 @@ panic that checks the panic handler itself. The unstable
 **EN.** A bitmap font (BSD-2) with Latin, Cyrillic and box drawing.
 `tools/fontgen/bdf2rs.py` converts BDF into a Rust table. It is data, not
 code; drawing 400 glyphs by hand would add nothing.
+
+## D8. Аллокатор физических страниц: битовая карта / Frame allocator: bitmap
+
+**2026-11-26**
+
+**RU.** Один бит на страницу 4 КиБ, поиск next-fit, отдельная функция для
+непрерывных блоков с выравниванием (понадобится для DMA на этапе 6). Для 4 ГиБ
+RAM карта занимает 128 КиБ. Битовая карта проще buddy-аллокатора, её легко
+проверить, и она сразу ловит двойное освобождение. Минус — линейный поиск
+непрерывных блоков. Если он станет узким местом, перейдём на buddy, не меняя
+интерфейс `mm::frame`.
+
+**EN.** One bit per 4 KiB frame, next-fit search, plus a contiguous aligned
+allocation for DMA (stage 6). 128 KiB of bitmap per 4 GiB of RAM. Simpler and
+easier to verify than a buddy allocator, and it detects double frees. The
+downside is a linear search for contiguous blocks; if that becomes a
+bottleneck we switch to a buddy allocator behind the same `mm::frame` API.
+
+## D9. Куча ядра: классы размеров + страничные блоки / Kernel heap: size classes + page runs
+
+**2026-11-26**
+
+**RU.** Запросы до 2048 байт обслуживаются классами размеров (степени двойки
+от 16 байт), большие — целыми страницами из списка свободных участков с
+объединением соседей. Алгоритм вынесен в `velora-mm` и проверяется на хосте,
+в том числе случайным нагрузочным тестом. Известное ограничение: страницы,
+отданные классу размеров, обратно не возвращаются.
+
+**EN.** Requests up to 2048 bytes use power-of-two size classes starting at
+16 bytes; larger ones take whole pages from a list of free runs that merges
+neighbours. The algorithm lives in `velora-mm` and is tested on the host,
+including a randomised stress test. Known limitation: pages given to a size
+class are never returned.
+
+## D10. Свои таблицы страниц и освобождение памяти загрузчика / Own page tables and releasing bootloader memory
+
+**2026-11-26**
+
+**RU.** Ядро не правит таблицы Limine, а строит свои: так права W^X и
+раскладка адресного пространства полностью под контролем ядра, а память
+загрузчика (около 45 МиБ в QEMU) можно вернуть. Перед освобождением данные
+Limine копируются в `BootInfo`, а ядро переходит на свой стек. Обращение к
+ответам Limine после этого вызывает панику, а не тихо читает чужую память.
+Записи верхней половины PML4 создаются заранее (1 МиБ), чтобы ядро было
+общим для всех будущих адресных пространств.
+
+**EN.** The kernel builds its own page tables instead of editing Limine's, so
+W^X and the address space layout are fully under kernel control and the
+bootloader memory (about 45 MiB in QEMU) can be reused. Before releasing it,
+Limine data is copied into `BootInfo` and the kernel moves to its own stack;
+any later use of a Limine response panics instead of silently reading reused
+memory. Upper-half PML4 entries are created up front (1 MiB) so the kernel
+half can be shared by all future address spaces.

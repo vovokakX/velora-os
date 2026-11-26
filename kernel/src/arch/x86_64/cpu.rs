@@ -129,3 +129,58 @@ pub fn brand_string(buf: &mut [u8; 48]) -> &str {
         .unwrap_or("unknown")
         .trim()
 }
+
+pub const MSR_EFER: u32 = 0xc000_0080;
+pub const EFER_NXE: u64 = 1 << 11;
+
+/// # Safety
+/// Reading a non-existent MSR raises #GP.
+#[inline]
+pub unsafe fn rdmsr(msr: u32) -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        asm!("rdmsr", in("ecx") msr, out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags))
+    }
+    ((hi as u64) << 32) | lo as u64
+}
+
+/// # Safety
+/// Writing an MSR changes CPU behaviour; the caller must know the effect.
+#[inline]
+pub unsafe fn wrmsr(msr: u32, value: u64) {
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") value as u32,
+            in("edx") (value >> 32) as u32,
+            options(nostack, preserves_flags)
+        )
+    }
+}
+
+/// # Safety
+/// `pml4` must be the physical address of a valid top-level page table
+/// that maps the currently running code, stack and data.
+#[inline]
+pub unsafe fn write_cr3(pml4: u64) {
+    unsafe { asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags)) }
+}
+
+/// Flushes the TLB entry for one virtual address.
+#[inline]
+pub fn invlpg(addr: u64) {
+    // SAFETY: invalidating a TLB entry is always safe.
+    unsafe { asm!("invlpg [{}]", in(reg) addr, options(nostack, preserves_flags)) }
+}
+
+/// CPU supports the no-execute page bit.
+pub fn has_nx() -> bool {
+    cpuid(0x8000_0000, 0).eax >= 0x8000_0001 && cpuid(0x8000_0001, 0).edx & (1 << 20) != 0
+}
+
+/// CPU supports the page attribute table.
+pub fn has_pat() -> bool {
+    cpuid(1, 0).edx & (1 << 16) != 0
+}

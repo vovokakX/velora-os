@@ -12,6 +12,7 @@ Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL.
 
 import argparse
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ import tempfile
 import threading
 import time
 
+TIMESTAMPS = False
 QEMU_SUCCESS = 33  # (0x10 << 1) | 1, see kernel/src/arch/x86_64/qemu.rs
 
 FIRMWARE_DIRS = [
@@ -110,7 +112,8 @@ class SerialReader:
                 self.lines.append((time.monotonic() - self.start, line))
             self.log.write(line + "\n")
             self.log.flush()
-            sys.stdout.write("  | " + line + "\n")
+            stamp = "%6.2f " % (time.monotonic() - self.start) if TIMESTAMPS else ""
+            sys.stdout.write("  | " + stamp + line + "\n")
             sys.stdout.flush()
 
     def find(self, text):
@@ -168,7 +171,7 @@ def check_ktest(proc, reader, deadline):
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
         "message:  ktest: deliberate panic",
-        "location: kernel/src/ktest.rs",
+        "location: kernel/src/ktest/mod.rs",
         "backtrace:",
         "ktest: panic path ok",
     ]
@@ -198,6 +201,13 @@ def check_boot(proc, reader, deadline, max_seconds):
     if t is None:
         return fail("kernel did not report '%s'" % marker)
     print("qemu_run: boot complete after %.2f s (QEMU start, firmware included)" % t)
+    m = re.search(r"memory in use: (\d+) KiB of (\d+) KiB", out)
+    if not m:
+        return fail("kernel did not report memory use")
+    used_kib = int(m.group(1))
+    print("qemu_run: memory in use after boot: %d KiB (%.1f MiB)" % (used_kib, used_kib / 1024))
+    if used_kib >= 64 * 1024:
+        return fail("idle memory use %d KiB is not below 64 MiB" % used_kib)
     if max_seconds and t > max_seconds:
         return fail("boot took %.2f s, limit %.2f s" % (t, max_seconds))
     print("qemu_run: PASS (boot)")
@@ -212,7 +222,10 @@ def main():
     p.add_argument("--memory", default="256M")
     p.add_argument("--max-boot-seconds", type=float, default=0.0)
     p.add_argument("--log")
+    p.add_argument("--timestamps", action="store_true", help="prefix each serial line with seconds since QEMU start")
     args = p.parse_args()
+    global TIMESTAMPS
+    TIMESTAMPS = args.timestamps
     if not args.iso:
         args.iso = "velora-test.iso" if args.mode == "ktest" else "velora.iso"
     if not args.log:

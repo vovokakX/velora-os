@@ -24,6 +24,17 @@ pub fn init() -> Option<(usize, usize)> {
     Some(size)
 }
 
+/// Moves the screen console to a RAM back buffer (needs the heap).
+pub fn enable_back_buffer() -> bool {
+    match SCREEN.lock().as_mut() {
+        Some(c) => {
+            c.framebuffer_mut().enable_back_buffer();
+            true
+        }
+        None => false,
+    }
+}
+
 /// Text grid size of the screen console, if there is one.
 pub fn screen_size() -> Option<(usize, usize)> {
     SCREEN.lock().as_ref().map(|c| (c.cols, c.rows))

@@ -64,6 +64,10 @@ impl TextConsole {
         &self.fb
     }
 
+    pub fn framebuffer_mut(&mut self) -> &mut Framebuffer {
+        &mut self.fb
+    }
+
     pub fn clear(&mut self) {
         let (w, h) = (self.fb.width, self.fb.height);
         self.fb.fill_rect(0, 0, w, h, self.bg);
