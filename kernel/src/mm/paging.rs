@@ -109,10 +109,16 @@ fn new_table() -> Result<u64, MapError> {
 
 /// Returns the table referenced by `entry`, creating it if needed.
 fn next_level(entry: &mut u64) -> Result<u64, MapError> {
+    next_level_with(entry, 0)
+}
+
+/// Like `next_level`, adding `extra` (USER for user mappings) to a newly
+/// created intermediate entry.
+fn next_level_with(entry: &mut u64, extra: u64) -> Result<u64, MapError> {
     if *entry & PRESENT == 0 {
         let t = new_table()?;
         // Intermediate entries are permissive; leaves decide the rights.
-        *entry = t | PRESENT | WRITABLE;
+        *entry = t | PRESENT | WRITABLE | extra;
     } else if *entry & HUGE != 0 {
         return Err(MapError::HugePageInTheWay);
     }
@@ -121,9 +127,10 @@ fn next_level(entry: &mut u64) -> Result<u64, MapError> {
 
 fn map_4k_in(pml4: u64, virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
     let [i4, i3, i2, i1] = indices(virt);
-    let pdpt = next_level(&mut table(pml4)[i4])?;
-    let pd = next_level(&mut table(pdpt)[i3])?;
-    let pt = next_level(&mut table(pd)[i2])?;
+    let extra = flags & USER;
+    let pdpt = next_level_with(&mut table(pml4)[i4], extra)?;
+    let pd = next_level_with(&mut table(pdpt)[i3], extra)?;
+    let pt = next_level_with(&mut table(pd)[i2], extra)?;
     let e = &mut table(pt)[i1];
     if *e & PRESENT != 0 {
         return Err(MapError::AlreadyMapped);
@@ -379,4 +386,201 @@ pub fn nx_enabled() -> bool {
 /// Physical address of the kernel's top-level table.
 pub fn kernel_root() -> u64 {
     kernel_pml4()
+}
+
+// --- user address spaces ----------------------------------------------------
+
+/// Available-to-software PTE bit: the frame is not owned by this address
+/// space and must not be freed with it (shared mappings such as a future
+/// framebuffer mapping for Lumi).
+pub const BORROWED: u64 = 1 << 9;
+
+const USER_HALF_END: u64 = 0x0000_8000_0000_0000;
+
+/// Permissions of a user page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserKind {
+    /// Readable and executable, not writable.
+    Code,
+    /// Read-only, not executable.
+    ReadOnly,
+    /// Readable and writable, not executable.
+    Data,
+}
+
+fn user_flags(kind: UserKind) -> u64 {
+    let base = PRESENT | USER;
+    match kind {
+        UserKind::Code => base,
+        UserKind::ReadOnly => base | nx(),
+        UserKind::Data => base | WRITABLE | nx(),
+    }
+}
+
+/// A process address space: its own lower half, the shared kernel half.
+pub struct AddressSpace {
+    pml4: u64,
+}
+
+impl AddressSpace {
+    /// Creates an empty user address space. The kernel half points at the
+    /// same PDPTs as the kernel tables, so kernel mappings made later are
+    /// visible in every process.
+    pub fn new() -> Result<Self, MapError> {
+        let _guard = LOCK.lock();
+        let pml4 = new_table()?;
+        let kernel = table(kernel_pml4());
+        let t = table(pml4);
+        t[256..].copy_from_slice(&kernel[256..]);
+        Ok(Self { pml4 })
+    }
+
+    pub fn root(&self) -> u64 {
+        self.pml4
+    }
+
+    /// Maps one user page. `virt` must be in the user range.
+    pub fn map(&self, virt: u64, phys: u64, kind: UserKind) -> Result<(), MapError> {
+        assert!(virt < USER_HALF_END, "user mapping in the kernel half");
+        let _guard = LOCK.lock();
+        map_4k_in(self.pml4, virt, phys, user_flags(kind))
+    }
+
+    /// Allocates zeroed frames and maps `pages` pages starting at `virt`.
+    pub fn map_new(&self, virt: u64, pages: u64, kind: UserKind) -> Result<(), MapError> {
+        for i in 0..pages {
+            let phys = frame::alloc_zeroed().ok_or(MapError::OutOfMemory)?;
+            if let Err(e) = self.map(virt + i * PAGE_SIZE, phys, kind) {
+                frame::free(phys);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Physical address and flags for a user address.
+    pub fn translate(&self, virt: u64) -> Option<(u64, u64)> {
+        let _guard = LOCK.lock();
+        translate_in(self.pml4, virt)
+    }
+
+    /// True if `[addr, addr + len)` is mapped for user access (and
+    /// writable, if `write`). Used to validate system call pointers.
+    pub fn check_user_range(&self, addr: u64, len: u64, write: bool) -> bool {
+        if len == 0 {
+            return true;
+        }
+        let Some(end) = addr.checked_add(len) else {
+            return false;
+        };
+        if addr < velora_abi::USER_MIN || end > velora_abi::USER_MAX {
+            return false;
+        }
+        let _guard = LOCK.lock();
+        let mut page = addr & !(PAGE_SIZE - 1);
+        while page < end {
+            match translate_in(self.pml4, page) {
+                Some((_, f)) if f & USER != 0 && (!write || f & WRITABLE != 0) => {}
+                _ => return false,
+            }
+            page += PAGE_SIZE;
+        }
+        true
+    }
+
+    /// Makes this address space the active one.
+    ///
+    /// # Safety
+    /// Interrupts disabled. The kernel half is shared, so kernel code and
+    /// stacks stay mapped.
+    pub unsafe fn activate(&self) {
+        unsafe { cpu::write_cr3(self.pml4) }
+    }
+
+    /// Number of user pages mapped (for diagnostics and tests).
+    pub fn user_pages(&self) -> u64 {
+        let _guard = LOCK.lock();
+        let mut n = 0;
+        walk_user(self.pml4, &mut |_| n += 1);
+        n
+    }
+}
+
+/// Calls `f(leaf)` for every present 4 KiB leaf in the lower half.
+fn walk_user(pml4: u64, f: &mut impl FnMut(u64)) {
+    for i4 in 0..256 {
+        let e4 = table(pml4)[i4];
+        if e4 & PRESENT == 0 {
+            continue;
+        }
+        for i3 in 0..512 {
+            let e3 = table(e4 & ADDR_MASK)[i3];
+            if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+                continue;
+            }
+            for i2 in 0..512 {
+                let e2 = table(e3 & ADDR_MASK)[i2];
+                if e2 & PRESENT == 0 || e2 & HUGE != 0 {
+                    continue;
+                }
+                for &e in table(e2 & ADDR_MASK).iter() {
+                    if e & PRESENT != 0 {
+                        f(e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn free_table(phys: u64) {
+    frame::free(phys);
+    TABLE_FRAMES.fetch_sub(1, Ordering::Relaxed);
+}
+
+impl Drop for AddressSpace {
+    /// Frees every owned user frame and every lower-half page table.
+    /// The address space must not be active.
+    fn drop(&mut self) {
+        let _guard = LOCK.lock();
+        assert_ne!(
+            cpu::read_cr3() & ADDR_MASK,
+            self.pml4,
+            "dropping the active address space"
+        );
+        walk_user(self.pml4, &mut |leaf| {
+            if leaf & BORROWED == 0 {
+                frame::free(leaf & ADDR_MASK);
+            }
+        });
+        for i4 in 0..256 {
+            let e4 = table(self.pml4)[i4];
+            if e4 & PRESENT == 0 {
+                continue;
+            }
+            for i3 in 0..512 {
+                let e3 = table(e4 & ADDR_MASK)[i3];
+                if e3 & PRESENT == 0 || e3 & HUGE != 0 {
+                    continue;
+                }
+                for i2 in 0..512 {
+                    let e2 = table(e3 & ADDR_MASK)[i2];
+                    if e2 & PRESENT != 0 && e2 & HUGE == 0 {
+                        free_table(e2 & ADDR_MASK);
+                    }
+                }
+                free_table(e3 & ADDR_MASK);
+            }
+            free_table(e4 & ADDR_MASK);
+        }
+        free_table(self.pml4);
+    }
+}
+
+/// Switches to the kernel tables (before freeing a process's tables).
+///
+/// # Safety
+/// Interrupts disabled.
+pub unsafe fn activate_kernel() {
+    unsafe { cpu::write_cr3(kernel_pml4()) }
 }
