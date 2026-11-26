@@ -112,6 +112,10 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     }
     drivers::init();
     tty::init();
+    match power::init(&acpi::get().madt) {
+        Ok(what) => kok!("power management: {}", what),
+        Err(e) => kwarn!("power management: {}", e),
+    }
     fs::init();
     fs::automount();
     net::init();

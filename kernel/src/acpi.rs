@@ -96,6 +96,20 @@ pub fn dsdt() -> Option<&'static [u8]> {
     table_at(a.fadt.dsdt).ok().map(|(b, _)| b)
 }
 
+/// SLP_TYP values of the S5 (soft off) state from the DSDT or, failing
+/// that, an SSDT.
+pub fn s5() -> Option<(u8, u8)> {
+    if let Some(v) = dsdt().and_then(parse::find_s5) {
+        return Some(v);
+    }
+    get()
+        .tables
+        .iter()
+        .filter(|(sig, _)| sig == b"SSDT")
+        .filter_map(|(_, phys)| table_at(*phys).ok())
+        .find_map(|(bytes, _)| parse::find_s5(bytes))
+}
+
 pub fn get() -> &'static Acpi {
     assert!(READY.load(Ordering::SeqCst), "ACPI used before init");
     // SAFETY: read-only after init.
