@@ -52,8 +52,10 @@ pub(super) struct Process {
     /// Next address for non-fixed `mmap` requests.
     pub mmap_next: u64,
     pub files: FdTable,
-    /// User and group the process acts as (root until users arrive).
+    /// User and group the process acts as.
     pub cred: Cred,
+    /// Working directory (normalised absolute path).
+    pub cwd: String,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +66,7 @@ pub struct ProcessInfo {
     pub threads: usize,
     pub exited: Option<i64>,
     pub user_pages: u64,
+    pub uid: u32,
 }
 
 impl Process {
@@ -78,6 +81,7 @@ impl Process {
                 ProcState::Alive => None,
             },
             user_pages: self.aspace.as_ref().map(|a| a.user_pages()).unwrap_or(0),
+            uid: self.cred.uid,
         }
     }
 }
@@ -153,7 +157,10 @@ pub fn spawn_user(
         let pid = s.next_pid;
         s.next_pid += 1;
         let parent = s.threads[&s.current].pid;
-        let cred = s.processes.get(&parent).map_or(Cred::ROOT, |p| p.cred);
+        let (cred, files, cwd) = match s.processes.get(&parent) {
+            Some(p) => (p.cred, p.files.inherit_std(), p.cwd.clone()),
+            None => (Cred::ROOT, FdTable::standard(), String::from("/")),
+        };
         s.processes.insert(
             pid,
             Process {
@@ -167,8 +174,9 @@ pub fn spawn_user(
                 exit_waiters: Vec::new(),
                 detached: false,
                 mmap_next: MMAP_BASE,
-                files: FdTable::standard(),
+                files,
                 cred,
+                cwd,
             },
         );
         match new_thread(
@@ -239,9 +247,10 @@ fn become_zombie(s: &mut Sched, pid: Pid, status: i64) {
         return;
     }
     p.state = ProcState::Zombie(status);
-    // Close its files (the VFS lock may be taken under the scheduler lock).
-    drop(core::mem::take(&mut p.files));
+    // Its files are closed after the next switch, outside the lock.
+    let files = core::mem::take(&mut p.files);
     let waiters = core::mem::take(&mut p.exit_waiters);
+    s.closing.push(files);
     for w in waiters {
         make_ready(s, w);
     }
@@ -355,5 +364,42 @@ pub fn fd_remove(fd: u64) -> Option<FileRef> {
     with(|s| {
         let pid = s.threads[&s.current].pid;
         s.processes.get_mut(&pid)?.files.remove(fd)
+    })
+}
+
+fn with_current<R>(f: impl FnOnce(&mut Process) -> R) -> Option<R> {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        s.processes.get_mut(&pid).map(f)
+    })
+}
+
+/// Puts `f` at descriptor `fd` of the current process. Returns the file
+/// that was there (to be dropped outside the lock), or `None` if `fd` is
+/// out of range.
+pub fn fd_set(fd: u64, f: FileRef) -> Option<Option<FileRef>> {
+    with_current(|p| p.files.set(fd, f)).flatten()
+}
+
+/// Working directory of the current process ("/" for kernel threads).
+pub fn current_cwd() -> String {
+    with_current(|p| p.cwd.clone()).unwrap_or_else(|| String::from("/"))
+}
+
+pub fn set_cwd(path: String) {
+    with_current(|p| p.cwd = path);
+}
+
+pub fn set_cred(cred: Cred) {
+    with_current(|p| p.cred = cred);
+}
+
+/// User id of a living process.
+pub fn uid_of(pid: Pid) -> Option<u32> {
+    with(|s| {
+        s.processes
+            .get(&pid)
+            .filter(|p| p.state == ProcState::Alive)
+            .map(|p| p.cred.uid)
     })
 }

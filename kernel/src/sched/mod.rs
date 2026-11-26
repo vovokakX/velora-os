@@ -14,8 +14,8 @@ mod wait;
 #[cfg_attr(not(feature = "ktest"), allow(unused_imports))]
 pub use process::{
     FLAT_DATA_BASE, Personality, ProcessInfo, USER_STACK_PAGES, USER_STACK_TOP, current_cred,
-    fd_get, fd_install, fd_remove, kill, parent_of, reserve_mmap_range, spawn_flat, spawn_user,
-    wait_pid,
+    current_cwd, fd_get, fd_install, fd_remove, fd_set, kill, parent_of, reserve_mmap_range,
+    set_cred, set_cwd, spawn_flat, spawn_user, uid_of, wait_pid,
 };
 pub use wait::WaitQueue;
 
@@ -96,6 +96,9 @@ struct Sched {
     next_tid: Tid,
     next_pid: Pid,
     slice_left: u32,
+    /// Files of exited processes, closed outside the scheduler lock
+    /// (closing a pipe end wakes threads, which takes the lock).
+    closing: Vec<crate::fs::FdTable>,
 }
 
 static SCHED: SpinLock<Option<Sched>> = SpinLock::new(None);
@@ -138,6 +141,7 @@ pub fn init(main_stack: KernelStack) {
         next_tid: 2,
         next_pid: 1,
         slice_left: TIME_SLICE,
+        closing: Vec::new(),
     };
     s.threads.insert(1, kmain);
     gdt::set_rsp0(main_stack.top);
@@ -289,7 +293,9 @@ extern "C" fn velora_finish_switch() {
 fn finish_switch() {
     let mut stacks = Vec::new();
     let mut spaces = Vec::new();
+    let mut closing = Vec::new();
     with(|s| {
+        closing = core::mem::take(&mut s.closing);
         let current = s.current;
         let dead: Vec<Tid> = s.dead.iter().copied().filter(|&t| t != current).collect();
         s.dead.retain(|&t| t == current);
@@ -319,6 +325,7 @@ fn finish_switch() {
         kstack::free(st);
     }
     drop(spaces);
+    drop(closing);
 }
 
 /// Called from the trampoline when a thread's entry function returns.
