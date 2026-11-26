@@ -14,6 +14,7 @@ use core::arch::asm;
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+mod irq;
 mod mm;
 
 struct Test {
@@ -61,13 +62,22 @@ static TESTS: &[Test] = tests![
     mm::bootloader_memory_released,
     mm::back_buffer_scrolls_like_screen,
     mm::idle_memory_below_64_mib,
+    // stage 3: interrupts, timer, keyboard
+    irq::acpi_tables_found,
+    irq::local_apic_enabled,
+    irq::legacy_pic_masked,
+    irq::keyboard_irq_routed,
+    irq::tsc_calibrated,
+    irq::timer_ticks_at_expected_rate,
+    irq::handler_registry_dispatches,
+    irq::keyboard_input,
+    irq::no_stray_interrupts,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
 
-pub fn run(tsc_start: u64) -> ! {
-    let cycles = crate::arch::cpu::rdtsc().wrapping_sub(tsc_start);
-    kprintln!("ktest: early boot took {} M TSC cycles", cycles / 1_000_000);
+pub fn run() -> ! {
+    kprintln!("ktest: boot took {} ms", crate::time::uptime_ms());
     kprintln!("ktest: running {} tests", TESTS.len());
     for t in TESTS {
         kprint!("ktest: {} ... ", t.name);

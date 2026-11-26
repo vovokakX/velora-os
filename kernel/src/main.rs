@@ -7,16 +7,22 @@
 
 extern crate alloc;
 
+mod acpi;
 mod arch;
 mod boot;
 mod console;
+mod drivers;
+mod input;
+#[cfg(not(feature = "ktest"))]
+mod kbdtest;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod mm;
 mod panic;
 mod sync;
+mod time;
 
-use arch::x86_64::serial;
+use arch::x86_64::{apic, ioapic, pic, serial};
 use boot::limine;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -25,14 +31,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Size of the kernel's main stack (the boot stack belongs to Limine).
 const MAIN_STACK_PAGES: u64 = 16;
 
-static BOOT_TSC: AtomicU64 = AtomicU64::new(0);
 static SCREEN: AtomicU64 = AtomicU64::new(0);
 
 /// Entry point, jumped to by Limine with interrupts disabled and a 64 KiB
 /// stack in bootloader-reclaimable memory.
 #[unsafe(no_mangle)]
 extern "C" fn kmain() -> ! {
-    BOOT_TSC.store(arch::cpu::rdtsc(), Ordering::Relaxed);
+    time::mark_boot();
     serial::init();
 
     if !limine::BASE_REVISION.is_supported() {
@@ -85,24 +90,62 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     kok!("released {} KiB of bootloader memory", reclaimed / 1024);
 
     report_boot_info();
+    init_interrupts();
 
     #[cfg(feature = "ktest")]
-    ktest::run(BOOT_TSC.load(Ordering::Relaxed));
+    ktest::run();
 
     #[cfg(not(feature = "ktest"))]
-    idle()
+    {
+        kok!("boot complete in {} ms", time::uptime_ms());
+        kbdtest::run()
+    }
 }
 
-#[cfg(not(feature = "ktest"))]
-fn idle() -> ! {
-    let cycles = arch::cpu::rdtsc().wrapping_sub(BOOT_TSC.load(Ordering::Relaxed));
+/// ACPI, interrupt controllers, timer and keyboard; ends with interrupts on.
+fn init_interrupts() {
+    let acpi = acpi::init().unwrap_or_else(|e| panic!("ACPI: {}", e));
+    let madt = &acpi.madt;
     kok!(
-        "boot complete ({} M TSC cycles since kernel entry)",
-        cycles / 1_000_000
+        "ACPI {} tables (rev {}), {} CPU(s), {} I/O APIC(s)",
+        acpi.tables.len(),
+        acpi.rsdp.revision,
+        madt.lapics.iter().filter(|l| l.enabled).count(),
+        madt.ioapics.len()
     );
-    kprintln!("Stage 2 kernel: nothing else to run yet. System idle.");
-    // Interrupts are not enabled until stage 3, so this halts for good.
-    arch::cpu::halt_forever();
+    pic::disable();
+    let nmis: alloc::vec::Vec<apic::LintNmi> = madt
+        .nmis
+        .iter()
+        .map(|n| apic::LintNmi {
+            lint: n.lint,
+            active_low: n.polarity == velora_acpi::Polarity::ActiveLow,
+            level: n.trigger == velora_acpi::Trigger::Level,
+        })
+        .collect();
+    apic::init(madt.lapic_address, &nmis).unwrap_or_else(|e| panic!("local APIC: {}", e));
+    ioapic::init(madt).unwrap_or_else(|e| panic!("I/O APIC: {}", e));
+    kok!(
+        "local APIC {} (id {}, {} mode), legacy PIC masked",
+        apic::version(),
+        apic::id(),
+        if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
+    );
+    match time::init() {
+        Ok((tsc_hz, per_ms)) => kok!(
+            "timer {} Hz; TSC {}.{:02} GHz, APIC timer {} kHz",
+            time::TICK_HZ,
+            tsc_hz / 1_000_000_000,
+            tsc_hz / 10_000_000 % 100,
+            per_ms
+        ),
+        Err(e) => panic!("timer calibration: {}", e),
+    }
+    match drivers::ps2::init(madt) {
+        Ok(()) => kok!("PS/2 keyboard (layouts EN, RU; Alt+Shift switches)"),
+        Err(e) => kwarn!("PS/2 keyboard: {}", e),
+    }
+    arch::cpu::enable_interrupts();
 }
 
 fn report_boot_info() {

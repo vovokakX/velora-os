@@ -183,3 +183,55 @@ Limine data is copied into `BootInfo` and the kernel moves to its own stack;
 any later use of a Limine response panics instead of silently reading reused
 memory. Upper-half PML4 entries are created up front (1 MiB) so the kernel
 half can be shared by all future address spaces.
+
+## D11. Прерывания: LAPIC + IOAPIC, 8259 отключён / Interrupts: LAPIC + IOAPIC, 8259 disabled
+
+**2026-11-26**
+
+**RU.** Контроллеры 8259 перенастраиваются на векторы 0x70–0x7f и полностью
+маскируются: ложные прерывания от них не путаются с исключениями. Все
+прерывания идут через локальный APIC и IOAPIC по таблице MADT, с учётом
+переназначений ISA-IRQ (например, IRQ0 → GSI2 в QEMU). Поддерживаются режимы
+xAPIC (MMIO) и x2APIC (MSR), какой оставила прошивка. Без APIC ядро не
+запускается: на x86_64 он есть всегда.
+
+**EN.** The 8259 PICs are remapped to vectors 0x70–0x7f and fully masked so
+their spurious interrupts cannot look like exceptions. All interrupts go
+through the local APIC and the I/O APICs from the MADT, honouring ISA IRQ
+overrides (e.g. IRQ0 → GSI2 in QEMU). Both xAPIC (MMIO) and x2APIC (MSR) are
+supported, whichever the firmware left enabled. The kernel requires an APIC;
+every x86_64 system has one.
+
+## D12. Время: TSC + таймер APIC 100 Гц, калибровка по PIT / Time: TSC + 100 Hz APIC timer, PIT calibration
+
+**2026-11-26**
+
+**RU.** TSC и таймер APIC калибруются за 50 мс по каналу 2 PIT, без
+прерываний. Точное время с момента загрузки берётся из TSC, тик таймера
+(100 Гц) нужен для сна и будущего планировщика. 100 Гц выбрано ради малого
+числа пробуждений в простое; если планировщику понадобится больше, частота
+меняется одной константой. Если PIT отсутствует, загрузка останавливается с
+понятной ошибкой. Запасной путь через CPUID 0x15 запланирован.
+
+**EN.** The TSC and the APIC timer are calibrated over 50 ms against PIT
+channel 2, without interrupts. Precise time since boot comes from the TSC;
+the 100 Hz tick is used for sleeping and the future scheduler. 100 Hz keeps
+idle wakeups low; the scheduler can raise it by changing one constant. If
+there is no PIT, boot stops with a clear error; a CPUID 0x15 fallback is
+planned.
+
+## D13. Клавиатура: общий crate ввода и раскладки EN/RU / Keyboard: shared input crate and EN/RU layouts
+
+**2026-11-26**
+
+**RU.** Декодер скан-кодов, модификаторы и раскладки вынесены в
+`drivers/input` и проверяются на хосте. Драйвер PS/2 только передаёт байты.
+Будущий драйвер USB HID будет выдавать те же `KeyCode`, поэтому раскладки и
+обработка ввода не изменятся. Раскладки EN и RU переключаются по Alt+Shift.
+События кладутся в очередь ядра; позже из неё будут читать `/dev/input` и Lumi.
+
+**EN.** Scancode decoding, modifiers and layouts live in `drivers/input` and
+are tested on the host; the PS/2 driver only forwards bytes. A future USB HID
+driver will produce the same `KeyCode`s, so layouts and input handling stay
+the same. EN and RU layouts switch with Alt+Shift. Events go into a kernel
+queue that `/dev/input` and Lumi will read later.

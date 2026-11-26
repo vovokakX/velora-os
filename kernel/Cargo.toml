@@ -18,3 +18,5 @@ ktest = []
 
 [dependencies]
 velora-mm = { path = "mm" }
+velora-acpi = { path = "acpi" }
+velora-input = { path = "../drivers/input" }

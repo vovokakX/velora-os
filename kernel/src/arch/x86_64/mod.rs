@@ -1,9 +1,14 @@
 //! x86_64 architecture support.
 
+pub mod apic;
 pub mod cpu;
 pub mod exceptions;
 pub mod gdt;
 pub mod idt;
+pub mod ioapic;
+pub mod irq;
+pub mod pic;
+pub mod pit;
 pub mod port;
 pub mod qemu;
 pub mod serial;
