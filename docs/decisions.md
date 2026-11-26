@@ -392,3 +392,23 @@ stage 7, once the file system load is known.
 ECAM or ports; tests use a simulated bus with bridges and 64-bit BARs, so the
 fragile parts (BAR sizing, bridges, looping capability lists) are tested on
 the host.
+
+## D23. Основной CI на QEMU 9.1 (Fedora) / Main CI on QEMU 9.1 (Fedora)
+
+**2026-11-26**
+
+**RU.** С QEMU 8.2 из Ubuntu 24.04 драйвер virtio-blk не получает ответов (#19).
+С QEMU 9.1 и 11.1 тот же код проходит все тесты. Пока причина не найдена,
+основная проверка CI и сборка релиза выполняются в контейнере Fedora 41
+(QEMU 9.1, KVM). Проблема записана в известных проблемах. В тестовом
+скрипте есть переменные `VELORA_QEMU_EXTRA` (дополнительные аргументы QEMU,
+например трассировка) и `VELORA_VIRTIO_OPTS` (параметры устройства
+virtio-blk) для таких расследований.
+
+**EN.** With QEMU 8.2 from Ubuntu 24.04 the virtio-blk driver gets no answers
+(#19); with QEMU 9.1 and 11.1 the same code passes every test. Until the cause
+is found, the main CI check and the release build run in a Fedora 41 container
+(QEMU 9.1, KVM), and the problem is listed as a known issue. The test runner
+accepts `VELORA_QEMU_EXTRA` (extra QEMU arguments, e.g. tracing) and
+`VELORA_VIRTIO_OPTS` (virtio-blk device options) for such investigations.
+

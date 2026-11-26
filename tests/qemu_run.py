@@ -7,7 +7,9 @@ Modes:
   boot   Boot velora.iso and wait until the kernel reports boot complete.
          Measures the time from QEMU start to that line.
 
-Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL.
+Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL,
+VELORA_QEMU_EXTRA (extra QEMU arguments, e.g. "-trace virtio*"),
+VELORA_VIRTIO_OPTS (appended to the virtio-blk device, e.g. ",ioeventfd=off").
 """
 
 import argparse

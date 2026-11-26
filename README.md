@@ -77,6 +77,8 @@ qemu-system-x86_64 -M q35 -m 256M \
 ```
 
 В Windows прошивка лежит в `C:\Program Files\qemu\share\edk2-x86_64-code.fd`.
+Для дисков virtio-blk нужен QEMU 9.1 или новее (с 8.2 есть известная
+проблема, #19).
 
 ### Дальнейшие этапы
 
@@ -161,6 +163,8 @@ qemu-system-x86_64 -M q35 -m 256M \
 ```
 
 On Windows the firmware is at `C:\Program Files\qemu\share\edk2-x86_64-code.fd`.
+virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
+#19).
 
 ### Next stages
 
