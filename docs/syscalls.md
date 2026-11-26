@@ -64,8 +64,8 @@
 | 35 | `chmod(path, path_len, mode)` | права файла; владелец или root | `EPERM`, `EROFS`, `ENOENT` |
 | 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
-| 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
 | 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
+| 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
