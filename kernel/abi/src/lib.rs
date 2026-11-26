@@ -22,8 +22,32 @@ pub mod nr {
     pub const MMAP: u64 = 7;
     /// munmap(addr, len) -> 0
     pub const MUNMAP: u64 = 8;
+    /// open(path, path_len, flags, mode) -> fd
+    pub const OPEN: u64 = 9;
+    /// close(fd) -> 0
+    pub const CLOSE: u64 = 10;
+    /// seek(fd, offset: i64, whence) -> new offset
+    pub const SEEK: u64 = 11;
+    /// stat(path, path_len, out: *mut Stat) -> 0
+    pub const STAT: u64 = 12;
+    /// readdir(fd, buf, len) -> bytes written (packed `DirentHeader` + name)
+    pub const READDIR: u64 = 13;
+    /// mkdir(path, path_len, mode) -> 0
+    pub const MKDIR: u64 = 14;
+    /// unlink(path, path_len) -> 0 (files and empty directories)
+    pub const UNLINK: u64 = 15;
+    /// rename(old, old_len, new, new_len) -> 0
+    pub const RENAME: u64 = 16;
     pub const CLOCK_GETTIME: u64 = 21;
     pub const SLEEP_MS: u64 = 25;
+    /// fstat(fd, out: *mut Stat) -> 0
+    pub const FSTAT: u64 = 26;
+    /// sync() -> 0: writes all cached file system data to the disks
+    pub const SYNC: u64 = 27;
+    /// ftruncate(fd, size) -> 0
+    pub const FTRUNCATE: u64 = 28;
+    /// statfs(path, path_len, out: *mut FsStat) -> 0
+    pub const STATFS: u64 = 29;
 }
 
 /// Error numbers (returned negated).
@@ -40,10 +64,114 @@ pub mod errno {
     pub const EAGAIN: i64 = 11;
     pub const ENOMEM: i64 = 12;
     pub const EFAULT: i64 = 14;
+    pub const EACCES: i64 = 13;
+    pub const EBUSY: i64 = 16;
     pub const EEXIST: i64 = 17;
+    pub const EXDEV: i64 = 18;
+    pub const ENOTDIR: i64 = 20;
+    pub const EISDIR: i64 = 21;
     pub const EINVAL: i64 = 22;
+    pub const EMFILE: i64 = 24;
+    pub const EFBIG: i64 = 27;
+    pub const ENOSPC: i64 = 28;
+    pub const ESPIPE: i64 = 29;
+    pub const EROFS: i64 = 30;
+    pub const ENAMETOOLONG: i64 = 36;
     pub const ENOSYS: i64 = 38;
+    pub const ENOTEMPTY: i64 = 39;
+    /// The file system found inconsistent metadata (Linux: EUCLEAN).
+    pub const EUCLEAN: i64 = 117;
 }
+
+/// `open` flags. The access mode is the low two bits.
+pub mod open {
+    pub const READ: u64 = 0;
+    pub const WRITE: u64 = 1;
+    pub const READ_WRITE: u64 = 2;
+    pub const ACCESS_MASK: u64 = 3;
+    /// Create the file if it does not exist.
+    pub const CREATE: u64 = 0o100;
+    /// With CREATE: fail with EEXIST if the file exists.
+    pub const EXCLUSIVE: u64 = 0o200;
+    /// Cut the file to length 0.
+    pub const TRUNCATE: u64 = 0o1000;
+    /// Every write goes to the end of the file.
+    pub const APPEND: u64 = 0o2000;
+    /// Fail with ENOTDIR unless the path is a directory.
+    pub const DIRECTORY: u64 = 0o200000;
+}
+
+/// `seek` origins.
+pub mod whence {
+    pub const SET: u64 = 0;
+    pub const CURRENT: u64 = 1;
+    pub const END: u64 = 2;
+}
+
+/// File type bits of `Stat::mode` (POSIX values).
+pub mod mode {
+    pub const TYPE_MASK: u32 = 0o170000;
+    pub const DIR: u32 = 0o040000;
+    pub const FILE: u32 = 0o100000;
+    pub const CHAR_DEVICE: u32 = 0o020000;
+    pub const BLOCK_DEVICE: u32 = 0o060000;
+    /// Permission bits (rwx for owner, group, others) plus setuid/setgid/sticky.
+    pub const PERM_MASK: u32 = 0o7777;
+}
+
+/// File information written by `stat` and `fstat`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stat {
+    /// Device (mount) number and inode number: together they identify a file.
+    pub dev: u64,
+    pub ino: u64,
+    /// Type and permission bits, see [`mode`].
+    pub mode: u32,
+    pub nlink: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub size: u64,
+    /// Space used on disk, in bytes.
+    pub allocated: u64,
+    /// Seconds since 1970-01-01 UTC.
+    pub mtime: u64,
+    pub ctime: u64,
+}
+
+/// File system information written by `statfs`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FsStat {
+    pub block_size: u64,
+    pub blocks: u64,
+    pub free_blocks: u64,
+    pub inodes: u64,
+    pub free_inodes: u64,
+    /// File system type, NUL-padded ASCII ("velorafs", "fat32", ...).
+    pub fs_type: [u8; 16],
+    pub read_only: u64,
+}
+
+/// One `readdir` record: the header, then `name_len` bytes of UTF-8 name,
+/// then padding to a multiple of 8 (`rec_len` covers all of it).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DirentHeader {
+    pub ino: u64,
+    pub rec_len: u16,
+    pub name_len: u16,
+    /// File type bits (`mode::DIR`, `mode::FILE`, ...) shifted right by 12.
+    pub kind: u8,
+    pub _pad: [u8; 3],
+}
+
+/// Most file descriptors one process can have open.
+pub const MAX_FDS: usize = 64;
+/// Longest path accepted by the file system calls.
+pub const MAX_PATH: usize = 4096;
+/// Longest file name (one path component), in bytes.
+pub const MAX_NAME: usize = 255;
 
 /// Clock ids for `clock_gettime`.
 pub mod clock {
@@ -86,8 +214,8 @@ pub mod auxv {
     pub const ENTRY: u64 = 9;
 }
 
-/// Standard file descriptors (until the VFS in stage 7 they are fixed:
-/// 0 = keyboard, 1 and 2 = console).
+/// Standard file descriptors. Every process starts with all three open on
+/// the console (0 reads the keyboard, 1 and 2 write to the screen).
 pub const STDIN: u64 = 0;
 pub const STDOUT: u64 = 1;
 pub const STDERR: u64 = 2;
@@ -123,6 +251,9 @@ mod tests {
     fn layout_and_constants() {
         assert_eq!(core::mem::size_of::<Timespec>(), 16);
         assert_eq!(fault_exit_status(14), 142);
+        assert_eq!(core::mem::size_of::<Stat>(), 64);
+        assert_eq!(core::mem::size_of::<DirentHeader>(), 16);
+        assert_eq!(core::mem::size_of::<FsStat>(), 64);
     }
 
     #[test]
@@ -137,8 +268,20 @@ mod tests {
             nr::WAIT,
             nr::MMAP,
             nr::MUNMAP,
+            nr::OPEN,
+            nr::CLOSE,
+            nr::SEEK,
+            nr::STAT,
+            nr::READDIR,
+            nr::MKDIR,
+            nr::UNLINK,
+            nr::RENAME,
             nr::CLOCK_GETTIME,
             nr::SLEEP_MS,
+            nr::FSTAT,
+            nr::SYNC,
+            nr::FTRUNCATE,
+            nr::STATFS,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "duplicate syscall number {a}");
