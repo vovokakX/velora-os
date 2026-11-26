@@ -363,16 +363,28 @@ pub fn yield_now() {
 }
 
 /// Puts the current thread to sleep for at least `ms` milliseconds.
+///
+/// Sleeping is counted in timer ticks, but the tick and the TSC are
+/// calibrated separately and can disagree by a few percent, so the TSC
+/// decides when the time is really up.
 pub fn sleep_ms(ms: u64) {
-    let ticks = (ms * time::TICK_HZ).div_ceil(1000).max(1);
+    let deadline = cpu::rdtsc() + time::tsc_hz() * ms / 1000;
     let was = cpu::irq_save();
-    with(|s| {
-        let now = time::ticks();
-        let t = s.threads.get_mut(&s.current).unwrap();
-        t.state = State::Sleeping;
-        t.wake_at = Some(now + ticks);
-    });
-    schedule();
+    loop {
+        let now_tsc = cpu::rdtsc();
+        if now_tsc >= deadline {
+            break;
+        }
+        let left_ms = time::tsc_to_ns(deadline - now_tsc).div_ceil(1_000_000);
+        let ticks = (left_ms * time::TICK_HZ).div_ceil(1000).max(1);
+        with(|s| {
+            let now = time::ticks();
+            let t = s.threads.get_mut(&s.current).unwrap();
+            t.state = State::Sleeping;
+            t.wake_at = Some(now + ticks);
+        });
+        schedule();
+    }
     cpu::irq_restore(was);
 }
 
