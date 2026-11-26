@@ -13,8 +13,9 @@ mod wait;
 
 #[cfg_attr(not(feature = "ktest"), allow(unused_imports))]
 pub use process::{
-    FLAT_DATA_BASE, Personality, ProcessInfo, USER_STACK_PAGES, USER_STACK_TOP, kill, parent_of,
-    reserve_mmap_range, spawn_flat, spawn_user, wait_pid,
+    FLAT_DATA_BASE, Personality, ProcessInfo, USER_STACK_PAGES, USER_STACK_TOP, current_cred,
+    fd_get, fd_install, fd_remove, kill, parent_of, reserve_mmap_range, spawn_flat, spawn_user,
+    wait_pid,
 };
 pub use wait::WaitQueue;
 

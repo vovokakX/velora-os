@@ -10,7 +10,7 @@
 //! at `argc`, followed by `argv[]`, NULL, `envp[]`, NULL and the auxiliary
 //! vector, with the strings above them.
 
-use crate::initramfs;
+use crate::fs;
 use crate::mm::PAGE_SIZE;
 use crate::mm::paging::{AddressSpace, UserKind};
 use crate::sched::{self, Personality, Pid, Priority};
@@ -30,6 +30,10 @@ pub enum ExecError {
     Unsupported(&'static str),
     TooManyArgs,
     OutOfMemory,
+    /// No execute permission (or the path is a directory).
+    Access,
+    /// The file could not be read.
+    Fs(velora_vfs::FsError),
 }
 
 impl ExecError {
@@ -40,6 +44,8 @@ impl ExecError {
             ExecError::NotExecutable | ExecError::Invalid(_) | ExecError::Unsupported(_) => ENOEXEC,
             ExecError::TooManyArgs => E2BIG,
             ExecError::OutOfMemory => ENOMEM,
+            ExecError::Access => EACCES,
+            ExecError::Fs(e) => e.errno(),
         }
     }
 }
@@ -178,12 +184,19 @@ fn build_stack(
     Ok(rsp)
 }
 
-/// Starts the program at `path` (in the initramfs) with the given
-/// arguments and environment. `argv[0]` should be the program path.
+/// Starts the program at `path` with the given arguments and environment.
+/// `argv[0]` should be the program path. The caller needs execute
+/// permission on the file.
 pub fn spawn(path: &str, argv: &[&str], envp: &[&str]) -> Result<Pid, ExecError> {
-    let image = initramfs::read(path).ok_or(ExecError::NotFound)?;
+    use velora_vfs::FsError;
+    let image = fs::read_program(path, &sched::current_cred()).map_err(|e| match e {
+        FsError::NotFound | FsError::NotDir => ExecError::NotFound,
+        FsError::Access | FsError::IsDir => ExecError::Access,
+        FsError::NoMemory => ExecError::OutOfMemory,
+        e => ExecError::Fs(e),
+    })?;
     let aspace = AddressSpace::new().map_err(|_| ExecError::OutOfMemory)?;
-    let loaded = load_image(image, &aspace)?;
+    let loaded = load_image(&image, &aspace)?;
     aspace
         .map_new(STACK_BOTTOM, sched::USER_STACK_PAGES, UserKind::Data)
         .map_err(|_| ExecError::OutOfMemory)?;

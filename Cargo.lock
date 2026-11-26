@@ -36,6 +36,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "velora-fsck"
+version = "0.6.0"
+dependencies = [
+ "velora-fat",
+ "velora-vfs",
+ "velorafs",
+]
+
+[[package]]
 name = "velora-input"
 version = "0.6.0"
 
@@ -46,11 +55,14 @@ dependencies = [
  "velora-abi",
  "velora-acpi",
  "velora-exe",
+ "velora-fat",
  "velora-input",
  "velora-mm",
  "velora-pci",
  "velora-rtc",
  "velora-tar",
+ "velora-vfs",
+ "velorafs",
 ]
 
 [[package]]
