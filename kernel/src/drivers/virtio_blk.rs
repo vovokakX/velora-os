@@ -260,6 +260,9 @@ impl VirtioBlk {
             if ring.read::<u16>(USED_OFF + 2) == want {
                 return true;
             }
+            // Experiment for #19: let the CPU leave the guest between checks.
+            crate::arch::cpu::enable_interrupts_and_halt();
+            crate::arch::cpu::disable_interrupts();
             let now = crate::arch::cpu::rdtsc();
             if now - last > tick {
                 last = now;
