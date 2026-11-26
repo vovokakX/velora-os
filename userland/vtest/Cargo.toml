@@ -1,0 +1,16 @@
+[package]
+name = "vtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "../build-support.rs"
+
+[[bin]]
+name = "vtest"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vlibc = { path = "../../libc/vlibc" }

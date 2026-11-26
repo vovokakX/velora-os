@@ -4,7 +4,7 @@
 
 ## Русский
 
-Состояние: с этапа 4 работают вызовы из таблицы «Реализовано». Номера и коды
+Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–5). Номера и коды
 ошибок определены в crate `velora-abi` (`kernel/abi`): им пользуются и ядро,
 и будущая vlibc.
 
@@ -24,7 +24,7 @@
   Блокирующие вызовы (`read`, `sleep_ms`, `yield`) явно передают процессор
   другому потоку.
 
-### Реализовано (этап 4)
+### Реализовано
 
 | № | Вызов | Описание | Ошибки |
 |---|---|---|---|
@@ -33,6 +33,10 @@
 | 2 | `read(fd, buf, len)` | fd 0 — клавиатура; ждёт хотя бы один символ, возвращает целые символы UTF-8 (`len >= 4`) | `EBADF`, `EINVAL`, `EFAULT` |
 | 3 | `yield()` | отдаёт процессор другим готовым потокам | — |
 | 4 | `getpid()` | идентификатор процесса | — |
+| 5 | `spawn(path, path_len, argv, argc, envp, envc)` | запускает программу из файла; `argv`/`envp` — массивы `StrRef { ptr, len }`; возвращает pid потомка | `ENOENT`, `ENOEXEC`, `E2BIG`, `ENOMEM`, `EFAULT`, `EINVAL` |
+| 6 | `wait(pid, status)` | ждёт завершения потомка, пишет его статус (`i64`) по адресу `status` (может быть 0); возвращает pid | `ECHILD`, `EFAULT` |
+| 7 | `mmap(addr, len, prot, flags)` | анонимная память, заполненная нулями; `prot`: READ 1, WRITE 2, EXEC 4 (WRITE+EXEC запрещено); `flags`: FIXED 1 — ровно по `addr` | `EINVAL`, `EEXIST`, `ENOMEM` |
+| 8 | `munmap(addr, len)` | убирает отображение и освобождает страницы | `EINVAL` |
 | 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): время с загрузки, `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EFAULT` |
 | 25 | `sleep_ms(ms)` | спит не меньше `ms` миллисекунд (точность — тик 10 мс) | — |
 
@@ -40,8 +44,8 @@
 
 ### Коды ошибок
 
-`EPERM 1, ENOENT 2, ESRCH 3, EINTR 4, EIO 5, EBADF 9, EAGAIN 11, ENOMEM 12,
-EFAULT 14, EINVAL 22, ENOSYS 38` (значения как в Linux, для удобства
+`EPERM 1, ENOENT 2, ESRCH 3, EINTR 4, EIO 5, E2BIG 7, ENOEXEC 8, EBADF 9,
+ECHILD 10, EAGAIN 11, ENOMEM 12, EFAULT 14, EEXIST 17, EINVAL 22, ENOSYS 38` (значения как в Linux, для удобства
 переноса программ).
 
 ### Ошибки процессора в программах
@@ -74,10 +78,6 @@ EFAULT 14, EINVAL 22, ENOSYS 38` (значения как в Linux, для уд�
 
 | № | Вызов | Этап |
 |---|---|---|
-| 5 | `spawn(path, argv, envp)` | 5 |
-| 6 | `wait(pid, status)` | 5 |
-| 7 | `mmap(addr, len, prot, flags)` | 5 |
-| 8 | `munmap(addr, len)` | 5 |
 | 9 | `open(path, flags, mode)` | 7 |
 | 10 | `close(fd)` | 7 |
 | 11 | `seek(fd, off, whence)` | 7 |
@@ -115,7 +115,7 @@ the kernel and the future vlibc.
 - Interrupts are off inside system calls and the kernel is not preempted there.
   Blocking calls (`read`, `sleep_ms`, `yield`) give up the CPU explicitly.
 
-### Implemented (stage 4)
+### Implemented
 
 | No. | Call | Description | Errors |
 |---|---|---|---|
@@ -124,6 +124,10 @@ the kernel and the future vlibc.
 | 2 | `read(fd, buf, len)` | fd 0 is the keyboard; waits for at least one character and returns whole UTF-8 characters (`len >= 4`) | `EBADF`, `EINVAL`, `EFAULT` |
 | 3 | `yield()` | gives the CPU to other ready threads | — |
 | 4 | `getpid()` | process id | — |
+| 5 | `spawn(path, path_len, argv, argc, envp, envc)` | starts a program from a file; `argv`/`envp` are arrays of `StrRef { ptr, len }`; returns the child pid | `ENOENT`, `ENOEXEC`, `E2BIG`, `ENOMEM`, `EFAULT`, `EINVAL` |
+| 6 | `wait(pid, status)` | waits for a child to exit and stores its status (`i64`) at `status` (may be 0); returns the pid | `ECHILD`, `EFAULT` |
+| 7 | `mmap(addr, len, prot, flags)` | zero-filled anonymous memory; `prot`: READ 1, WRITE 2, EXEC 4 (WRITE+EXEC refused); `flags`: FIXED 1 — exactly at `addr` | `EINVAL`, `EEXIST`, `ENOMEM` |
+| 8 | `munmap(addr, len)` | removes mappings and frees the pages | `EINVAL` |
 | 21 | `clock_gettime(clock, ts)` | `clock = 1` (MONOTONIC): time since boot as `struct { u64 sec; u64 nsec; }` | `EINVAL`, `EFAULT` |
 | 25 | `sleep_ms(ms)` | sleeps at least `ms` milliseconds (10 ms tick resolution) | — |
 

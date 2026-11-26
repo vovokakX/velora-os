@@ -45,6 +45,8 @@ pub struct Usage {
     /// Managed RAM that is allocated, plus the kernel image.
     pub in_use: u64,
     pub kernel_image: u64,
+    /// Files loaded by the bootloader (the initramfs).
+    pub modules: u64,
     pub frame_bitmap: u64,
     pub page_tables: u64,
     pub heap: u64,
@@ -56,10 +58,16 @@ pub struct Usage {
 pub fn usage() -> Usage {
     let f = frame::stats();
     let kernel_image = paging::kernel_image_size();
+    let modules: u64 = boot::info()
+        .modules()
+        .iter()
+        .map(|m| m.size.next_multiple_of(PAGE_SIZE))
+        .sum();
     Usage {
         managed: f.managed_frames * PAGE_SIZE,
-        in_use: (f.managed_frames - f.free_frames) * PAGE_SIZE + kernel_image,
+        in_use: (f.managed_frames - f.free_frames) * PAGE_SIZE + kernel_image + modules,
         kernel_image,
+        modules,
         frame_bitmap: f.bitmap_frames * PAGE_SIZE,
         page_tables: paging::table_frames() * PAGE_SIZE,
         heap: heap::stats().pages_mapped as u64 * PAGE_SIZE,

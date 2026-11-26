@@ -118,6 +118,20 @@
   GS указывает на данные процессора в ядре (`swapgs` на входе и выходе).
 - Ошибка процессора в программе завершает только эту программу.
 
+### Программы из файлов (этап 5)
+
+- Корневая файловая система Live-режима пока — initramfs: архив ustar,
+  который Limine загружает как модуль (`boot/initramfs.tar`). Он доступен
+  только для чтения (`initramfs.rs`, разбор в `velora-tar`).
+- `exec.rs`: интерфейс `ExecFormat` с двумя реализациями. ELF64 загружается
+  полностью (разбор и проверка в `velora-exe`). PE распознаётся, но не
+  запускается: ядро отвечает, что нужен Win32-слой.
+- Начальный стек по System V: argc, argv, envp, auxv (`AT_PAGESZ`, `AT_ENTRY`).
+- `libc/vlibc` — библиотека для программ: `_start`, системные вызовы, вывод,
+  аргументы и окружение, куча (тот же аллокатор, что в ядре), процессы,
+  небольшой C API.
+- `userland/` — отдельный workspace программ, собирается своими флагами.
+
 ## English
 
 ### Overview
@@ -199,3 +213,17 @@ upper 256 PML4 entries are copied from the kernel tables and never change).
 Ring 3 is entered with `iretq`; system calls return with `sysretq`; GS points at
 per-CPU data in the kernel (`swapgs` on entry and exit). A CPU exception in a
 program ends only that program.
+
+### Programs from files (stage 5)
+
+The Live root file system is, for now, the initramfs: a ustar archive Limine
+loads as a module (`boot/initramfs.tar`), read-only (`initramfs.rs`, parsing in
+`velora-tar`). `exec.rs` defines the `ExecFormat` interface with two
+implementations: ELF64 loads fully (parsing and validation in `velora-exe`);
+PE is recognised but not run, and the kernel reports that the Win32 layer is
+needed. The initial stack follows System V: argc, argv, envp, auxv
+(`AT_PAGESZ`, `AT_ENTRY`). `libc/vlibc` is the program library (`_start`,
+system calls, output, arguments and environment, a heap using the kernel's
+allocator, processes, a small C API); `userland/` is a separate workspace of
+programs built with their own flags.
+

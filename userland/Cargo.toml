@@ -1,0 +1,21 @@
+# User programs. A separate workspace because they are built with
+# different code generation flags than the kernel (see build.sh):
+# lower-half addresses, static relocation model, linked by link.ld.
+[workspace]
+resolver = "3"
+members = ["hello", "vtest"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+# Programs live in the initramfs in RAM, so keep them small.
+debug = 0
+strip = true

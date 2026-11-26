@@ -250,6 +250,37 @@ pub struct DateAtBootResponse {
     pub timestamp: i64,
 }
 
+/// A file loaded by the bootloader (`limine_file`).
+#[repr(C)]
+pub struct File {
+    pub revision: u64,
+    pub address: *const u8,
+    pub size: u64,
+    path: *const u8,
+    string: *const u8,
+}
+
+impl File {
+    pub fn path(&self) -> &'static str {
+        // SAFETY: NUL-terminated string from the bootloader.
+        unsafe { c_str(self.path) }
+    }
+}
+
+#[repr(C)]
+pub struct ModuleResponse {
+    pub revision: u64,
+    count: u64,
+    modules: *const *const File,
+}
+
+impl ModuleResponse {
+    pub fn modules(&self) -> &'static [&'static File] {
+        // SAFETY: Limine gives an array of `count` valid pointers.
+        unsafe { slice_of_refs(self.modules, self.count) }
+    }
+}
+
 #[repr(C)]
 pub struct RsdpResponse {
     pub revision: u64,
@@ -334,6 +365,11 @@ pub static DATE_AT_BOOT: Request<DateAtBootResponse> =
 #[unsafe(link_section = ".limine_requests")]
 pub static RSDP: Request<RsdpResponse> =
     Request::new(request_id(0xc5e77b6b397e7b43, 0x27637845accdcf3c));
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static MODULES: Request<ModuleResponse> =
+    Request::new(request_id(0x3e7e279702be32af, 0xca1c4f3bd1280cee));
 
 #[used]
 #[unsafe(link_section = ".limine_requests_end")]

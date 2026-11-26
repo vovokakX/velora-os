@@ -249,6 +249,8 @@ def check_ktest(proc, reader, monitor, deadline):
         "GDT, TSS, IDT, syscall entry and SSE state set up",
         "scheduler running",
         "hello from ring 3",
+        "Hello from /bin/hello",
+        "vtest: 14 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
@@ -292,7 +294,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
         return fail("idle memory use %d KiB is not below 64 MiB" % used_kib)
     if max_seconds and t > max_seconds:
         return fail("boot took %.2f s, limit %.2f s" % (t, max_seconds))
-    if "user mode works: process 1 exited with status 0" not in out:
+    if "Hello from /bin/hello" not in out or "/bin/hello (pid 1) exited with status 0" not in out:
         return fail("the first user program did not run")
     # Keyboard: type a line in each layout and check the echo.
     if not wait_for(proc, reader, "keyboard test ready", deadline):

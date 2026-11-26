@@ -56,11 +56,26 @@ KERNEL="target/x86_64-unknown-none/release/velora"
 KCOPY="$BUILD/velora-$MODE.elf"
 cp "$KERNEL" "$KCOPY"
 
-# 3. Bootloader config.
+# 3. User programs and the initramfs. They are built with their own flags
+# (lower-half code, static relocation model) and target directory.
+echo "==> building user programs"
+USER_TARGET="target/user"
+(cd userland && CARGO_TARGET_DIR="../$USER_TARGET" \
+    RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" \
+    cargo build --release --target x86_64-unknown-none)
+UBIN="$USER_TARGET/x86_64-unknown-none/release"
+INITRD="$BUILD/initramfs.tar"
+cargo run -q -p mkinitrd --release -- \
+    --out "$INITRD" \
+    --file "bin/hello=$UBIN/hello:755" \
+    --file "bin/vtest=$UBIN/vtest:755" \
+    --file "etc/motd=userland/rootfs/etc/motd:644"
+
+# 4. Bootloader config.
 CONF="$BUILD/limine-$MODE.conf"
 sed "s|@CMDLINE@|$CMDLINE|" boot/limine.conf > "$CONF"
 
-# 4. ISO image.
+# 5. ISO image.
 echo "==> building $OUT"
 cargo run -q -p mkiso --release -- \
     --out "$OUT" \
@@ -68,6 +83,7 @@ cargo run -q -p mkiso --release -- \
     --efi "$LIMINE_DIR/BOOTX64.EFI" \
     --file "boot/limine.conf=$CONF" \
     --file "boot/velora=$KCOPY" \
+    --file "boot/initramfs.tar=$INITRD" \
     --file "licenses/velora.txt=LICENSE" \
     --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
     --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt"

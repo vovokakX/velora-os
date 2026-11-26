@@ -30,16 +30,15 @@
   1 МиБ). Тогда на этапе 4 каждое адресное пространство процесса сможет
   получить ядро простым копированием этих записей, и они больше не изменятся.
 
-### Пространство пользователя (этап 4)
+### Пространство пользователя (этап 5)
 
 | Адрес | Что |
 |---|---|
-| `0x0000_0000_0040_0000` | код программы (R-X), сейчас — плоские тестовые программы |
-| `0x0000_0000_0060_0000` | область данных 64 КиБ (RW-, NX) |
-| `0x0000_7fff_ffef_0000` – `0x0000_7fff_fff0_0000` | стек 64 КиБ (RW-, NX) |
+| `0x0000_0000_0040_0000` | программа ELF: `.text` R-X, `.rodata` R--, `.data`/`.bss` RW- (каждая секция с новой страницы, `userland/link.ld`) |
+| `0x0000_1000_0000_0000` | куча vlibc (растёт через `mmap` с FIXED) |
+| `0x0000_2000_0000_0000` – `0x0000_4000_0000_0000` | `mmap` без FIXED, с защитной страницей после каждой области |
+| `0x0000_7fff_ffee_0000` – `0x0000_7fff_fff0_0000` | стек 128 КиБ (RW-, NX); на вершине — argv, envp и auxv |
 | `0x0000_7fff_ffff_f000` и выше | никогда не отображается (защита `sysret`) |
-
-С этапа 5 раскладку будет задавать загрузчик ELF.
 
 ### Образ ядра
 
@@ -97,12 +96,14 @@ are created up front (256 PDPTs, 1 MiB), so in stage 4 every process address
 space can share the kernel half by copying these entries, which never change
 afterwards.
 
-### User space (stage 4)
+### User space (stage 5)
 
-Program code at `0x400000` (R-X; flat test programs for now), a 64 KiB data
-area at `0x600000` (RW-, NX), a 64 KiB stack ending at `0x7fff_fff0_0000`
-(RW-, NX); `0x7fff_ffff_f000` and above are never mapped (protects `sysret`).
-From stage 5 the ELF loader decides the layout.
+ELF programs at `0x400000` (`.text` R-X, `.rodata` R--, `.data`/`.bss` RW-,
+each section page-aligned by `userland/link.ld`); the vlibc heap from
+`0x1000_0000_0000` (grows with fixed `mmap`); non-fixed `mmap` areas in
+`0x2000_0000_0000`–`0x4000_0000_0000` with a guard page after each; a 128 KiB
+stack ending at `0x7fff_fff0_0000` (RW-, NX) with argv, envp and auxv at its
+top; `0x7fff_ffff_f000` and above are never mapped (protects `sysret`).
 
 ### Kernel image
 

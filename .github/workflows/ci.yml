@@ -36,7 +36,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Format check
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all -- --check
+          (cd userland && cargo fmt --all -- --check)
 
       - name: Clippy (host crates)
         run: cargo clippy --workspace --exclude velora-kernel -- -D warnings
@@ -45,6 +47,15 @@ jobs:
         run: |
           cargo clippy -p velora-kernel --target x86_64-unknown-none -- -D warnings
           cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -D warnings
+
+      - name: Clippy (user programs and vlibc)
+        working-directory: userland
+        env:
+          CARGO_TARGET_DIR: ../target/user
+          RUSTFLAGS: -C relocation-model=static -C force-frame-pointers=yes
+        run: |
+          cargo clippy --target x86_64-unknown-none -- -D warnings
+          cargo clippy --manifest-path ../libc/vlibc/Cargo.toml --target x86_64-unknown-none --features cabi -- -D warnings
 
       - name: Tests (host unit tests, kernel tests in QEMU, boot test)
         run: ./test.sh
