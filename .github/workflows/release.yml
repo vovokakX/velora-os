@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU and UEFI firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf unzip
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Test before publishing
+        run: ./test.sh
+
+      - name: Build release ISO
+        run: |
+          ./build.sh
+          sha256sum velora.iso > velora.iso.sha256
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/${TAG}.md"
+          test -f "$notes" || { echo "missing $notes"; exit 1; }
+          gh release create "$TAG" velora.iso velora.iso.sha256 \
+            --title "Velora OS ${TAG}" --notes-file "$notes"
