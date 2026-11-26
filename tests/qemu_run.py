@@ -141,6 +141,8 @@ def build_command(iso, workdir, memory, monitor_port, disks=None):
     ]
     for kind, path in (disks or {}).items():
         cmd += disk_args(kind, path)
+    # Extra QEMU arguments for debugging, e.g. VELORA_QEMU_EXTRA="-trace virtio*".
+    cmd += os.environ.get("VELORA_QEMU_EXTRA", "").split()
     return cmd, accel
 
 

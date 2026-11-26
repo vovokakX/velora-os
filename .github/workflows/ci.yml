@@ -58,6 +58,8 @@ jobs:
           cargo clippy --manifest-path ../libc/vlibc/Cargo.toml --target x86_64-unknown-none --features cabi -- -D warnings
 
       - name: Tests (host unit tests, kernel tests in QEMU, boot test)
+        env:
+          VELORA_QEMU_EXTRA: -trace virtio_queue_notify -trace virtio_set_status -trace virtio_blk_* -trace virtio_notify* -trace virtqueue_*
         run: ./test.sh
 
       - name: Upload ISO
