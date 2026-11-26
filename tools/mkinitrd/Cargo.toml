@@ -1,0 +1,11 @@
+[package]
+name = "mkinitrd"
+description = "Builds the initramfs (ustar archive) from a list of files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-tar = { path = "../../fs/tar" }
