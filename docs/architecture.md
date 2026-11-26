@@ -120,9 +120,10 @@
 
 ### Программы из файлов (этап 5)
 
-- Корневая файловая система Live-режима пока — initramfs: архив ustar,
-  который Limine загружает как модуль (`boot/initramfs.tar`). Он доступен
-  только для чтения (`initramfs.rs`, разбор в `velora-tar`).
+- Корневая файловая система Live-режима — initramfs: архив ustar,
+  который Limine загружает как модуль (`boot/initramfs.tar`). С этапа 7 VFS
+  монтирует его в `/` только для чтения (`fs/tarfs.rs`, разбор в
+  `velora-tar`).
 - `exec.rs`: интерфейс `ExecFormat` с двумя реализациями. ELF64 загружается
   полностью (разбор и проверка в `velora-exe`). PE распознаётся, но не
   запускается: ядро отвечает, что нужен Win32-слой.
@@ -144,6 +145,27 @@
   физическая память), окончание команды определяется опросом (решение D21).
 - RTC читается при загрузке, дальше время UTC считается по TSC
   (`time::realtime_ns`).
+
+### Файловые системы (этап 7)
+
+- `velora-vfs` (`fs/vfs`): интерфейс `FileSystem` (работает с номерами
+  inode), `BlockIo` (секторы устройства), таблица монтирования, разбор путей,
+  проверка прав POSIX, файловая система в памяти `MemFs` и общий набор
+  проверок `conformance`, который проходят все файловые системы.
+- `velorafs` (`fs/velorafs`): своя файловая система — экстенты, права,
+  журнал метаданных, CRC32C, fsck. Формат — [velorafs.md](velorafs.md).
+- `velora-fat` (`fs/fat`): тома FAT16 и FAT32, чтение и запись с длинными
+  именами, форматирование FAT32. Нужна для раздела EFI (этап 9).
+- Все три crate — `no_std` и проверяются на хосте; ядро только подключает
+  их к своим дискам (`fs/disk.rs`).
+- В ядре (`kernel/src/fs/`): `/` — initramfs, `/dev` — devfs (null, zero,
+  console, диски), `/tmp` — `MemFs`, `/mnt/<диск>` — каждый диск с VeloraFS
+  или FAT, найденный при загрузке.
+- VFS защищена одной блокировкой с выключенными прерываниями; операция
+  выполняется целиком (решение D25).
+- У процесса таблица дескрипторов (до 64) и учётные данные (uid, gid).
+  Дескрипторы 0–2 открыты на консоли. Программы загружаются через VFS с
+  проверкой бита `x`.
 
 ## English
 
@@ -250,3 +272,21 @@ ATAPI skipped), NVMe (namespace 1), named `vd0`, `sd0`, `nvme0n1`. Transfers use
 DMA buffers (`drivers/dma.rs`, physically contiguous memory); completion is
 polled (decision D21). The RTC is read at boot and UTC time then advances with
 the TSC (`time::realtime_ns`).
+
+### File systems (stage 7)
+
+`velora-vfs` (`fs/vfs`) defines the `FileSystem` interface (inode numbers),
+`BlockIo` (device sectors), the mount table, path handling, POSIX permission
+checks, the in-memory `MemFs` and the shared `conformance` suite every file
+system passes. `velorafs` (`fs/velorafs`) is the native file system: extents,
+permissions, a metadata journal, CRC32C, fsck; the format is in
+[velorafs.md](velorafs.md). `velora-fat` (`fs/fat`) reads and writes FAT16 and
+FAT32 volumes with long names and formats FAT32 (needed for the EFI partition
+in stage 9). All three are `no_std` and tested on the host; the kernel only
+connects them to its disks (`fs/disk.rs`). In the kernel (`kernel/src/fs/`):
+`/` is the initramfs (read-only since stage 7), `/dev` is devfs (null, zero,
+console, disks), `/tmp` is a `MemFs`, and every disk with VeloraFS or FAT found
+at boot is mounted at `/mnt/<disk>`. The VFS is behind one lock with interrupts
+off and each operation runs to completion (decision D25). Every process has a
+descriptor table (up to 64) and credentials (uid, gid); descriptors 0–2 start
+on the console. Programs are loaded through the VFS and need an `x` bit.
