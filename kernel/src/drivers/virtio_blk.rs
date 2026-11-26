@@ -251,7 +251,32 @@ impl VirtioBlk {
 
         let want = q.used_idx.wrapping_add(1);
         let ring = &q.ring;
-        if let Err(e) = block::poll(5000, || ring.read::<u16>(USED_OFF + 2) == want) {
+        // Diagnostic for a KVM-only hang: notify again every ~100 ms.
+        let mut kicks = 0u32;
+        let mut last = crate::arch::cpu::rdtsc();
+        let tick = crate::time::tsc_hz() / 10;
+        let notify = self.notify;
+        let r = block::poll(5000, || {
+            if ring.read::<u16>(USED_OFF + 2) == want {
+                return true;
+            }
+            let now = crate::arch::cpu::rdtsc();
+            if now - last > tick {
+                last = now;
+                kicks += 1;
+                // SAFETY: the notify register of this queue.
+                unsafe { mmio::write16(notify, 0) };
+            }
+            false
+        });
+        if kicks > 0 {
+            crate::kwarn!(
+                "{}: completion needed {} extra notifications",
+                self.name,
+                kicks
+            );
+        }
+        if let Err(e) = r {
             // SAFETY: reads of this device's common configuration.
             let (status, enabled) = unsafe {
                 mmio::write16(self.common + QUEUE_SELECT, 0);

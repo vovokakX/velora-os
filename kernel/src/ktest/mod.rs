@@ -105,9 +105,9 @@ static TESTS: &[Test] = tests![
     // stage 6: PCI, disks, RTC
     drivers::pci_finds_devices,
     drivers::three_disks_found,
-    drivers::virtio_blk_read_write,
     drivers::ahci_read_write,
     drivers::nvme_read_write,
+    drivers::virtio_blk_read_write,
     drivers::disks_are_independent,
     drivers::rtc_matches_bootloader_time,
 ];
