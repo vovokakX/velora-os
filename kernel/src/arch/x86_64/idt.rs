@@ -217,6 +217,6 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
     if frame.vector < 32 {
         super::exceptions::handle(frame);
     } else {
-        crate::kwarn!("unexpected interrupt vector {}", frame.vector);
+        super::irq::dispatch(frame);
     }
 }

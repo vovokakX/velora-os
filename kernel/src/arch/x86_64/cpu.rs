@@ -184,3 +184,16 @@ pub fn has_nx() -> bool {
 pub fn has_pat() -> bool {
     cpuid(1, 0).edx & (1 << 16) != 0
 }
+
+/// Enables interrupts and halts until the next one, atomically: `sti`
+/// takes effect after the following instruction, so an interrupt cannot
+/// slip in between and be missed.
+#[inline]
+pub fn enable_interrupts_and_halt() {
+    // SAFETY: the IDT and interrupt controllers are set up before use.
+    unsafe { asm!("sti", "hlt", options(nomem, nostack)) }
+}
+
+pub fn interrupts_enabled() -> bool {
+    rflags() & RFLAGS_IF != 0
+}
