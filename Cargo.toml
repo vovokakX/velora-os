@@ -8,7 +8,7 @@ default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "kern
 exclude = ["userland", "libc/vlibc"]
 
 [workspace.package]
-version = "0.13.0"
+version = "0.14.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/vovokakX/velora-os"
