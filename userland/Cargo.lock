@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "coreutils"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-auth",
  "vlibc",
@@ -12,14 +12,14 @@ dependencies = [
 
 [[package]]
 name = "hello"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "vlibc",
 ]
 
 [[package]]
 name = "login"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-auth",
  "vlibc",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "plume"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "coreutils",
  "velora-editor",
@@ -36,37 +36,37 @@ dependencies = [
 
 [[package]]
 name = "velora-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "velora-auth"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "velora-editor"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "velora-fat"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-vfs",
 ]
 
 [[package]]
 name = "velora-gpt"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-vfs",
 ]
 
 [[package]]
 name = "velora-mm"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "velora-setup"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-auth",
  "velora-fat",
@@ -78,25 +78,25 @@ dependencies = [
 
 [[package]]
 name = "velora-shell"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "velora-vfs"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-abi",
 ]
 
 [[package]]
 name = "velorafs"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-vfs",
 ]
 
 [[package]]
 name = "vlibc"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-abi",
  "velora-mm",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "vsh"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "velora-shell",
  "vlibc",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "vtest"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "vlibc",
 ]
