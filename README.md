@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы все десять этапов плана (v0.10.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–11 (v0.11.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -29,9 +29,12 @@ VeloraFS (права, журнал, контрольные суммы, пров�
 загрузки появляется приглашение входа; оболочка vsh поддерживает историю,
 Tab-дополнение, конвейеры и перенаправления, есть основные команды (`ls`,
 `cat`, `cp`, `mv`, `rm`, `ps`, `kill`, `velofetch` и другие). После
-загрузки занято 7,9 МиБ (вместе с initramfs, в котором есть и файлы для
+загрузки занято 8,0 МиБ (вместе с initramfs, в котором есть и файлы для
 установки), приглашение входа появляется через 1,85 с после запуска QEMU с
 KVM.
+
+Есть текстовый редактор `plume` (уровня nano: поиск, вырезать и вставить,
+кириллица, вопрос о сохранении при выходе).
 
 Есть сеть: драйвер virtio-net и свой стек (DHCP, ping, TCP и UDP;
 команды `ip`, `ping`, `nc`, см. [docs/network.md](docs/network.md)).
@@ -63,8 +66,8 @@ kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
             kernel/mm, kernel/acpi, kernel/abi, kernel/net — библиотеки
 drivers/    аппаратно-независимые части драйверов (input, pci, rtc)
 fs/         vfs (интерфейс и монтирование), velorafs, fat (FAT16/FAT32), gpt, tar (initramfs)
-libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh)
-userland/   программы: login, vsh, команды (coreutils), hello, vtest
+libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh), editor (Plume)
+userland/   программы: login, vsh, plume, команды (coreutils), hello, vtest
 installer/  velora-setup — установщик
 tools/      mkiso (сборка ISO), mkinitrd (initramfs), mkpasswd (хеши паролей), kstrip, fsck (проверка образов), fontgen
 tests/      запуск QEMU и проверки
@@ -109,11 +112,16 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 8 | vsh, команды, пользователи и вход, velofetch | v0.8.0 (готово) |
 | 9 | Установщик velora-setup | v0.9.0 (готово) |
 | 10 | virtio-net, TCP/IP | v0.10.0 (готово) |
+| 11 | Текстовый редактор Plume | v0.11.0 (готово) |
+| 12 | Готовность к реальному ПК: консоль GOP, HPET/TSC, журнал паники на диске, образ для флешки | v0.12.0 |
+| 13 | ACPI: выключение, перезагрузка, кнопка питания | v0.13.0 |
+| 14 | Многопроцессорность (SMP) | v0.14.0 |
+| 15 | USB: xHCI, клавиатура, мышь, флешки | v0.15.0 |
+| 16 | Сеть на реальном ПК: e1000, DNS, `fetch` | v0.16.0 |
 
-После этого: USB (xHCI), многопроцессорность, графическая оболочка Lumi
-(компоновщик в пространстве пользователя поверх framebuffer) и Win32-слой
-для запуска .exe (загрузчик PE и перевод вызовов Win32 в системные вызовы
-Velora).
+После этого: графическая оболочка Lumi (компоновщик в пространстве
+пользователя поверх framebuffer) и Win32-слой для запуска .exe (загрузчик
+PE и перевод вызовов Win32 в системные вызовы Velora).
 
 ### Лицензия
 
@@ -133,7 +141,7 @@ are planned for later stages.
 
 ### Status
 
-All ten stages of the plan are done (v0.10.0). The kernel boots via UEFI, prints to the screen
+Stages 1–11 are done (v0.11.0). The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -146,9 +154,12 @@ VeloraFS (permissions, journal, checksums, integrity check) and FAT16/FAT32 with
 read and write. The initramfs is mounted at `/`, disks under `/mnt`. Boot ends
 at a login prompt; the vsh shell has history, Tab completion, pipes and
 redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
-`ps`, `kill`, `velofetch` and others). 7.9 MiB are in use after boot
+`ps`, `kill`, `velofetch` and others). 8.0 MiB are in use after boot
 (initramfs included, which also holds the files to install); the login prompt
 appears 1.85 s after QEMU starts with KVM.
+
+There is a text editor, `plume` (nano-like: search, cut and paste,
+Cyrillic, a save question on exit).
 
 There is networking: a virtio-net driver and a stack of our own (DHCP, ping,
 TCP and UDP; commands `ip`, `ping`, `nc`, see [docs/network.md](docs/network.md)).
@@ -158,8 +169,7 @@ and run `velora-setup` (see [installer/README.md](installer/README.md)).
 Live image login: user `user` or `root`, password `velora`. The passwords
 can be set at build time with `VELORA_ROOT_PASSWORD` and
 `VELORA_USER_PASSWORD`; only hashes go into the image. `help` lists the
-commands. There is no shell yet: boot runs
-`/bin/hello` and then a temporary echoing line editor to try the keyboard. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
+commands. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
 
 ### Architecture
 
@@ -213,10 +223,16 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 8 | vsh, commands, users and login, velofetch | v0.8.0 (done) |
 | 9 | velora-setup installer | v0.9.0 (done) |
 | 10 | virtio-net, TCP/IP | v0.10.0 (done) |
+| 11 | Plume text editor | v0.11.0 (done) |
+| 12 | Ready for a real PC: GOP console, HPET/TSC, panic log on disk, USB drive image | v0.12.0 |
+| 13 | ACPI: power off, restart, power button | v0.13.0 |
+| 14 | Multiprocessing (SMP) | v0.14.0 |
+| 15 | USB: xHCI, keyboard, mouse, flash drives | v0.15.0 |
+| 16 | Networking on a real PC: e1000, DNS, `fetch` | v0.16.0 |
 
-After that: USB (xHCI), SMP, the Lumi graphical shell (a user-space compositor
-on top of the framebuffer) and a Win32 layer for .exe files (a PE loader plus
-translation of Win32 calls into Velora system calls).
+After that: the Lumi graphical shell (a user-space compositor on top of the
+framebuffer) and a Win32 layer for .exe files (a PE loader plus translation
+of Win32 calls into Velora system calls).
 
 ### License
 
