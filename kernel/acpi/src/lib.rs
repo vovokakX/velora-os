@@ -2,7 +2,8 @@
 //!
 //! The kernel maps the tables and hands byte slices to these functions, so
 //! all parsing and validation is tested on the host with synthetic tables.
-//! Only what the kernel uses is parsed: RSDP, RSDT/XSDT and the MADT.
+//! Only what the kernel uses is parsed: RSDP, RSDT/XSDT, MADT, MCFG,
+//! FADT and HPET.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -379,6 +380,47 @@ pub struct Fadt {
     pub reset_space: u8,
     pub reset_address: u64,
     pub reset_value: u8,
+    /// ACPI PM timer I/O port (0 = none) and whether it counts 32 bits
+    /// (otherwise 24). It runs at [`PM_TIMER_HZ`].
+    pub pm_timer_port: u32,
+    pub pm_timer_32bit: bool,
+}
+
+/// Frequency of the ACPI PM timer.
+pub const PM_TIMER_HZ: u64 = 3_579_545;
+
+/// The HPET description table: where the timer block is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hpet {
+    /// Physical address of the register block (system memory).
+    pub address: u64,
+    pub number: u8,
+    /// Minimum tick in periodic mode, in counter ticks.
+    pub min_tick: u16,
+}
+
+/// Parses the HPET table. Only timer blocks in system memory are accepted.
+pub fn parse_hpet(table: &[u8]) -> Result<Hpet, Error> {
+    let h = validate_table(table)?;
+    if &h.signature != b"HPET" {
+        return Err(Error::BadSignature);
+    }
+    if (h.length as usize) < 56 {
+        return Err(Error::TooShort);
+    }
+    // Generic address structure at 40: space id, widths, then the address.
+    if table[40] != 0 {
+        return Err(Error::BadLength);
+    }
+    let address = u64_at(table, 44);
+    if address == 0 {
+        return Err(Error::BadLength);
+    }
+    Ok(Hpet {
+        address,
+        number: table[52],
+        min_tick: u16_at(table, 53),
+    })
 }
 
 impl Fadt {
@@ -442,6 +484,17 @@ pub fn parse_fadt(table: &[u8]) -> Result<Fadt, Error> {
         reset_space: if len > 116 { table[116] } else { 0 },
         reset_address: if len >= 128 { u64_at(table, 120) } else { 0 },
         reset_value: if len > 128 { table[128] } else { 0 },
+        pm_timer_port: {
+            // X_PM_TMR_BLK (generic address at 208) wins when it is an
+            // I/O port; otherwise PM_TMR_BLK at 76.
+            let x = if len >= 220 && table[208] == 1 {
+                u64_at(table, 212) as u32
+            } else {
+                0
+            };
+            if x != 0 { x } else { u32_if(76) }
+        },
+        pm_timer_32bit: u32_if(112) & (1 << 8) != 0,
     })
 }
 
@@ -672,6 +725,48 @@ mod tests {
         assert!(f.flags & Fadt::RESET_REG_SUPPORTED != 0);
         body[at(140)..at(148)].copy_from_slice(&0x5678u64.to_le_bytes());
         assert_eq!(parse_fadt(&table(b"FACP", &body)).unwrap().dsdt, 0x5678);
+    }
+
+    #[test]
+    fn fadt_pm_timer() {
+        let mut body = vec![0u8; 244 - HEADER_LEN];
+        let at = |o: usize| o - HEADER_LEN;
+        body[at(76)..at(80)].copy_from_slice(&0x608u32.to_le_bytes());
+        body[at(112)..at(116)].copy_from_slice(&(1u32 << 8).to_le_bytes());
+        let f = parse_fadt(&table(b"FACP", &body)).unwrap();
+        assert_eq!((f.pm_timer_port, f.pm_timer_32bit), (0x608, true));
+        // The extended block in I/O space takes precedence.
+        body[at(208)] = 1;
+        body[at(212)..at(220)].copy_from_slice(&0x1808u64.to_le_bytes());
+        assert_eq!(
+            parse_fadt(&table(b"FACP", &body)).unwrap().pm_timer_port,
+            0x1808
+        );
+        // In memory space it is ignored.
+        body[at(208)] = 0;
+        assert_eq!(
+            parse_fadt(&table(b"FACP", &body)).unwrap().pm_timer_port,
+            0x608
+        );
+    }
+
+    #[test]
+    fn hpet_table() {
+        let mut body = vec![0u8; 56 - HEADER_LEN];
+        let at = |o: usize| o - HEADER_LEN;
+        body[at(36)..at(40)].copy_from_slice(&0x8086a201u32.to_le_bytes());
+        body[at(44)..at(52)].copy_from_slice(&0xfed0_0000u64.to_le_bytes());
+        body[at(53)..at(55)].copy_from_slice(&128u16.to_le_bytes());
+        let h = parse_hpet(&table(b"HPET", &body)).unwrap();
+        assert_eq!(h.address, 0xfed0_0000);
+        assert_eq!(h.min_tick, 128);
+        body[at(40)] = 1; // I/O space: not supported
+        assert!(parse_hpet(&table(b"HPET", &body)).is_err());
+        assert_eq!(
+            parse_hpet(&table(b"HPET", &body[..4])),
+            Err(Error::TooShort)
+        );
+        assert_eq!(parse_hpet(&table(b"APIC", &body)), Err(Error::BadSignature));
     }
 
     #[test]
