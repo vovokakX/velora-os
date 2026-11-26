@@ -76,7 +76,11 @@ SHADOW="$BUILD/shadow"
 cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
     root=VELORA_ROOT_PASSWORD user=VELORA_USER_PASSWORD
 
-PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch"
+# What velora-setup installs: the kernel without debug data and Limine.
+KSTRIP="$BUILD/velora-$MODE-stripped.elf"
+cargo run -q -p kstrip --release -- "$KCOPY" "$KSTRIP"
+
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd velora-setup"
 FILES=()
 for p in $PROGRAMS; do
     FILES+=(--file "bin/$p=$UBIN/$p:755")
@@ -88,6 +92,8 @@ cargo run -q -p mkinitrd --release -- \
     --file "etc/passwd=userland/rootfs/etc/passwd:644" \
     --file "etc/group=userland/rootfs/etc/group:644" \
     --file "etc/shadow=$SHADOW:600" \
+    --file "usr/lib/velora/velora=$KSTRIP:644" \
+    --file "usr/lib/velora/BOOTX64.EFI=$LIMINE_DIR/BOOTX64.EFI:644" \
     --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.

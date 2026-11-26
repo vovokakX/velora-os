@@ -34,12 +34,52 @@ name = "velora-auth"
 version = "0.8.0"
 
 [[package]]
+name = "velora-fat"
+version = "0.8.0"
+dependencies = [
+ "velora-vfs",
+]
+
+[[package]]
+name = "velora-gpt"
+version = "0.8.0"
+dependencies = [
+ "velora-vfs",
+]
+
+[[package]]
 name = "velora-mm"
 version = "0.8.0"
 
 [[package]]
+name = "velora-setup"
+version = "0.8.0"
+dependencies = [
+ "velora-auth",
+ "velora-fat",
+ "velora-gpt",
+ "velora-vfs",
+ "velorafs",
+ "vlibc",
+]
+
+[[package]]
 name = "velora-shell"
 version = "0.8.0"
+
+[[package]]
+name = "velora-vfs"
+version = "0.8.0"
+dependencies = [
+ "velora-abi",
+]
+
+[[package]]
+name = "velorafs"
+version = "0.8.0"
+dependencies = [
+ "velora-vfs",
+]
 
 [[package]]
 name = "vlibc"

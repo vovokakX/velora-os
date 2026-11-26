@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "kstrip"
+version = "0.8.0"
+
+[[package]]
 name = "mkinitrd"
 version = "0.8.0"
 dependencies = [
@@ -56,6 +60,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "velora-gpt"
+version = "0.8.0"
+dependencies = [
+ "velora-vfs",
+]
+
+[[package]]
 name = "velora-input"
 version = "0.8.0"
 
@@ -68,6 +79,7 @@ dependencies = [
  "velora-auth",
  "velora-exe",
  "velora-fat",
+ "velora-gpt",
  "velora-input",
  "velora-mm",
  "velora-pci",

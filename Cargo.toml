@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "drivers/input", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "libc/auth", "libc/shell", "tools/mkiso", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd"]
+members = ["kernel", "kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "drivers/input", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "tools/mkiso", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
 # The kernel only builds for x86_64-unknown-none, so host commands
 # (`cargo test`, `cargo build`) default to the host-side crates.
-default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "drivers/input", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "libc/auth", "libc/shell", "tools/mkiso", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd"]
+default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "drivers/input", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "tools/mkiso", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
 # User programs and vlibc have their own workspace (userland/) and target flags.
 exclude = ["userland", "libc/vlibc"]
 
