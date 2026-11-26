@@ -1,6 +1,6 @@
 //! The native Velora system calls.
 
-use super::{files, process, uaccess};
+use super::{files, process, socket, uaccess};
 use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::exec;
 use crate::mm::PAGE_SIZE;
@@ -55,6 +55,16 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::PROCLIST => process::proclist(a0, a1),
         nr::TTY => process::tty(a0, a1),
         nr::GETRANDOM => process::getrandom(a0, a1),
+        nr::SOCKET => socket::socket(a0),
+        nr::BIND => socket::bind(a0, a1),
+        nr::CONNECT => socket::connect(a0, a1, a2),
+        nr::LISTEN => socket::listen(a0),
+        nr::ACCEPT => socket::accept(a0),
+        nr::SENDTO => socket::sendto_fd(a0, a1, a2, f.r10, f.r8),
+        nr::RECVFROM => socket::recvfrom_fd(a0, a1, a2, f.r10),
+        nr::NETINFO => socket::netinfo(a0),
+        nr::PING => socket::ping(a0, a1, a2),
+        nr::SHUTDOWN => socket::shutdown(a0),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -69,6 +79,7 @@ enum Target {
     Console,
     Pipe,
     File,
+    Socket(u32),
 }
 
 fn target(f: &fs::FileRef) -> Target {
@@ -76,6 +87,7 @@ fn target(f: &fs::FileRef) -> Target {
         fs::Handle::Console => Target::Console,
         fs::Handle::Pipe { .. } => Target::Pipe,
         fs::Handle::File { .. } => Target::File,
+        fs::Handle::Socket { id } => Target::Socket(id),
     }
 }
 
@@ -86,6 +98,7 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
     match target(&f) {
         Target::File => return files::write_file(&f, buf, len),
         Target::Pipe => return files::write_pipe(&f, buf, len),
+        Target::Socket(id) => return socket::sendto(id, buf, len, 0, 0),
         Target::Console => {}
     }
     let len = len.min(MAX_WRITE);
@@ -110,6 +123,7 @@ fn read(fd: u64, buf: u64, len: u64) -> i64 {
     match target(&f) {
         Target::File => return files::read_file(&f, buf, len),
         Target::Pipe => return files::read_pipe(&f, buf, len),
+        Target::Socket(id) => return socket::recvfrom(id, buf, len, 0),
         Target::Console => {}
     }
     let data = tty::read(len.min(4096) as usize);

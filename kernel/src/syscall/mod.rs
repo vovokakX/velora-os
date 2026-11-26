@@ -4,6 +4,7 @@
 mod files;
 mod native;
 mod process;
+mod socket;
 
 use crate::arch::x86_64::syscall::SyscallFrame;
 use crate::sched::{self, Personality};

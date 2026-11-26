@@ -219,6 +219,8 @@ pub enum Handle {
     },
     /// One end of a pipe.
     Pipe { pipe: Arc<pipe::Pipe>, write: bool },
+    /// A network socket (see `net`).
+    Socket { id: u32 },
 }
 
 pub struct OpenFile {
@@ -234,6 +236,7 @@ impl Drop for OpenFile {
         match &self.handle {
             Handle::File { node, .. } => with(|v| v.close_ref(node.mount)),
             Handle::Pipe { pipe, write } => pipe.close_end(*write),
+            Handle::Socket { id } => crate::net::close(*id),
             Handle::Console => {}
         }
     }
