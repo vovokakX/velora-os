@@ -119,13 +119,6 @@ impl VirtioBlk {
     fn probe(addr: Address, d: &Device, index: usize) -> Result<Self, &'static str> {
         let cfg = pci::config();
         velora_pci::enable_device(cfg, addr);
-        // Experiment for issue #19: keep INTx enabled for virtio.
-        let cmd = cfg.read16(addr, velora_pci::COMMAND);
-        cfg.write16(
-            addr,
-            velora_pci::COMMAND,
-            cmd & !velora_pci::CMD_INTX_DISABLE,
-        );
         let (common, notify_base, mult, devcfg) =
             find_caps(cfg, d).ok_or("no modern virtio capabilities")?;
         // SAFETY (all register accesses below): the regions were mapped
