@@ -1,0 +1,11 @@
+[package]
+name = "velora-gpt"
+description = "GUID partition table reading and writing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-vfs = { path = "../vfs" }
