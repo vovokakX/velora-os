@@ -111,3 +111,11 @@ pub fn field_str(b: &[u8]) -> &str {
     let n = b.iter().position(|&c| c == 0).unwrap_or(b.len());
     core::str::from_utf8(&b[..n]).unwrap_or("?")
 }
+
+/// Fills `buf` with random bytes from the kernel (RDRAND when available).
+pub fn random(buf: &mut [u8]) {
+    for chunk in buf.chunks_mut(256) {
+        // SAFETY: the chunk is writable for its length.
+        unsafe { syscall2(nr::GETRANDOM, chunk.as_mut_ptr() as u64, chunk.len() as u64) };
+    }
+}
