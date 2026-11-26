@@ -16,3 +16,10 @@ version = "0.1.0"
 [[package]]
 name = "velora-kernel"
 version = "0.1.0"
+dependencies = [
+ "velora-mm",
+]
+
+[[package]]
+name = "velora-mm"
+version = "0.1.0"
