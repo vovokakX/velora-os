@@ -19,6 +19,7 @@ fn main() -> i32 {
     println!("  mkdir [-p] DIR...     create directories");
     println!("  touch FILE...         create empty files");
     println!("  echo [-n] TEXT        print text");
+    println!("  plume [FILE]          text editor (^G inside shows the keys)");
     println!("  clear                 clear the screen");
     println!("  ps                    list processes");
     println!("  kill [-s N] PID...    end processes");
