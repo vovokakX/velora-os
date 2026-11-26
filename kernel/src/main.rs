@@ -19,8 +19,11 @@ mod kbdtest;
 mod ktest;
 mod mm;
 mod panic;
+mod sched;
 mod sync;
+mod syscall;
 mod time;
+mod userprog;
 
 use arch::x86_64::{apic, ioapic, pic, serial};
 use boot::limine;
@@ -32,6 +35,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAIN_STACK_PAGES: u64 = 16;
 
 static SCREEN: AtomicU64 = AtomicU64::new(0);
+static MAIN_STACK: sync::RacyCell<Option<mm::kstack::KernelStack>> = sync::RacyCell::new(None);
 
 /// Entry point, jumped to by Limine with interrupts disabled and a 64 KiB
 /// stack in bootloader-reclaimable memory.
@@ -60,7 +64,7 @@ extern "C" fn kmain() -> ! {
     kprintln!();
 
     arch::init();
-    kok!("GDT, TSS and IDT loaded");
+    kok!("GDT, TSS, IDT, syscall entry and SSE state set up");
 
     if let Err(e) = boot::capture() {
         panic!("boot information incomplete: {}", e);
@@ -79,6 +83,8 @@ extern "C" fn kmain() -> ! {
     }
 
     let stack = mm::kstack::alloc(MAIN_STACK_PAGES).expect("no memory for the kernel stack");
+    // SAFETY: written once here, read once on the new stack.
+    unsafe { *MAIN_STACK.get() = Some(stack) };
     // SAFETY: nothing on the boot stack is needed after this point.
     unsafe { mm::kstack::switch_to(&stack, kmain_on_kernel_stack) }
 }
@@ -91,18 +97,41 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
 
     report_boot_info();
     init_interrupts();
+    // SAFETY: set in `kmain` before the switch; nothing else touches it.
+    let main_stack = unsafe { (*MAIN_STACK.get()).take() }.expect("main stack not recorded");
+    sched::init(main_stack);
+    arch::cpu::enable_interrupts();
+    kok!(
+        "scheduler running (preemptive, {} Hz time slices)",
+        time::TICK_HZ
+    );
 
     #[cfg(feature = "ktest")]
     ktest::run();
 
     #[cfg(not(feature = "ktest"))]
     {
+        run_first_user_program();
         kok!("boot complete in {} ms", time::uptime_ms());
         kbdtest::run()
     }
 }
 
-/// ACPI, interrupt controllers, timer and keyboard; ends with interrupts on.
+/// Runs the embedded "hello" program in ring 3 to show that user mode
+/// works. Real programs are loaded from files from stage 5 on.
+#[cfg(not(feature = "ktest"))]
+fn run_first_user_program() {
+    match sched::spawn_flat("hello", userprog::hello(), sched::Priority::Normal) {
+        Ok(pid) => match sched::wait_pid(pid) {
+            Some(0) => kok!("user mode works: process {} exited with status 0", pid),
+            other => kwarn!("user mode test: process {} ended with {:?}", pid, other),
+        },
+        Err(e) => kwarn!("cannot start a user process: {:?}", e),
+    }
+}
+
+/// ACPI, interrupt controllers, timer and keyboard. Interrupts stay off;
+/// the caller enables them once the scheduler exists.
 fn init_interrupts() {
     let acpi = acpi::init().unwrap_or_else(|e| panic!("ACPI: {}", e));
     let madt = &acpi.madt;
@@ -145,7 +174,6 @@ fn init_interrupts() {
         Ok(()) => kok!("PS/2 keyboard (layouts EN, RU; Alt+Shift switches)"),
         Err(e) => kwarn!("PS/2 keyboard: {}", e),
     }
-    arch::cpu::enable_interrupts();
 }
 
 fn report_boot_info() {

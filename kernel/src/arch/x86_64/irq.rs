@@ -59,6 +59,8 @@ pub fn dispatch(frame: &mut InterruptFrame) {
         f(frame);
     }
     apic::eoi();
+    // After EOI, so the next timer interrupt can arrive on the new thread.
+    crate::sched::preempt_if_needed();
 }
 
 pub struct IrqStats {

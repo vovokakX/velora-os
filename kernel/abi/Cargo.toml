@@ -1,0 +1,8 @@
+[package]
+name = "velora-abi"
+description = "Velora native ABI: system call numbers, error codes, constants"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

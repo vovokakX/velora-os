@@ -103,6 +103,21 @@
 - Ввод: драйвер PS/2 → `velora-input` → очередь событий ядра (`input.rs`).
   Временный потребитель — строка ввода `kbdtest.rs`, на этапе 8 её заменит vsh.
 
+### Процессы и потоки (этап 4)
+
+- `sched/`: потоки (своё ядро стека 32 КиБ, сохранённые регистры, область
+  FXSAVE 512 байт), процессы (адресное пространство, список потоков, статус
+  завершения, personality), очереди ожидания.
+- Переключение (`arch/x86_64/context.rs`): сохраняются callee-saved регистры,
+  меняется RSP; при смене процесса меняется CR3; TSS.rsp0 и стек для
+  `syscall` указывают на стек нового потока; регистры SSE сохраняются
+  и восстанавливаются.
+- Половина ядра одинакова во всех адресных пространствах: верхние 256 записей
+  PML4 копируются из таблиц ядра и больше не меняются.
+- Вход в ring 3 — через `iretq`, возврат из системных вызовов — через `sysretq`.
+  GS указывает на данные процессора в ядре (`swapgs` на входе и выходе).
+- Ошибка процессора в программе завершает только эту программу.
+
 ## English
 
 ### Overview
@@ -171,3 +186,16 @@ to vectors honouring overrides; `time.rs` provides TSC-based time since boot,
 ticks and `sleep_ms` (the CPU halts in `hlt`). Input flows from the PS/2
 driver through `velora-input` into the kernel event queue (`input.rs`); the
 temporary consumer is the `kbdtest.rs` line editor, replaced by vsh in stage 8.
+
+### Processes and threads (stage 4)
+
+`sched/` holds threads (own 32 KiB kernel stack, saved registers, a 512-byte
+FXSAVE area), processes (address space, thread list, exit status,
+personality) and wait queues. A switch (`arch/x86_64/context.rs`) saves the
+callee-saved registers and swaps RSP, reloads CR3 when the process changes,
+points TSS.rsp0 and the `syscall` stack at the new thread and saves/restores
+the SSE registers. The kernel half is identical in every address space (the
+upper 256 PML4 entries are copied from the kernel tables and never change).
+Ring 3 is entered with `iretq`; system calls return with `sysretq`; GS points at
+per-CPU data in the kernel (`swapgs` on entry and exit). A CPU exception in a
+program ends only that program.

@@ -15,14 +15,16 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–3 (v0.3.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–4 (v0.4.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
 страницами. Работают прерывания (ACPI, APIC, таймер 100 Гц) и клавиатура PS/2
-с раскладками EN и RU. После загрузки занято 5,2 МиБ. Вместо оболочки пока
-временная строка ввода с эхом для проверки клавиатуры: процессов и оболочки
-ещё нет.
+с раскладками EN и RU. Есть процессы и потоки с вытесняющим планировщиком,
+режим пользователя (ring 3) с изоляцией памяти и системные вызовы. После
+загрузки занято 5,3 МиБ. Программ в файлах и оболочки пока нет: при загрузке
+запускается встроенная тестовая программа, а затем временная строка ввода с
+эхом для проверки клавиатуры.
 План этапов — ниже и в [docs/roadmap.md](docs/roadmap.md).
 
 ### Архитектура
@@ -40,7 +42,8 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ```
 boot/       конфигурация загрузчика
-kernel/     ядро (arch, boot, console, mm, drivers, ...); kernel/mm, kernel/acpi — библиотеки
+kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
+            kernel/mm, kernel/acpi, kernel/abi — библиотеки
 drivers/    аппаратно-независимые части драйверов (input: клавиатура и раскладки)
 fs/         файловые системы: velora-fat (FAT16 + LFN), позже VeloraFS
 libc/       vlibc (с этапа 5)
@@ -80,7 +83,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 1 | Загрузка, консоль, исключения, паника | v0.1.0 (готово) |
 | 2 | Физический аллокатор, страничная память, куча | v0.2.0 (готово) |
 | 3 | APIC, таймер, клавиатура PS/2 | v0.3.0 (готово) |
-| 4 | Процессы, потоки, ring 3, системные вызовы | v0.4.0 |
+| 4 | Процессы, потоки, ring 3, системные вызовы | v0.4.0 (готово) |
 | 5 | Загрузчик ELF, интерфейс для PE, initramfs, vlibc | v0.5.0 |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 |
 | 7 | VFS, FAT32, VeloraFS с журналом | v0.7.0 |
@@ -109,14 +112,16 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–3 (v0.3.0) are done. The kernel boots via UEFI, prints to the screen
+Stages 1–4 (v0.4.0) are done. The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
 Interrupts work (ACPI, APIC, 100 Hz timer), as does the PS/2 keyboard with EN
-and RU layouts. 5.2 MiB are in use after boot. Instead of a shell there is a
-temporary line editor that echoes input to test the keyboard: there are no
-processes or shell yet. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
+and RU layouts. There are processes and threads with a preemptive scheduler,
+user mode (ring 3) with memory isolation, and system calls. 5.3 MiB are in use
+after boot. There are no programs in files and no shell yet: boot runs a
+built-in test program and then a temporary echoing line editor to try the
+keyboard. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
 
 ### Architecture
 
@@ -161,7 +166,7 @@ On Windows the firmware is at `C:\Program Files\qemu\share\edk2-x86_64-code.fd`.
 | 1 | Boot, console, exceptions, panic | v0.1.0 (done) |
 | 2 | Physical allocator, paging, kernel heap | v0.2.0 (done) |
 | 3 | APIC, timer, PS/2 keyboard | v0.3.0 (done) |
-| 4 | Processes, threads, ring 3, system calls | v0.4.0 |
+| 4 | Processes, threads, ring 3, system calls | v0.4.0 (done) |
 | 5 | ELF loader, PE loader interface, initramfs, vlibc | v0.5.0 |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 |
 | 7 | VFS, FAT32, VeloraFS with a journal | v0.7.0 |

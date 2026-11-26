@@ -30,6 +30,17 @@
   1 МиБ). Тогда на этапе 4 каждое адресное пространство процесса сможет
   получить ядро простым копированием этих записей, и они больше не изменятся.
 
+### Пространство пользователя (этап 4)
+
+| Адрес | Что |
+|---|---|
+| `0x0000_0000_0040_0000` | код программы (R-X), сейчас — плоские тестовые программы |
+| `0x0000_0000_0060_0000` | область данных 64 КиБ (RW-, NX) |
+| `0x0000_7fff_ffef_0000` – `0x0000_7fff_fff0_0000` | стек 64 КиБ (RW-, NX) |
+| `0x0000_7fff_ffff_f000` и выше | никогда не отображается (защита `sysret`) |
+
+С этапа 5 раскладку будет задавать загрузчик ELF.
+
 ### Образ ядра
 
 Задаётся в `kernel/linker.ld`. Секции выровнены по 4 КиБ, чтобы на этапе 2
@@ -58,7 +69,8 @@
 | Стек | Размер | Где |
 |---|---|---|
 | загрузочный стек | 64 КиБ | от Limine; освобождается после перехода на основной стек |
-| основной стек ядра | 64 КиБ + защитная страница | `0xffff_e000_0000_1000` |
+| основной стек ядра (поток kmain) | 64 КиБ + защитная страница | `0xffff_e000_0000_1000` |
+| стеки потоков | 32 КиБ + защитная страница | слоты по 68 КиБ с `0xffff_e000_...`, освобождаются и используются повторно |
 | IST1: double fault | 16 КиБ | `.bss` ядра |
 | IST2: NMI | 16 КиБ | `.bss` ядра |
 | IST3: machine check | 16 КиБ | `.bss` ядра |
@@ -84,6 +96,13 @@ each with an unmapped guard page below it. All 256 upper-half PML4 entries
 are created up front (256 PDPTs, 1 MiB), so in stage 4 every process address
 space can share the kernel half by copying these entries, which never change
 afterwards.
+
+### User space (stage 4)
+
+Program code at `0x400000` (R-X; flat test programs for now), a 64 KiB data
+area at `0x600000` (RW-, NX), a 64 KiB stack ending at `0x7fff_fff0_0000`
+(RW-, NX); `0x7fff_ffff_f000` and above are never mapped (protects `sysret`).
+From stage 5 the ELF loader decides the layout.
 
 ### Kernel image
 

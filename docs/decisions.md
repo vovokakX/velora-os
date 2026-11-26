@@ -235,3 +235,53 @@ are tested on the host; the PS/2 driver only forwards bytes. A future USB HID
 driver will produce the same `KeyCode`s, so layouts and input handling stay
 the same. EN and RU layouts switch with Alt+Shift. Events go into a kernel
 queue that `/dev/input` and Lumi will read later.
+
+## D14. Планировщик и вытеснение / Scheduler and preemption
+
+**2026-11-26**
+
+**RU.** Round-robin с тремя приоритетами (High, Normal, Idle), квант — один
+тик таймера (10 мс). Пользовательский код и потоки ядра вытесняются по
+таймеру. Внутри системных вызовов прерывания выключены, поэтому ядро в
+системном вызове не вытесняется. Так проще и надёжнее: не нужно делать каждую
+часть ядра безопасной для вытеснения. Блокирующие вызовы передают процессор
+явно. Цена — системный вызов задерживает переключение. Вызовы короткие,
+поэтому для однопроцессорной системы это приемлемо. На SMP вопрос будет
+пересмотрен. Мёртвый поток не может освободить стек, на котором работает,
+поэтому стеки освобождает следующий поток сразу после переключения.
+
+**EN.** Round robin with three priorities (High, Normal, Idle) and a one-tick
+(10 ms) time slice. User code and kernel threads are preempted by the timer.
+Interrupts are off inside system calls, so the kernel is not preempted there:
+simpler and safer, because not every kernel path has to be preemption-safe.
+Blocking calls give up the CPU explicitly. The cost is that a system call
+delays a switch; calls are short, so this is acceptable on one CPU and will be
+revisited for SMP. A dead thread cannot free the stack it runs on, so stacks
+are freed by the next thread right after the switch.
+
+## D15. Плоские тестовые программы до ELF / Flat test programs until ELF
+
+**2026-11-26**
+
+**RU.** Загрузчик ELF появится на этапе 5. Чтобы проверить ring 3 уже на
+этапе 4, в ядро встроены небольшие программы на ассемблере (`userprog.rs`),
+не зависящие от адреса. Ядро копирует их по адресу 0x400000. Это временное
+средство для тестов, а не формат программ Velora. После этапа 5 программы
+будут обычными файлами ELF.
+
+**EN.** The ELF loader arrives in stage 5. To test ring 3 already in stage 4,
+small position-independent assembly programs are embedded in the kernel
+(`userprog.rs`) and copied to 0x400000. This is a test aid, not a Velora
+program format; from stage 5 on programs are ordinary ELF files.
+
+## D16. Номера ошибок как в Linux / Linux-compatible error numbers
+
+**2026-11-26**
+
+**RU.** Коды ошибок совпадают с Linux (EFAULT = 14, ENOSYS = 38 и т. д.).
+Номера системных вызовов свои. Совпадение кодов ошибок упрощает перенос
+программ и библиотек и ничего не стоит.
+
+**EN.** Error numbers match Linux (EFAULT = 14, ENOSYS = 38, ...); system call
+numbers are Velora's own. Matching error codes makes porting programs and
+libraries easier at no cost.

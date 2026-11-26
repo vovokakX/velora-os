@@ -6,6 +6,56 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.4.0] — 2026-11-26
+
+### Что нового
+- Потоки ядра и процессы с собственными адресными пространствами. Половина ядра общая для всех процессов, пользовательская память изолирована.
+- Вытесняющий планировщик: round-robin с тремя приоритетами (High, Normal, Idle), квант 10 мс, поток простоя с `hlt`. Сон потоков, очереди ожидания, освобождение стеков и памяти завершившихся потоков и процессов.
+- Режим пользователя (ring 3): вход через `iretq`, системные вызовы через `syscall`/`sysret`, `swapgs` и данные процессора через GS. Регистры SSE/FPU сохраняются для каждого потока.
+- Системные вызовы: `exit`, `write`, `read` (клавиатура), `yield`, `getpid`, `clock_gettime`, `sleep_ms`. Все указатели проверяются, неверные дают `-EFAULT`. Номера и коды ошибок вынесены в библиотеку `velora-abi`.
+- Personality процесса выбирает таблицу системных вызовов. Сейчас есть только нативная; это место для будущего Win32-слоя.
+- Права W^X для памяти программ: код нельзя изменить, данные и стек нельзя исполнить.
+- Программа, вызвавшая ошибку процессора (обращение к памяти ядра, привилегированная инструкция и т. п.), завершается с понятным сообщением и статусом `128 + номер исключения`. Ядро продолжает работать.
+- Стеки потоков используют общие слоты с защитной страницей; освобождённые слоты переиспользуются.
+- При загрузке запускается встроенная тестовая программа: «hello from ring 3».
+- Тесты: 52 юнит-теста на хосте (2 новых), 60 тестов ядра (17 новых): вытеснение потоков ядра и программ, изоляция памяти, защита памяти ядра, привилегированные инструкции, W^X, раздельные регистры SSE, системные вызовы, отсутствие утечек памяти.
+
+### Исправления
+- Виртуальные адреса стеков ядра теперь используются повторно (известная проблема v0.2.0).
+
+### Известные проблемы
+- Загрузчика программ из файлов ещё нет: проверочные программы встроены в ядро как плоские бинарники (загрузчик ELF — этап 5).
+- Внутри системного вызова ядро не вытесняется (решение D14).
+- Используется один процессор.
+- `read` возвращает символы сразу, без построчного редактирования (терминальный слой — этап 8).
+- Приоритеты строгие: поток High может занять процессор и не пустить потоки Normal (пока никто не использует High).
+- Таймер под эмуляцией TCG может идти неточно.
+
+---
+
+### What's new
+- Kernel threads and processes with their own address spaces. The kernel half is shared by all processes; user memory is isolated.
+- Preemptive scheduler: round robin with three priorities (High, Normal, Idle), a 10 ms time slice, an idle thread using `hlt`. Thread sleep, wait queues, freeing the stacks and memory of finished threads and processes.
+- User mode (ring 3): entry via `iretq`, system calls via `syscall`/`sysret`, `swapgs` and per-CPU data through GS. SSE/FPU registers are saved per thread.
+- System calls: `exit`, `write`, `read` (keyboard), `yield`, `getpid`, `clock_gettime`, `sleep_ms`. Every pointer is checked; bad ones give `-EFAULT`. Numbers and error codes live in the `velora-abi` library.
+- A process personality selects the system call table. Only the native one exists; this is where the Win32 layer will plug in.
+- W^X for program memory: code cannot be modified, data and stack cannot be executed.
+- A program that causes a CPU exception (touching kernel memory, a privileged instruction, ...) is ended with a clear message and status `128 + vector`; the kernel keeps running.
+- Thread stacks use shared slots with guard pages; freed slots are reused.
+- Boot runs a built-in test program: "hello from ring 3".
+- Tests: 52 host unit tests (2 new), 60 kernel tests (17 new): preemption of kernel threads and programs, memory isolation, kernel memory protection, privileged instructions, W^X, per-thread SSE registers, system calls, no memory leaks.
+
+### Fixes
+- Kernel stack virtual addresses are now reused (known issue in v0.2.0).
+
+### Known issues
+- No loading programs from files yet: the test programs are built into the kernel as flat binaries (ELF loader in stage 5).
+- The kernel is not preempted inside system calls (decision D14).
+- Only one CPU is used.
+- `read` returns characters immediately, without line editing (terminal layer in stage 8).
+- Priorities are strict: a High thread can starve Normal ones (nothing uses High yet).
+- The timer can be inaccurate under TCG emulation.
+
 ## [0.3.0] — 2026-11-26
 
 ### Что нового

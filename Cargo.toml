@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "kernel/mm", "kernel/acpi", "drivers/input", "fs/fat", "tools/mkiso"]
+members = ["kernel", "kernel/mm", "kernel/acpi", "kernel/abi", "drivers/input", "fs/fat", "tools/mkiso"]
 # The kernel only builds for x86_64-unknown-none, so host commands
 # (`cargo test`, `cargo build`) default to the host-side crates.
-default-members = ["kernel/mm", "kernel/acpi", "drivers/input", "fs/fat", "tools/mkiso"]
+default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "drivers/input", "fs/fat", "tools/mkiso"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/vovokakX/velora-os"
