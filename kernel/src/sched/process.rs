@@ -16,7 +16,10 @@ pub const FLAT_DATA_BASE: u64 = 0x0000_0000_0060_0000;
 pub const FLAT_DATA_PAGES: u64 = 16;
 /// Top of the initial user stack. The page above it is never mapped.
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_fff0_0000;
-pub const USER_STACK_PAGES: u64 = 16;
+pub const USER_STACK_PAGES: u64 = 32;
+/// Window for non-fixed `mmap` requests.
+pub const MMAP_BASE: u64 = 0x0000_2000_0000_0000;
+pub const MMAP_END: u64 = 0x0000_4000_0000_0000;
 
 /// Which system call table a process uses. Only the native Velora ABI
 /// exists today; a Win32 personality (for .exe programs) is planned and
@@ -42,6 +45,10 @@ pub(super) struct Process {
     pub state: ProcState,
     pub personality: Personality,
     pub exit_waiters: Vec<Tid>,
+    /// Parent exited: nobody will wait, so the kernel removes it on exit.
+    pub detached: bool,
+    /// Next address for non-fixed `mmap` requests.
+    pub mmap_next: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +122,27 @@ pub fn spawn_flat(name: &str, code: &[u8], priority: Priority) -> Result<Pid, Sp
             UserKind::Data,
         )
         .map_err(|_| SpawnError::OutOfMemory)?;
+    spawn_user(
+        name,
+        aspace,
+        FLAT_CODE_BASE,
+        USER_STACK_TOP,
+        Personality::Native,
+        priority,
+    )
+}
 
+/// Creates a process with a prepared address space and starts its first
+/// thread at `entry` with stack pointer `rsp`. The parent is the current
+/// process (pid 0 when called from a kernel thread).
+pub fn spawn_user(
+    name: &str,
+    aspace: AddressSpace,
+    entry: u64,
+    rsp: u64,
+    personality: Personality,
+    priority: Priority,
+) -> Result<Pid, SpawnError> {
     let was = cpu::irq_save();
     let result = with(|s| {
         let pid = s.next_pid;
@@ -130,8 +157,10 @@ pub fn spawn_flat(name: &str, code: &[u8], priority: Priority) -> Result<Pid, Sp
                 aspace: Some(aspace),
                 threads: Vec::new(),
                 state: ProcState::Alive,
-                personality: Personality::Native,
+                personality,
                 exit_waiters: Vec::new(),
+                detached: false,
+                mmap_next: MMAP_BASE,
             },
         );
         match new_thread(
@@ -141,7 +170,7 @@ pub fn spawn_flat(name: &str, code: &[u8], priority: Priority) -> Result<Pid, Sp
             priority,
             super::user_thread_start,
             0,
-            Some((FLAT_CODE_BASE, USER_STACK_TOP)),
+            Some((entry, rsp)),
         ) {
             Some(tid) => {
                 s.processes.get_mut(&pid).unwrap().threads.push(tid);
@@ -155,6 +184,27 @@ pub fn spawn_flat(name: &str, code: &[u8], priority: Priority) -> Result<Pid, Sp
     });
     cpu::irq_restore(was);
     result
+}
+
+/// Parent of `pid`, if the process exists.
+pub fn parent_of(pid: Pid) -> Option<Pid> {
+    with(|s| s.processes.get(&pid).map(|p| p.parent))
+}
+
+/// Reserves `len` bytes of address space for a non-fixed `mmap` in the
+/// current process and returns the start. A guard page is left after it.
+pub fn reserve_mmap_range(len: u64) -> Option<u64> {
+    with(|s| {
+        let pid = s.threads[&s.current].pid;
+        let p = s.processes.get_mut(&pid)?;
+        let start = p.mmap_next;
+        let next = start.checked_add(len)?.checked_add(PAGE_SIZE)?;
+        if next > MMAP_END {
+            return None;
+        }
+        p.mmap_next = next;
+        Some(start)
+    })
 }
 
 /// Bookkeeping when thread `tid` of `pid` has exited.
@@ -184,6 +234,11 @@ fn become_zombie(s: &mut Sched, pid: Pid, status: i64) {
     let waiters = core::mem::take(&mut p.exit_waiters);
     for w in waiters {
         make_ready(s, w);
+    }
+    // Nobody can wait for the children of an exited process any more.
+    for child in s.processes.values_mut().filter(|c| c.parent == pid) {
+        child.parent = KERNEL_PID;
+        child.detached = true;
     }
 }
 
