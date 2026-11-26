@@ -12,6 +12,23 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use limine::MemoryKind;
 
 pub const MAX_REGIONS: usize = 512;
+pub const MAX_MODULES: usize = 8;
+const MAX_MODULE_PATH: usize = 64;
+
+/// A file the bootloader loaded next to the kernel (e.g. the initramfs).
+#[derive(Clone, Copy, Debug)]
+pub struct Module {
+    pub phys: u64,
+    pub size: u64,
+    path: [u8; MAX_MODULE_PATH],
+    path_len: usize,
+}
+
+impl Module {
+    pub fn path(&self) -> &str {
+        core::str::from_utf8(&self.path[..self.path_len]).unwrap_or("")
+    }
+}
 const MAX_CMDLINE: usize = 512;
 const MAX_NAME: usize = 64;
 
@@ -44,6 +61,8 @@ pub struct BootInfo {
     pub rsdp: Option<u64>,
     /// UNIX time at boot, if the bootloader knew it.
     pub boot_time: Option<i64>,
+    modules: [Module; MAX_MODULES],
+    module_count: usize,
 }
 
 impl BootInfo {
@@ -53,6 +72,12 @@ impl BootInfo {
 
     pub fn cmdline(&self) -> &str {
         core::str::from_utf8(&self.cmdline[..self.cmdline_len]).unwrap_or("")
+    }
+
+    /// Files loaded by the bootloader (they stay in memory; their memory
+    /// is "executable and modules" and is never reclaimed).
+    pub fn modules(&self) -> &[Module] {
+        &self.modules[..self.module_count]
     }
 
     /// Bootloader name and version, e.g. "Limine 12.11.1".
@@ -80,7 +105,16 @@ static INFO: RacyCell<BootInfo> = RacyCell::new(BootInfo {
     loader_len: 0,
     rsdp: None,
     boot_time: None,
+    modules: [EMPTY_MODULE; MAX_MODULES],
+    module_count: 0,
 });
+
+const EMPTY_MODULE: Module = Module {
+    phys: 0,
+    size: 0,
+    path: [0; MAX_MODULE_PATH],
+    path_len: 0,
+};
 static CAPTURED: AtomicBool = AtomicBool::new(false);
 
 fn copy_str(dst: &mut [u8], src: &str) -> usize {
@@ -132,6 +166,16 @@ pub fn capture() -> Result<(), &'static str> {
         info.loader_len = len;
     }
     info.rsdp = limine::RSDP.response().map(|r| r.address as u64);
+    if let Some(m) = limine::MODULES.response() {
+        for f in m.modules().iter().take(MAX_MODULES) {
+            let mut module = EMPTY_MODULE;
+            module.phys = f.address as u64 - hhdm.offset;
+            module.size = f.size;
+            module.path_len = copy_str(&mut module.path, f.path());
+            info.modules[info.module_count] = module;
+            info.module_count += 1;
+        }
+    }
     info.boot_time = limine::DATE_AT_BOOT.response().map(|d| d.timestamp);
     CAPTURED.store(true, Ordering::SeqCst);
     Ok(())
