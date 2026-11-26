@@ -11,6 +11,7 @@ pub mod pci;
 pub mod ps2;
 pub mod rtc;
 pub mod virtio_blk;
+pub mod virtio_net;
 
 /// Enumerates PCI, starts the disk drivers and reads the RTC.
 pub fn init() {

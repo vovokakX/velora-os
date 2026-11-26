@@ -39,6 +39,12 @@ pub fn describe(e: Errno) -> &'static str {
         ESRCH => "no such process",
         EINVAL => "invalid argument",
         EIO => "input/output error",
+        ECONNREFUSED => "connection refused",
+        ETIMEDOUT => "timed out",
+        ENETUNREACH => "network unreachable",
+        ENETDOWN => "no network",
+        ECONNRESET => "connection reset",
+        EADDRINUSE => "address in use",
         _ => e.name(),
     }
 }

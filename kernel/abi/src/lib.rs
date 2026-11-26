@@ -79,6 +79,26 @@ pub mod nr {
     pub const TTY: u64 = 38;
     /// getrandom(buf, len) -> bytes written (at most 256 per call)
     pub const GETRANDOM: u64 = 39;
+    /// socket(kind) -> fd; kind: `sock::UDP` or `sock::TCP`
+    pub const SOCKET: u64 = 40;
+    /// bind(fd, port) -> 0
+    pub const BIND: u64 = 41;
+    /// connect(fd, ip, port) -> 0 (TCP: waits for the handshake)
+    pub const CONNECT: u64 = 42;
+    /// listen(fd) -> 0 (TCP, after bind)
+    pub const LISTEN: u64 = 43;
+    /// accept(fd) -> new fd (waits for a connection)
+    pub const ACCEPT: u64 = 44;
+    /// sendto(fd, buf, len, ip, port) -> bytes (ip 0: the connected peer)
+    pub const SENDTO: u64 = 45;
+    /// recvfrom(fd, buf, len, from: *mut SockAddr) -> bytes (0: peer closed)
+    pub const RECVFROM: u64 = 46;
+    /// netinfo(out: *mut NetInfo) -> 0
+    pub const NETINFO: u64 = 47;
+    /// ping(ip, seq, timeout_ms) -> round trip in microseconds
+    pub const PING: u64 = 48;
+    /// shutdown(fd) -> 0: ends the sending side of a TCP connection
+    pub const SHUTDOWN: u64 = 49;
 }
 
 /// Error numbers (returned negated).
@@ -111,6 +131,16 @@ pub mod errno {
     pub const ENOSYS: i64 = 38;
     pub const EPIPE: i64 = 32;
     pub const ENOTEMPTY: i64 = 39;
+    pub const ENOTSOCK: i64 = 88;
+    pub const EDESTADDRREQ: i64 = 89;
+    pub const EADDRINUSE: i64 = 98;
+    pub const ENETDOWN: i64 = 100;
+    pub const ENETUNREACH: i64 = 101;
+    pub const ECONNRESET: i64 = 104;
+    pub const EISCONN: i64 = 106;
+    pub const ENOTCONN: i64 = 107;
+    pub const ETIMEDOUT: i64 = 110;
+    pub const ECONNREFUSED: i64 = 111;
     /// The file system found inconsistent metadata (Linux: EUCLEAN).
     pub const EUCLEAN: i64 = 117;
 }
@@ -148,6 +178,7 @@ pub mod mode {
     pub const CHAR_DEVICE: u32 = 0o020000;
     pub const BLOCK_DEVICE: u32 = 0o060000;
     pub const FIFO: u32 = 0o010000;
+    pub const SOCKET: u32 = 0o140000;
     /// Permission bits (rwx for owner, group, others) plus setuid/setgid/sticky.
     pub const PERM_MASK: u32 = 0o7777;
 }
@@ -270,6 +301,37 @@ pub struct ProcEntry {
     pub name: [u8; 32],
 }
 
+/// Socket kinds for `socket`.
+pub mod sock {
+    pub const UDP: u64 = 1;
+    pub const TCP: u64 = 2;
+}
+
+/// An IPv4 address and port (`ip` as a.b.c.d = a << 24 | ...).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SockAddr {
+    pub ip: u32,
+    pub port: u16,
+    pub _pad: u16,
+}
+
+/// Network interface information written by `netinfo`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NetInfo {
+    /// Bit 0: a network card exists; bit 1: an address is configured.
+    pub flags: u32,
+    pub ip: u32,
+    pub netmask: u32,
+    pub gateway: u32,
+    pub dns: u32,
+    pub mac: [u8; 6],
+    pub _pad: [u8; 2],
+    pub rx_frames: u64,
+    pub tx_frames: u64,
+}
+
 /// Most file descriptors one process can have open.
 pub const MAX_FDS: usize = 64;
 /// Longest path accepted by the file system calls.
@@ -360,6 +422,8 @@ mod tests {
         assert_eq!(core::mem::size_of::<FsStat>(), 64);
         assert_eq!(core::mem::size_of::<SysInfo>(), 112);
         assert_eq!(core::mem::size_of::<ProcEntry>(), 72);
+        assert_eq!(core::mem::size_of::<NetInfo>(), 48);
+        assert_eq!(core::mem::size_of::<SockAddr>(), 8);
     }
 
     #[test]
@@ -403,6 +467,16 @@ mod tests {
             nr::DUP,
             nr::TTY,
             nr::GETRANDOM,
+            nr::SOCKET,
+            nr::BIND,
+            nr::CONNECT,
+            nr::LISTEN,
+            nr::ACCEPT,
+            nr::SENDTO,
+            nr::RECVFROM,
+            nr::NETINFO,
+            nr::PING,
+            nr::SHUTDOWN,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "duplicate syscall number {a}");

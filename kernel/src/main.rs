@@ -19,6 +19,7 @@ mod input;
 #[cfg(feature = "ktest")]
 mod ktest;
 mod mm;
+mod net;
 mod panic;
 mod power;
 mod sched;
@@ -112,6 +113,7 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     tty::init();
     fs::init();
     fs::automount();
+    net::init();
     arch::cpu::enable_interrupts();
     kok!(
         "scheduler running (preemptive, {} Hz time slices)",

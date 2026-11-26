@@ -26,6 +26,7 @@ velora-vfs = { path = "../fs/vfs" }
 velora-fat = { path = "../fs/fat" }
 velorafs = { path = "../fs/velorafs" }
 velora-gpt = { path = "../fs/gpt" }
+velora-net = { path = "net" }
 # Only the kernel tests read /etc/shadow.
 velora-auth = { path = "../libc/auth", optional = true }
 velora-pci = { path = "../drivers/pci" }

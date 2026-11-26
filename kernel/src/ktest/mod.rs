@@ -19,6 +19,7 @@ mod exec;
 mod fs;
 mod irq;
 mod mm;
+mod net;
 mod sched;
 mod user;
 
@@ -128,6 +129,8 @@ static TESTS: &[Test] = tests![
     user::shell_pipelines_and_variables,
     user::shell_script_and_exit_status,
     user::commands_work,
+    // stage 10: network
+    net::dhcp_and_ping_gateway,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);

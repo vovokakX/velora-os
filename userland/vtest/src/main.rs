@@ -145,6 +145,7 @@ fn run_all() -> i32 {
     r.check("kill a process", kill_a_process());
     r.check("process list and system information", system_information());
     r.check("random bytes", random_bytes());
+    r.check("network: interface, UDP and TCP sockets", network());
     println!("vtest: {} passed, {} failed", r.passed, r.failed);
     r.failed as i32
 }
@@ -876,5 +877,49 @@ fn random_bytes() -> Result<(), String> {
         a.iter().filter(|&&x| x == 0).count() < 30,
         "too many zero bytes"
     );
+    Ok(())
+}
+
+/// Sockets. With an address (DHCP on QEMU's user network) the gateway is
+/// pinged and ports are bound; without one the error path is checked.
+fn network() -> Result<(), String> {
+    use vlibc::net::{self, Ipv4, TcpListener, TcpStream, UdpSocket};
+    let info = net::netinfo().map_err(e)?;
+    ensure!(info.flags & 1 != 0, "no network card");
+    if info.flags & 2 == 0 {
+        // Without an address only the error paths can be checked.
+        expect_err(
+            TcpStream::connect(Ipv4::new(10, 0, 2, 2), 80),
+            errno::ENETUNREACH,
+            "connect without an address",
+        )?;
+        return Ok(());
+    }
+    ensure!(
+        Ipv4(info.ip) == Ipv4::new(10, 0, 2, 15),
+        "address {}",
+        Ipv4(info.ip)
+    );
+    net::ping(Ipv4(info.gateway), 9, 3000).map_err(e)?;
+    let u = UdpSocket::bind(4000).map_err(e)?;
+    expect_err(
+        UdpSocket::bind(4000),
+        errno::EADDRINUSE,
+        "second bind of a UDP port",
+    )?;
+    // A datagram to QEMU's DNS server address is sent (no answer expected).
+    ensure!(
+        u.send_to(b"x", Ipv4(info.dns), 9).map_err(e)? == 1,
+        "UDP send"
+    );
+    let l = TcpListener::bind(7070).map_err(e)?;
+    expect_err(
+        TcpListener::bind(7070),
+        errno::EADDRINUSE,
+        "second listen on a port",
+    )?;
+    drop(l);
+    // The port is free again once the listener is closed.
+    drop(TcpListener::bind(7070).map_err(e)?);
     Ok(())
 }

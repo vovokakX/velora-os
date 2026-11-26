@@ -80,7 +80,7 @@ cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
 KSTRIP="$BUILD/velora-$MODE-stripped.elf"
 cargo run -q -p kstrip --release -- "$KCOPY" "$KSTRIP"
 
-PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd velora-setup"
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc velora-setup"
 FILES=()
 for p in $PROGRAMS; do
     FILES+=(--file "bin/$p=$UBIN/$p:755")

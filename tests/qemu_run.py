@@ -9,6 +9,9 @@ Modes:
          and that the journal was replayed. After each boot the disk writes
          and both file systems are checked on the host (velora-fsck, and
          fsck.fat when it is installed).
+  net    Boot velora.iso with user-mode networking: DHCP, ping of the
+         gateway, a TCP exchange with a server on the host in both
+         directions, a refused connection.
   install
          End-to-end installation: boot velora.iso with a blank disk, run
          velora-setup (refused once interactively, then unattended), power
@@ -142,7 +145,7 @@ def check_disk_writes(paths):
     return bad
 
 
-def build_command(iso, workdir, memory, monitor_port, disks=None):
+def build_command(iso, workdir, memory, monitor_port, disks=None, extra=None):
     code = find_firmware("OVMF_CODE", CODE_NAMES)
     vars_src = find_firmware("OVMF_VARS", VARS_NAMES)
     vars_copy = os.path.join(workdir, "vars.fd")
@@ -168,6 +171,7 @@ def build_command(iso, workdir, memory, monitor_port, disks=None):
         cmd += ["-cdrom", iso]
     for kind, path in (disks or {}).items():
         cmd += disk_args(kind, path)
+    cmd += extra or []
     # Extra QEMU arguments for debugging, e.g. VELORA_QEMU_EXTRA="-trace virtio*".
     cmd += os.environ.get("VELORA_QEMU_EXTRA", "").split()
     return cmd, accel
@@ -344,10 +348,21 @@ BOOT_MARKERS = {
 }
 
 
-def run_once(args, work, disks, log, check, iso="default"):
+# User-mode networking: the guest gets 10.0.2.15 by DHCP, the gateway
+# 10.0.2.2 answers ping and forwards TCP to the host's 127.0.0.1.
+def net_args(hostfwd=None):
+    netdev = "user,id=n0"
+    if hostfwd:
+        netdev += ",hostfwd=tcp:127.0.0.1:%d-:%d" % hostfwd
+    return ["-netdev", netdev, "-device", "virtio-net-pci,netdev=n0,disable-legacy=on"]
+
+
+def run_once(args, work, disks, log, check, iso="default", extra=None):
     port = free_port()
     iso = args.iso if iso == "default" else iso
-    cmd, accel = build_command(iso, work, args.memory, port, disks)
+    if extra is None and args.mode == "ktest":
+        extra = net_args()
+    cmd, accel = build_command(iso, work, args.memory, port, disks, extra)
     print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, iso or "none (boot from disk)"))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     reader = SerialReader(proc, log)
@@ -371,6 +386,8 @@ def run(args):
     with tempfile.TemporaryDirectory() as work:
         if args.mode == "install":
             return run_install(args, work)
+        if args.mode == "net":
+            return run_net(args, work)
         if args.mode != "ktest":
             return run_once(args, work, None, args.log,
                             lambda p, r, m, d: check_boot(p, r, m, d, args.max_boot_seconds))
@@ -434,7 +451,7 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 33 passed, 0 failed",
+        "vtest: 34 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
@@ -442,6 +459,7 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "location: kernel/src/ktest/mod.rs",
         "backtrace:",
         "ktest: panic path ok",
+        "net0: 10.0.2.15/24 via 10.0.2.2 (DHCP)",
     ] + extra_markers
     missing = [m for m in required if m not in out.replace("\\", "/")]
     if missing:
@@ -487,6 +505,108 @@ class Session:
         self.type(command + "\n")
         if not self.wait(expect, exact):
             raise AssertionError("no '%s' after typing: %s" % (expect, command))
+
+
+class HostServer:
+    """TCP server on 127.0.0.1 for the guest: reads until the end of the
+    input, answers "host-reply:<text>" and closes."""
+
+    def __init__(self):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+        self.received = []
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(20)
+                data = b""
+                try:
+                    while True:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    self.received.append(data)
+                    conn.sendall(b"host-reply:" + data.strip() + b"\n")
+                except OSError:
+                    pass
+
+    def close(self):
+        self.sock.close()
+
+
+def connect_to_guest(port, payload, expect, seconds=60):
+    """Connects through hostfwd until the guest listens and answers."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as c:
+                c.sendall(payload)
+                c.shutdown(socket.SHUT_WR)
+                data = b""
+                while True:
+                    chunk = c.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                if expect in data:
+                    return True
+        except OSError:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def run_net(args, work):
+    server = HostServer()
+    fwd = free_port()
+    result = {}
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        try:
+            assert s.wait("net0: virtio-net"), "no network card found"
+            login(s, "root", "velora", "root@velora")
+            assert wait_for(proc, reader, "net0: 10.0.2.15/24", deadline), "DHCP did not configure 10.0.2.15"
+            s.run("ip", "inet 10.0.2.15/24")
+            s.run("ping -c 3 10.0.2.2", "3 packets transmitted, 3 received")
+            print("qemu_run: DHCP and ping work")
+            s.run("echo hello-velora | nc 10.0.2.2 %d" % server.port, "host-reply:hello-velora")
+            assert b"hello-velora" in b"".join(server.received), "the host server got nothing"
+            print("qemu_run: guest-to-host TCP works")
+            s.type("nc -l 7000 velora-ack\n")
+            ok = connect_to_guest(fwd, b"from-host-data\n", b"velora-ack")
+            assert ok, "the guest did not answer a connection from the host"
+            assert s.wait("from-host-data", exact=True), "the guest did not print the host's data"
+            print("qemu_run: host-to-guest TCP works")
+            # QEMU's user network drops a SYN to a closed host port instead
+            # of answering RST, so this ends with "timed out" (RST handling
+            # is covered by the stack's unit tests).
+            s.type("nc 10.0.2.2 1 < /dev/null\n")
+            assert s.wait("nc: 10.0.2.2:1: ", timeout=40), "no error for a closed port"
+            s.run("ip", "frames received")
+            s.type("shutdown\n")
+            wait_exit(proc)
+        except AssertionError as e:
+            return fail(str(e))
+        result["ok"] = True
+        return 0
+
+    try:
+        r = run_once(args, work, None, args.log, check, extra=net_args((fwd, 7000)))
+    finally:
+        server.close()
+    if r == 0:
+        print("qemu_run: PASS (network: DHCP, ping, TCP both ways)")
+    return r
 
 
 INSTALL_DISK_SIZE = 256 * 1024 * 1024
@@ -739,7 +859,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net"])
     p.add_argument("--iso")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--memory", default="256M")

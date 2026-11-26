@@ -11,9 +11,9 @@ Velora OS — операционная система для x86_64, напис�
 Win32-слой. Архитектура уже оставляет для них место: personality процесса,
 интерфейс `ExecFormat` с заготовкой PE, абстракция framebuffer.
 
-Цели производительности: в простое меньше 64 МиБ ОЗУ (сейчас 7,7 МиБ);
-загрузка до приглашения входа в QEMU меньше 3 с (сейчас 1,7 с под KVM в
-CI вместе с прошивкой, у установленной системы 1,65 с).
+Цели производительности: в простое меньше 64 МиБ ОЗУ (сейчас 7,9 МиБ);
+загрузка до приглашения входа в QEMU меньше 3 с (сейчас 1,85 с под KVM в
+CI вместе с прошивкой, у установленной системы 1,7 с).
 
 Репозиторий: https://github.com/vovokakX/velora-os
 
@@ -30,34 +30,31 @@ CI вместе с прошивкой, у установленной систе�
 | 7 | `stage-7-fs` | VFS, FAT16/FAT32, VeloraFS (права, журнал, CRC32C, fsck), файловые вызовы | готово, v0.7.0 |
 | 8 | `stage-8-userland` | vsh, команды, пользователи и вход (PBKDF2), velofetch, каналы, терминал | готово, v0.8.0 |
 | 9 | `stage-9-installer` | velora-setup: GPT, FAT32 ESP + VeloraFS root, загрузчик; полный E2E-тест | готово, v0.9.0 |
-| 10 | `stage-10-network` | virtio-net, ARP, IPv4, ICMP, UDP, DHCP, TCP | **следующий** |
+| 10 | `stage-10-network` | virtio-net, ARP, IPv4, ICMP, UDP, DHCP, TCP, сокеты | готово, v0.10.0 |
 
 Дальше: xHCI/USB HID, SMP, гибридный ISO для USB, загрузка через BIOS, Lumi,
 Win32-слой. Подробности — `docs/roadmap.md`.
 
 ## Где мы сейчас
 
-Этапы 1–9 завершены и выпущены (последний релиз — v0.9.0). Следующий —
-**этап 10** (issue #10). Что нужно сделать:
+Все десять этапов плана завершены и выпущены (последний релиз — v0.10.0).
+Новых этапов в плане нет. Дальнейшие направления из `docs/roadmap.md`:
+xHCI и USB HID, SMP, гибридный ISO для USB-накопителей, загрузка через
+BIOS, графическая оболочка Lumi, Win32-слой для .exe. Перед началом
+нового направления нужно завести issue и ветку по тем же правилам.
 
-- Драйвер virtio-net (PCI, современный virtio 1.x, как virtio-blk в
-  `kernel/src/drivers/virtio_blk.rs`).
-- Сетевой стек (логику — в `no_std` crate с тестами на хосте): Ethernet,
-  ARP, IPv4, ICMP (echo), UDP, DHCP-клиент, TCP (установка соединения,
-  передача, повтор, закрытие).
-- Системные вызовы сокетов (новые номера, `docs/syscalls.md`) и функции
-  vlibc; команды, например `ping`, `ifconfig`/`ip`, простой TCP-клиент
-  (`nc`/`fetch`).
-- Тесты: в QEMU с user-mode сетью (`-netdev user`): DHCP получает адрес,
-  `ping` шлюза 10.0.2.2, обмен по TCP с сервером на хосте
-  (`hostfwd`/guestfwd или сервер в тестовом скрипте). Критерий готовности
-  из плана: ping и TCP-обмен с хостом QEMU.
+Известные ограничения, которые стоит закрыть в первую очередь (подробно —
+в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
+сигналов и фоновых заданий нет; одна блокировка VFS и опрос дисков
+(D21, D25); группировки транзакций VeloraFS нет (D26); у TCP нет сборки
+сегментов не по порядку и управления перегрузкой (D37); нет DNS; нет
+`mount`/`umount` для программ; только UEFI.
 
-Как устроено то, что уже есть: `docs/architecture.md` (файловые системы,
-пользовательское окружение, установка), `docs/velorafs.md`,
-`installer/README.md`, решения D25–D35. Пароль Live-образа по умолчанию
-`velora`. Тесты: `ktest` (две загрузки), `boot` (вход и команды),
-`install` (установка, загрузка с диска, сохранение файлов).
+Как устроено: `docs/architecture.md`, `docs/velorafs.md`,
+`docs/network.md`, `installer/README.md`, решения D1–D37. Пароль
+Live-образа по умолчанию `velora`. Тесты QEMU: `ktest` (две загрузки),
+`boot` (вход и команды), `net` (DHCP, ping, TCP с хостом), `install`
+(установка, загрузка с диска, сохранение файлов).
 
 Открытые issues:
 - **#19** — с QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов. С QEMU 9.1
@@ -150,6 +147,7 @@ PATH для тестов).
 ./test.sh --host     # только юнит-тесты на хосте
 python tests/qemu_run.py ktest --timestamps   # один прогон тестов ядра
 python tests/qemu_run.py boot                 # загрузка, вход, сценарий команд, shutdown
+python tests/qemu_run.py net                  # DHCP, ping, TCP с сервером на хосте
 python tests/qemu_run.py install              # установка, загрузка с диска, файлы сохраняются
 ```
 
@@ -202,7 +200,7 @@ cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -
 ```
 boot/        конфигурация Limine
 kernel/      ядро (arch, boot, console, mm, sched, syscall, drivers, exec, ...)
-kernel/mm, kernel/acpi, kernel/abi, kernel/exe   библиотеки ядра с тестами на хосте
+kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net   библиотеки ядра с тестами на хосте
 kernel/src/fs  VFS в ядре: монтирование, tarfs, devfs, каналы, дескрипторы
 drivers/     аппаратно-независимые части драйверов (input, pci, rtc)
 fs/          vfs (интерфейс, монтирование, MemFs, conformance), velorafs,
@@ -214,7 +212,7 @@ userland/    отдельный workspace программ (login, vsh, coreutil
 tools/       mkiso, mkinitrd, mkpasswd, kstrip, fsck (velora-fsck), fontgen
 installer/   velora-setup (собирается в workspace userland)
 tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, решения (D1–D35),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, решения (D1–D37),
              план, сторонние компоненты, заметки к релизам
 ```
 

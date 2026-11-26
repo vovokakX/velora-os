@@ -8,6 +8,7 @@
 //! - processes: `spawn`, `wait`, `exit`, `getpid`, `kill`, users, process
 //!   list, system information, sleep, time
 //! - the console terminal ([`term`])
+//! - TCP and UDP sockets, ping, interface information ([`net`])
 //! - optional C API (feature `cabi`, see `include/vlibc.h`)
 //!
 //! Programs are single-threaded for now; the heap is not thread-safe.
@@ -21,6 +22,7 @@ pub mod fs;
 pub mod heap;
 pub mod io;
 pub mod mem;
+pub mod net;
 pub mod process;
 mod rt;
 pub mod sys;
