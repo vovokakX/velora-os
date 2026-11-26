@@ -2,8 +2,13 @@
 """Boots a Velora ISO in headless QEMU and checks the serial output.
 
 Modes:
-  ktest  Boot velora-test.iso. The kernel runs its tests and exits QEMU
-         through isa-debug-exit. Pass = exit status 33 and all markers seen.
+  ktest  Boot velora-test.iso twice with the same disks. The kernel runs its
+         tests and exits QEMU through isa-debug-exit. Pass = exit status 33
+         and all markers seen in both boots. The first boot creates file
+         systems on a blank disk; the second checks that the files survived
+         and that the journal was replayed. After each boot the disk writes
+         and both file systems are checked on the host (velora-fsck, and
+         fsck.fat when it is installed).
   boot   Boot velora.iso and wait until the kernel reports boot complete.
          Measures the time from QEMU start to that line.
 
@@ -83,12 +88,17 @@ def free_port():
 DISK_KINDS = ["virtio", "ahci", "nvme"]
 DISK_SIZE = 32 * 1024 * 1024
 SECTOR = 512
+# Blank disk for the file system tests: VeloraFS in the first half, FAT32
+# in the second (see kernel/src/ktest/fs.rs).
+FS_DISK_SIZE = 128 * 1024 * 1024
+FS_HALF = FS_DISK_SIZE // 2
 
 
 def disk_args(kind, path):
     drive = "if=none,id=d%s,file=%s,format=raw" % (kind, path)
     device = {
         "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
+        "fs": "virtio-blk-pci,drive=dfs,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
         "ahci": "ide-hd,drive=dahci,bus=ide.1",
         "nvme": "nvme,serial=velora0,drive=dnvme",
     }[kind]
@@ -104,14 +114,18 @@ def make_disks(workdir):
             f.seek(SECTOR)
             f.write(("VELORA-DISK-" + kind.upper()).encode())
         paths[kind] = path
+    path = os.path.join(workdir, "fs.img")
+    with open(path, "wb") as f:
+        f.truncate(FS_DISK_SIZE)
+    paths["fs"] = path
     return paths
 
 
 def check_disk_writes(paths):
     """Returns the kinds whose image does not contain the kernel's write."""
     bad = []
-    for kind, path in paths.items():
-        with open(path, "rb") as f:
+    for kind in DISK_KINDS:
+        with open(paths[kind], "rb") as f:
             f.seek(2 * SECTOR)
             want = ("VELORA-WRITE-" + kind.upper()).encode()
             if f.read(len(want)) != want:
@@ -234,37 +248,96 @@ class SerialReader:
             return "\n".join(line for _, line in self.lines)
 
 
+def host_fsck(path, offset, size, what):
+    """Checks one volume of a disk image with velora-fsck (built from this
+    repository) and, for FAT, with fsck.fat when it is installed."""
+    cmd = ["cargo", "run", "-q", "--release", "-p", "velora-fsck", "--",
+           path, "--offset", str(offset), "--size", str(size)]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in r.stdout.splitlines():
+        print("  | " + line)
+    if r.returncode != 0:
+        return "velora-fsck found problems in %s" % what
+    fsck_fat = shutil.which("fsck.fat")
+    if what == "FAT32" and fsck_fat:
+        part = path + ".fat"
+        with open(path, "rb") as src, open(part, "wb") as dst:
+            src.seek(offset)
+            dst.write(src.read(size))
+        r = subprocess.run([fsck_fat, "-n", "-v", part], stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True)
+        for line in r.stdout.splitlines()[-4:]:
+            print("  | fsck.fat: " + line)
+        os.remove(part)
+        if r.returncode != 0:
+            return "fsck.fat found problems in FAT32"
+    elif what == "FAT32":
+        print("qemu_run: fsck.fat not installed, FAT32 checked with velora-fsck only")
+    return None
+
+
+# Markers each ktest boot must print besides the common ones.
+BOOT_MARKERS = {
+    1: [
+        "ktest: fs: boot 1: VeloraFS created",
+        "vtest: files in /mnt/vd1: 8 passed, 0 failed",
+        "vtest: files in /mnt/fat: 8 passed, 0 failed",
+    ],
+    2: [
+        "(journal replayed)",
+        "ktest: fs: boot 2: files from boot 1 intact",
+        "vtest: files in /mnt/vd1: 8 passed, 0 failed",
+        "(files from boot 1 intact)",
+    ],
+}
+
+
+def run_once(args, work, disks, log, check):
+    port = free_port()
+    cmd, accel = build_command(args.iso, work, args.memory, port, disks)
+    print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, args.iso))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    reader = SerialReader(proc, log)
+    monitor = Monitor(port)
+    deadline = time.monotonic() + args.timeout
+    try:
+        return check(proc, reader, monitor, deadline)
+    finally:
+        monitor.close()
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        reader.thread.join(timeout=5)
+        reader.log.close()
+
+
 def run(args):
     if not os.path.exists(args.iso):
         sys.exit("qemu_run: %s does not exist (run ./build.sh first)" % args.iso)
     os.makedirs(os.path.dirname(args.log) or ".", exist_ok=True)
     with tempfile.TemporaryDirectory() as work:
-        port = free_port()
-        disks = make_disks(work) if args.mode == "ktest" else None
-        cmd, accel = build_command(args.iso, work, args.memory, port, disks)
-        print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, args.iso))
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        reader = SerialReader(proc, args.log)
-        monitor = Monitor(port)
-        deadline = time.monotonic() + args.timeout
-        try:
-            if args.mode == "ktest":
-                result = check_ktest(proc, reader, monitor, deadline)
-                if result == 0:
-                    proc.wait()
-                    bad = check_disk_writes(disks)
-                    if bad:
-                        return fail("kernel writes did not reach the disk images: %s" % bad)
-                    print("qemu_run: disk writes verified on the host: %s" % ", ".join(DISK_KINDS))
+        if args.mode != "ktest":
+            return run_once(args, work, None, args.log,
+                            lambda p, r, m, d: check_boot(p, r, m, d, args.max_boot_seconds))
+        disks = make_disks(work)
+        for boot in (1, 2):
+            log = args.log if boot == 1 else args.log.replace(".log", "-boot2.log")
+            print("qemu_run: kernel tests, boot %d of 2" % boot)
+            result = run_once(args, work, disks, log,
+                              lambda p, r, m, d: check_ktest(p, r, m, d, BOOT_MARKERS[boot]))
+            if result != 0:
                 return result
-            return check_boot(proc, reader, monitor, deadline, args.max_boot_seconds)
-        finally:
-            monitor.close()
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
-            reader.thread.join(timeout=5)
-            reader.log.close()
+            bad = check_disk_writes(disks)
+            if bad:
+                return fail("kernel writes did not reach the disk images: %s" % bad)
+            print("qemu_run: disk writes verified on the host: %s" % ", ".join(DISK_KINDS))
+            for offset, what in ((0, "VeloraFS"), (FS_HALF, "FAT32")):
+                problem = host_fsck(disks["fs"], offset, FS_HALF, what)
+                if problem:
+                    return fail("after boot %d: %s" % (boot, problem))
+            print("qemu_run: VeloraFS and FAT32 checked on the host after boot %d" % boot)
+        print("qemu_run: PASS (kernel tests, two boots)")
+        return 0
 
 
 def fail(msg):
@@ -287,7 +360,7 @@ def wait_for(proc, reader, text, deadline):
     return False
 
 
-def check_ktest(proc, reader, monitor, deadline):
+def check_ktest(proc, reader, monitor, deadline, extra_markers):
     keys_sent = False
     while proc.poll() is None and time.monotonic() < deadline:
         if not keys_sent and reader.find("ktest: keyboard: waiting for input") is not None:
@@ -306,7 +379,7 @@ def check_ktest(proc, reader, monitor, deadline):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 15 passed, 0 failed",
+        "vtest: 25 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",
@@ -314,13 +387,13 @@ def check_ktest(proc, reader, monitor, deadline):
         "location: kernel/src/ktest/mod.rs",
         "backtrace:",
         "ktest: panic path ok",
-    ]
+    ] + extra_markers
     missing = [m for m in required if m not in out.replace("\\", "/")]
     if missing:
         return fail("missing output: %s" % missing)
     if "CPU EXCEPTION" in out:
         return fail("unexpected CPU exception report")
-    print("qemu_run: PASS (kernel tests)")
+    print("qemu_run: boot passed")
     return 0
 
 
