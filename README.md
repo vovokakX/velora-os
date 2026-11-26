@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–11 (v0.11.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–12 (v0.12.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -32,6 +32,11 @@ Tab-дополнение, конвейеры и перенаправления, 
 загрузки занято 8,0 МиБ (вместе с initramfs, в котором есть и файлы для
 установки), приглашение входа появляется через 1,85 с после запуска QEMU с
 KVM.
+
+Систему можно запустить на реальном компьютере с UEFI: сборка создаёт
+образ для флешки `velora-usb.img`, инструкция —
+[docs/hardware.md](docs/hardware.md). При панике отчёт сохраняется в файл
+`velora-panic.log` на разделе EFI, `dmesg` показывает сообщения ядра.
 
 Есть текстовый редактор `plume` (уровня nano: поиск, вырезать и вставить,
 кириллица, вопрос о сохранении при выходе).
@@ -69,7 +74,7 @@ fs/         vfs (интерфейс и монтирование), velorafs, fat 
 libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh), editor (Plume)
 userland/   программы: login, vsh, plume, команды (coreutils), hello, vtest
 installer/  velora-setup — установщик
-tools/      mkiso (сборка ISO), mkinitrd (initramfs), mkpasswd (хеши паролей), kstrip, fsck (проверка образов), fontgen
+tools/      mkiso (сборка ISO), mkusb (образ для флешки), mkinitrd (initramfs), mkpasswd (хеши паролей), kstrip, fsck (проверка образов), fontgen
 tests/      запуск QEMU и проверки
 docs/       документация
 ```
@@ -81,7 +86,7 @@ sha256sum, bash. Для тестов — QEMU и Python 3. Работает в L
 (Git Bash).
 
 ```sh
-./build.sh          # собирает velora.iso
+./build.sh          # собирает velora.iso и velora-usb.img
 ./test.sh           # юнит-тесты, тесты ядра в QEMU, тест загрузки
 ./test.sh --host    # только юнит-тесты на хосте
 ```
@@ -113,7 +118,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 9 | Установщик velora-setup | v0.9.0 (готово) |
 | 10 | virtio-net, TCP/IP | v0.10.0 (готово) |
 | 11 | Текстовый редактор Plume | v0.11.0 (готово) |
-| 12 | Готовность к реальному ПК: консоль GOP, HPET/TSC, журнал паники на диске, образ для флешки | v0.12.0 |
+| 12 | Готовность к реальному ПК: консоль GOP, HPET/TSC, журнал паники на диске, образ для флешки | v0.12.0 (готово) |
 | 13 | ACPI: выключение, перезагрузка, кнопка питания | v0.13.0 |
 | 14 | Многопроцессорность (SMP) | v0.14.0 |
 | 15 | USB: xHCI, клавиатура, мышь, флешки | v0.15.0 |
@@ -141,7 +146,7 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–11 are done (v0.11.0). The kernel boots via UEFI, prints to the screen
+Stages 1–12 are done (v0.12.0). The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -157,6 +162,11 @@ redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
 `ps`, `kill`, `velofetch` and others). 8.0 MiB are in use after boot
 (initramfs included, which also holds the files to install); the login prompt
 appears 1.85 s after QEMU starts with KVM.
+
+The system can run on a real UEFI computer: the build makes a USB drive
+image, `velora-usb.img`; see [docs/hardware.md](docs/hardware.md). A panic
+report is saved to `velora-panic.log` on the EFI partition, and `dmesg` shows
+the kernel messages.
 
 There is a text editor, `plume` (nano-like: search, cut and paste,
 Cyrillic, a save question on exit).
@@ -192,7 +202,7 @@ curl, unzip, sha256sum, bash. Tests also need QEMU and Python 3. Works on Linux
 and on Windows (Git Bash).
 
 ```sh
-./build.sh          # builds velora.iso
+./build.sh          # builds velora.iso and velora-usb.img
 ./test.sh           # unit tests, kernel tests in QEMU, boot test
 ./test.sh --host    # host unit tests only
 ```
@@ -224,7 +234,7 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 9 | velora-setup installer | v0.9.0 (done) |
 | 10 | virtio-net, TCP/IP | v0.10.0 (done) |
 | 11 | Plume text editor | v0.11.0 (done) |
-| 12 | Ready for a real PC: GOP console, HPET/TSC, panic log on disk, USB drive image | v0.12.0 |
+| 12 | Ready for a real PC: GOP console, HPET/TSC, panic log on disk, USB drive image | v0.12.0 (done) |
 | 13 | ACPI: power off, restart, power button | v0.13.0 |
 | 14 | Multiprocessing (SMP) | v0.14.0 |
 | 15 | USB: xHCI, keyboard, mouse, flash drives | v0.15.0 |

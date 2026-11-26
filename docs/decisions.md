@@ -728,3 +728,80 @@ a temporary file and a rename, so the file keeps its owner and permissions
 (for example `/etc/passwd`); `sync` follows so the file is on disk at once. A
 file with invalid UTF-8 opens read-only so that saving cannot replace bytes
 with U+FFFD. There is no undo.
+
+## D39. Журнал паники пишется прямо в секторы файла / The panic log is written straight to a file's sectors
+
+**2026-11-26**
+
+**RU.** После паники нельзя доверять ни VFS, ни куче, ни блокировкам: паника
+могла случиться внутри них. Поэтому файл журнала готовится при загрузке:
+он создаётся размером 64 КиБ, записывается на диск, и запоминаются его
+секторы (`FileSystem::data_sectors`). При панике текст собирается в
+статическом буфере и пишется в эти секторы драйвером диска с опросом;
+блокировка драйвера снимается принудительно. Используется только FAT: у
+файла FAT нет контрольных сумм и журнала, и прямая запись данных не
+нарушает целостность тома. Том выбирается сам, только если на нём есть
+`/boot/velora` (раздел EFI Velora) или уже есть файл `velora-panic.log`. Так
+ядро не пишет в разделы EFI других систем. При следующей загрузке журнал
+переносится в `velora-panic.prev.log`. Ограничение: если паника случилась
+посреди запроса к тому же диску, состояние очереди драйвера может быть
+испорчено, и запись не удастся. Об этом выводится сообщение.
+
+**EN.** After a panic neither the VFS, the heap nor any lock can be trusted: the
+panic may have happened inside them. The log file is therefore prepared at
+boot: created 64 KiB long, written to disk, and its sectors recorded
+(`FileSystem::data_sectors`). On a panic the text is assembled in a static
+buffer and written to those sectors by the polling disk driver, whose lock is
+forcibly released. Only FAT is used: a FAT file has no checksums or journal,
+so writing its data directly keeps the volume consistent. A volume is chosen
+automatically only if it holds `/boot/velora` (a Velora EFI partition) or
+already has `velora-panic.log`, so the kernel never writes to other systems'
+EFI partitions. At the next boot the log moves to `velora-panic.prev.log`.
+Limitation: if the panic interrupted a request on the same disk, the driver's
+queue may be in a bad state and the write fails; a message says so.
+
+## D40. Порядок опорных часов для калибровки / Order of reference clocks for calibration
+
+**2026-11-26**
+
+**RU.** Сначала HPET (точный, 64-битный счётчик в памяти), затем таймер ACPI
+PM (есть на каждом ПК с ACPI, порт ввода-вывода), затем PIT. На новых ПК
+PIT бывает отключён или эмулируется неточно, поэтому он только запасной.
+Каждый источник проверяется: если счётчик не меняется, берётся следующий,
+а причина пишется в журнал. Ни один источник не программирует прерывания:
+нужен только счётчик. Тесты ядра сравнивают частоту TSC, измеренную по
+всем трём источникам. Тест `usb` загружает систему без HPET, и
+калибровка проходит по таймеру ACPI PM.
+
+**EN.** The HPET comes first (precise, a 64-bit counter in memory), then the
+ACPI PM timer (present on every ACPI PC, an I/O port), then the PIT. On newer
+PCs the PIT may be disabled or poorly emulated, so it is only the fallback.
+Each source is checked: if its counter does not move the next one is used and
+the reason is logged. No source programs interrupts; only the counter is read.
+The kernel tests compare the TSC rate measured against all three, and the
+`usb` test boots without an HPET so calibration uses the ACPI PM timer.
+
+## D41. Отдельный образ для флешки вместо гибридного ISO / A separate USB image instead of a hybrid ISO
+
+**2026-11-26**
+
+**RU.** Прошивка UEFI загружается с флешки через таблицу разделов и раздел
+EFI, а не через El Torito. Гибридный ISO потребовал бы общих данных у ISO
+9660 и FAT. Проще и надёжнее отдельный образ `velora-usb.img`: GPT и один
+раздел EFI FAT32 с загрузчиком, настройками Limine, ядром и initramfs.
+Limine, загруженный с этого раздела, читает файлы `boot():/` с него же.
+Образ собирается на хосте тем же кодом GPT и FAT, что использует ядро и
+установщик, и получается одинаковым при одинаковых входных файлах.
+Раздел — обычный FAT32, поэтому настройки можно поправить на любой
+системе. Образ записывает на флешку сам пользователь. Сборка и тесты
+работают только с файлом.
+
+**EN.** UEFI firmware boots a USB drive through its partition table and EFI
+partition, not through El Torito. A hybrid ISO would need ISO 9660 and FAT to
+share data; a separate image, `velora-usb.img`, is simpler and more reliable: a
+GPT and one FAT32 EFI partition with the bootloader, the Limine settings, the
+kernel and the initramfs. Limine loaded from that partition reads `boot():/`
+files from it. The image is built on the host with the same GPT and FAT code
+the kernel and installer use, and the same inputs give the same image. The
+partition is plain FAT32, so any system can edit the settings. The user writes
+the image to a drive; the build and the tests only handle the file.

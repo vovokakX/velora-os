@@ -216,6 +216,24 @@
   `ESC[J`. Символ UTF-8, разорванный между двумя вызовами `write`,
   собирается в `tty::write`.
 
+### Готовность к реальному ПК (этап 12)
+
+- Таймеры: TSC и таймер APIC калибруются по лучшим доступным опорным
+  часам: HPET (таблица HPET, `arch/x86_64/hpet.rs`), затем таймер ACPI PM
+  (порт из FADT, `pmtimer.rs`), затем PIT. Если источник не считает, берётся
+  следующий; паника — только если не работает ни один (D40). В журнале
+  загрузки видно, по чему шла калибровка и инвариантен ли TSC.
+- Консоль: шрифт 8×16 увеличивается в 2 раза на экранах шириной от 2560
+  точек, параметр `velora.fontscale=1..4` задаёт масштаб явно.
+- Журнал ядра: последние 64 КиБ вывода консоли в статическом кольцевом
+  буфере (`console/klog.rs`), читается через `/dev/kmsg` (`dmesg`).
+- Журнал паники (`crashlog.rs`, D39): файл `velora-panic.log` на томе FAT,
+  секторы которого известны заранее; при панике и фатальном исключении
+  ядро пишет в них журнал напрямую через драйвер диска.
+- Образ для флешки `velora-usb.img` (`tools/mkusb`): GPT и раздел EFI
+  FAT32 с теми же файлами, что в ISO (D41). Инструкция —
+  [hardware.md](hardware.md).
+
 ## English
 
 ### Overview
@@ -386,3 +404,19 @@ this the kernel console draws a cursor (an underline), understands reverse
 video (SGR 7/27), cursor hiding (`ESC[?25l`/`ESC[?25h`) and `ESC[J`; a UTF-8
 character split between two `write` calls is put back together in
 `tty::write`.
+
+### Ready for a real PC (stage 12)
+
+The TSC and the APIC timer are calibrated against the best reference clock
+available: the HPET (HPET table, `arch/x86_64/hpet.rs`), then the ACPI PM
+timer (port from the FADT, `pmtimer.rs`), then the PIT; a source that does not
+count is skipped, and the kernel panics only if none works (D40). The boot log
+names the reference and whether the TSC is invariant. The 8×16 console font is
+doubled on screens at least 2560 pixels wide; `velora.fontscale=1..4` sets the
+scale. The kernel log keeps the last 64 KiB of console output in a static ring
+buffer (`console/klog.rs`), readable through `/dev/kmsg` (`dmesg`). The panic
+log (`crashlog.rs`, D39) is `velora-panic.log` on a FAT volume whose sectors
+are known in advance; on a panic or a fatal exception the kernel writes the
+log straight to them through the disk driver. `velora-usb.img`
+(`tools/mkusb`) is a GPT disk with a FAT32 EFI partition holding the same files
+as the ISO (D41); see [hardware.md](hardware.md).
