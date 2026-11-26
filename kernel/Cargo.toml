@@ -1,0 +1,17 @@
+[package]
+name = "velora-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "velora"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+# Build the in-kernel test runner instead of the normal boot path.
+ktest = []

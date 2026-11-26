@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["kernel", "fs/fat", "tools/mkiso"]
+# The kernel only builds for x86_64-unknown-none, so host commands
+# (`cargo test`, `cargo build`) default to the host-side crates.
+default-members = ["fs/fat", "tools/mkiso"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/vovokakX/velora-os"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+debug = 1
+opt-level = 2

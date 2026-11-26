@@ -1,0 +1,320 @@
+//! In-kernel test runner, built with `--features ktest`.
+//!
+//! Tests run in order after early boot. A failing test panics; the panic
+//! handler prints the report and exits QEMU with a failure status. The last
+//! step is a deliberate panic that checks the panic path itself.
+
+use crate::arch::x86_64::{exceptions, gdt, idt, qemu, serial};
+use crate::console::font;
+use crate::console::framebuffer::Framebuffer;
+use crate::console::text::{self, TextConsole};
+use crate::sync::RacyCell;
+use crate::{boot, kprint, kprintln};
+use core::arch::asm;
+use core::fmt::{self, Write};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+struct Test {
+    name: &'static str,
+    run: fn(),
+}
+
+macro_rules! tests {
+    ($($f:ident),* $(,)?) => { &[$(Test { name: stringify!($f), run: $f }),*] };
+}
+
+static TESTS: &[Test] = tests![
+    serial_is_present,
+    boot_info_is_present,
+    font_covers_ascii_and_cyrillic,
+    font_glyph_matches_source,
+    text_console_draws_glyph,
+    text_console_wraps_and_scrolls,
+    ansi_sgr_colours,
+    ansi_cursor_position,
+    gdt_and_tss_loaded,
+    idt_loaded,
+    breakpoint_resumes,
+    page_fault_is_caught,
+    invalid_opcode_is_caught,
+    divide_error_is_caught,
+    general_protection_is_caught,
+    exception_report_format,
+];
+
+static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);
+
+pub fn run(tsc_start: u64) -> ! {
+    let cycles = crate::arch::cpu::rdtsc().wrapping_sub(tsc_start);
+    kprintln!("ktest: early boot took {} M TSC cycles", cycles / 1_000_000);
+    kprintln!("ktest: running {} tests", TESTS.len());
+    for t in TESTS {
+        kprint!("ktest: {} ... ", t.name);
+        (t.run)();
+        kprintln!("ok");
+    }
+    kprintln!("ktest: {} passed, 0 failed", TESTS.len());
+    kprintln!("ktest: checking the panic path (a panic report is expected below)");
+    EXPECTING_PANIC.store(true, Ordering::SeqCst);
+    panic!("ktest: deliberate panic");
+}
+
+/// Called by the panic handler after the report is printed.
+pub fn on_panic() {
+    if EXPECTING_PANIC.load(Ordering::SeqCst) {
+        kprintln!("ktest: panic path ok");
+        kprintln!("ktest: ALL PASSED");
+        qemu::exit(qemu::ExitCode::Success);
+    }
+    kprintln!("ktest: FAILED");
+}
+
+// --- helpers ----------------------------------------------------------------
+
+struct BufWriter<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> BufWriter<N> {
+    fn new() -> Self {
+        Self {
+            buf: [0; N],
+            len: 0,
+        }
+    }
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.len]).unwrap()
+    }
+}
+
+impl<const N: usize> Write for BufWriter<N> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let b = s.as_bytes();
+        if self.len + b.len() > N {
+            return Err(fmt::Error);
+        }
+        self.buf[self.len..self.len + b.len()].copy_from_slice(b);
+        self.len += b.len();
+        Ok(())
+    }
+}
+
+// A 4x3-cell test screen in ordinary memory.
+const TW: usize = 32;
+const TH: usize = 48;
+static TEST_FB: RacyCell<[u32; TW * TH]> = RacyCell::new([0; TW * TH]);
+
+fn test_console() -> TextConsole {
+    // SAFETY: tests run one at a time; the buffer is static.
+    let fb = unsafe { Framebuffer::from_raw(TEST_FB.get().cast(), TW, TH, TW * 4) };
+    TextConsole::new(fb)
+}
+
+// --- tests ------------------------------------------------------------------
+
+fn serial_is_present() {
+    assert!(serial::is_present(), "COM1 loopback test failed");
+}
+
+fn boot_info_is_present() {
+    let m = boot::memory_summary().expect("no memory map");
+    assert!(
+        m.usable >= 16 * 1024 * 1024,
+        "less than 16 MiB usable memory"
+    );
+    assert!(boot::limine::HHDM.response().is_some(), "no HHDM response");
+    assert!(
+        boot::cmdline_has("velora.test"),
+        "test cmdline flag missing"
+    );
+}
+
+fn font_covers_ascii_and_cyrillic() {
+    for c in (0x20u8..=0x7e).map(char::from) {
+        assert!(font::glyph(c).is_some(), "missing glyph");
+    }
+    for c in ['Ж', 'я', 'Ё', '─', '█'] {
+        assert!(font::glyph(c).is_some(), "missing non-ASCII glyph");
+    }
+    assert!(font::glyph_count() > 300);
+}
+
+fn font_glyph_matches_source() {
+    // 'A' in Spleen 8x16: rows 2..12 = 7c c6 c6 c6 fe c6 c6 c6 c6 c6
+    let a = font::glyph('A').unwrap();
+    assert_eq!(a[2], 0x7c);
+    assert_eq!(a[6], 0xfe);
+    assert_eq!(a[0], 0x00);
+}
+
+fn text_console_draws_glyph() {
+    let mut c = test_console();
+    assert_eq!((c.cols, c.rows), (4, 3));
+    c.write_str("A");
+    let fb = c.framebuffer();
+    let fg = fb.native(text::DEFAULT_FG);
+    let bg = fb.native(text::DEFAULT_BG);
+    // Row 2 of 'A' is 0x7c = .XXXXX..
+    assert_eq!(fb.get_native(0, 2), Some(bg));
+    assert_eq!(fb.get_native(1, 2), Some(fg));
+    assert_eq!(fb.get_native(5, 2), Some(fg));
+    assert_eq!(fb.get_native(6, 2), Some(bg));
+    assert_eq!((c.row, c.col), (0, 1));
+}
+
+fn text_console_wraps_and_scrolls() {
+    let mut c = test_console();
+    c.write_str("abcde"); // 4 columns: wraps after 'd'
+    assert_eq!((c.row, c.col), (1, 1));
+    c.write_str("\n\n\nX");
+    // Three rows: the screen must have scrolled and stay on the last row.
+    assert_eq!((c.row, c.col), (2, 1));
+    c.write_str("\t");
+    assert_eq!(c.col, 4); // tab stops at the right edge
+    c.write_str("Y"); // and the next character wraps
+    assert_eq!((c.row, c.col), (2, 1));
+}
+
+fn ansi_sgr_colours() {
+    let mut c = test_console();
+    c.write_str("\x1b[31m");
+    assert_eq!(c.fg, text::PALETTE[1]);
+    c.write_str("\x1b[1;32m");
+    assert_eq!(c.fg, text::PALETTE[10]);
+    c.write_str("\x1b[44m");
+    assert_eq!(c.bg, text::PALETTE[4]);
+    c.write_str("\x1b[0m");
+    assert_eq!((c.fg, c.bg), (text::DEFAULT_FG, text::DEFAULT_BG));
+    c.write_str("\x1b[96m");
+    assert_eq!(c.fg, text::PALETTE[14]);
+    c.write_str("\x1b[m");
+    assert_eq!(c.fg, text::DEFAULT_FG);
+}
+
+fn ansi_cursor_position() {
+    let mut c = test_console();
+    c.write_str("\x1b[2;3H");
+    assert_eq!((c.row, c.col), (1, 2));
+    c.write_str("\x1b[H");
+    assert_eq!((c.row, c.col), (0, 0));
+    c.write_str("\x1b[9;9H"); // clamped to the screen
+    assert_eq!((c.row, c.col), (2, 3));
+}
+
+fn gdt_and_tss_loaded() {
+    assert_eq!(gdt::current_cs(), gdt::KERNEL_CODE);
+    assert_eq!(gdt::current_tr(), gdt::TSS_SELECTOR);
+    let top = gdt::ist_top(gdt::IST_DOUBLE_FAULT);
+    assert!(top != 0 && top.is_multiple_of(16), "bad double-fault stack");
+}
+
+fn idt_loaded() {
+    let (limit, base) = idt::current();
+    assert_eq!(limit, 256 * 16 - 1);
+    assert!(base >= 0xffff_8000_0000_0000);
+}
+
+fn breakpoint_resumes() {
+    let before = exceptions::breakpoint_count();
+    // SAFETY: int3 is handled and returns to the next instruction.
+    unsafe { asm!("int3") }
+    assert_eq!(exceptions::breakpoint_count(), before + 1);
+}
+
+fn page_fault_is_caught() {
+    exceptions::arm_recovery(exceptions::PAGE_FAULT, 0);
+    // SAFETY: the read faults (lower half is unmapped) and the recovery
+    // hook resumes at label 77.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 77f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "mov {tmp}, qword ptr [{addr}]",
+            "77:",
+            slot = in(reg) exceptions::recover_rip_slot(),
+            addr = in(reg) 0x1000_0000u64,
+            tmp = out(reg) _,
+        );
+    }
+    let (v, err, cr2) = exceptions::take_caught().expect("page fault not raised");
+    assert_eq!(v, exceptions::PAGE_FAULT);
+    assert_eq!(cr2, 0x1000_0000);
+    assert_eq!(err & 0b111, 0, "expected kernel read of a non-present page");
+}
+
+fn invalid_opcode_is_caught() {
+    exceptions::arm_recovery(exceptions::INVALID_OPCODE, 0);
+    // SAFETY: ud2 faults; the hook resumes at label 77.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 77f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "ud2",
+            "77:",
+            slot = in(reg) exceptions::recover_rip_slot(),
+            tmp = out(reg) _,
+        );
+    }
+    let (v, ..) = exceptions::take_caught().expect("#UD not raised");
+    assert_eq!(v, exceptions::INVALID_OPCODE);
+}
+
+fn divide_error_is_caught() {
+    exceptions::arm_recovery(exceptions::DIVIDE_ERROR, 0);
+    // SAFETY: division by zero faults; the hook resumes at label 77.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 77f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "xor edx, edx",
+            "xor eax, eax",
+            "xor ecx, ecx",
+            "div ecx",
+            "77:",
+            slot = in(reg) exceptions::recover_rip_slot(),
+            tmp = out(reg) _,
+            out("eax") _, out("ecx") _, out("edx") _,
+        );
+    }
+    let (v, ..) = exceptions::take_caught().expect("#DE not raised");
+    assert_eq!(v, exceptions::DIVIDE_ERROR);
+}
+
+fn general_protection_is_caught() {
+    exceptions::arm_recovery(exceptions::GENERAL_PROTECTION, 0);
+    // SAFETY: a non-canonical address raises #GP; resume at label 77.
+    unsafe {
+        asm!(
+            "lea {tmp}, [rip + 77f]",
+            "mov qword ptr [{slot}], {tmp}",
+            "mov {tmp}, qword ptr [{addr}]",
+            "77:",
+            slot = in(reg) exceptions::recover_rip_slot(),
+            addr = in(reg) 0x8000_0000_0000_0000u64,
+            tmp = out(reg) _,
+        );
+    }
+    let (v, ..) = exceptions::take_caught().expect("#GP not raised");
+    assert_eq!(v, exceptions::GENERAL_PROTECTION);
+}
+
+fn exception_report_format() {
+    let frame = idt::InterruptFrame {
+        vector: exceptions::PAGE_FAULT,
+        error_code: 0x2,
+        rip: 0xffff_ffff_8000_1234,
+        cs: gdt::KERNEL_CODE as u64,
+        rax: 0xabcd,
+        ..Default::default()
+    };
+    let mut w = BufWriter::<4096>::new();
+    exceptions::write_report(&mut w, &frame, 0xdead_beef).unwrap();
+    let s = w.as_str();
+    assert!(s.contains("#PF Page fault (vector 14) in kernel mode"));
+    assert!(s.contains("write to a non-present page (kernel)"));
+    assert!(s.contains("CR2=0x00000000deadbeef"));
+    assert!(s.contains("RIP=0xffffffff80001234"));
+    assert!(s.contains("RAX=0x000000000000abcd"));
+    assert!(s.contains("backtrace:"));
+}
