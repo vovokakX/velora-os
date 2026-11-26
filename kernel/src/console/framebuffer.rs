@@ -2,10 +2,17 @@
 //! graphical shell (Lumi) will build on later.
 
 use crate::boot::limine::RawFramebuffer;
+use alloc::boxed::Box;
+use alloc::vec;
 
 /// A 32-bit-per-pixel linear framebuffer.
+///
+/// With a back buffer enabled, every pixel is also kept in ordinary RAM.
+/// Reads and scrolling then use RAM only; video memory is only written.
+/// Reading video memory is very slow on real hardware.
 pub struct Framebuffer {
     base: *mut u8,
+    back: Option<Box<[u32]>>,
     pub width: usize,
     pub height: usize,
     /// Bytes per scan line.
@@ -27,6 +34,7 @@ impl Framebuffer {
         }
         Some(Self {
             base: fb.address,
+            back: None,
             width: fb.width as usize,
             height: fb.height as usize,
             pitch: fb.pitch as usize,
@@ -44,6 +52,7 @@ impl Framebuffer {
     pub unsafe fn from_raw(base: *mut u8, width: usize, height: usize, pitch: usize) -> Self {
         Self {
             base,
+            back: None,
             width,
             height,
             pitch,
@@ -68,21 +77,56 @@ impl Framebuffer {
         unsafe { self.base.add(y * self.pitch).cast::<u32>() }
     }
 
+    /// Allocates the back buffer and fills it from the current screen.
+    /// Needs the kernel heap.
+    pub fn enable_back_buffer(&mut self) {
+        if self.back.is_some() {
+            return;
+        }
+        let mut back = vec![0u32; self.width * self.height].into_boxed_slice();
+        // One bulk copy per row: much faster than per-pixel volatile reads.
+        for y in 0..self.height {
+            // SAFETY: row `y` is inside both buffers.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.row_ptr(y),
+                    back[y * self.width..].as_mut_ptr(),
+                    self.width,
+                )
+            }
+        }
+        self.back = Some(back);
+    }
+
+    pub fn has_back_buffer(&self) -> bool {
+        self.back.is_some()
+    }
+
+    #[inline]
+    fn write_px(&mut self, x: usize, y: usize, px: u32) {
+        if let Some(b) = self.back.as_mut() {
+            b[y * self.width + x] = px;
+        }
+        // SAFETY: callers keep (x, y) inside the framebuffer.
+        unsafe { self.row_ptr(y).add(x).write_volatile(px) }
+    }
+
     #[inline]
     pub fn put_native(&mut self, x: usize, y: usize, px: u32) {
         if x < self.width && y < self.height {
-            // SAFETY: bounds checked above.
-            unsafe { self.row_ptr(y).add(x).write_volatile(px) }
+            self.write_px(x, y, px);
         }
     }
 
     pub fn get_native(&self, x: usize, y: usize) -> Option<u32> {
-        if x < self.width && y < self.height {
-            // SAFETY: bounds checked above.
-            Some(unsafe { self.row_ptr(y).add(x).read_volatile() })
-        } else {
-            None
+        if x >= self.width || y >= self.height {
+            return None;
         }
+        Some(match &self.back {
+            Some(b) => b[y * self.width + x],
+            // SAFETY: bounds checked above.
+            None => unsafe { self.row_ptr(y).add(x).read_volatile() },
+        })
     }
 
     pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, rgb: u32) {
@@ -90,10 +134,8 @@ impl Framebuffer {
         let x_end = (x + w).min(self.width);
         let y_end = (y + h).min(self.height);
         for yy in y..y_end {
-            let row = self.row_ptr(yy);
             for xx in x..x_end {
-                // SAFETY: clipped to the framebuffer above.
-                unsafe { row.add(xx).write_volatile(px) }
+                self.write_px(xx, yy, px);
             }
         }
     }
@@ -106,11 +148,9 @@ impl Framebuffer {
         let fg = self.native(fg);
         let bg = self.native(bg);
         for (dy, bits) in rows.iter().enumerate() {
-            let row = self.row_ptr(y + dy);
             for dx in 0..8 {
                 let px = if bits & (0x80 >> dx) != 0 { fg } else { bg };
-                // SAFETY: the whole 8x16 cell is inside the framebuffer.
-                unsafe { row.add(x + dx).write_volatile(px) }
+                self.write_px(x + dx, y + dy, px);
             }
         }
     }
@@ -121,9 +161,35 @@ impl Framebuffer {
             self.fill_rect(0, 0, self.width, self.height, rgb);
             return;
         }
-        let bytes = (self.height - lines) * self.pitch;
-        // SAFETY: both ranges are inside the framebuffer; `copy` handles overlap.
-        unsafe { core::ptr::copy(self.base.add(lines * self.pitch), self.base, bytes) }
-        self.fill_rect(0, self.height - lines, self.width, lines, rgb);
+        let keep = self.height - lines;
+        match self.back.as_mut() {
+            Some(b) => {
+                let w = self.width;
+                b.copy_within(lines * w.., 0);
+                // Present the moved rows: video memory is only written.
+                for y in 0..keep {
+                    // SAFETY: row `y` is inside both buffers.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            b[y * w..].as_ptr(),
+                            self.base.add(y * self.pitch).cast::<u32>(),
+                            w,
+                        )
+                    }
+                }
+            }
+            None => {
+                // SAFETY: both ranges are inside the framebuffer; `copy`
+                // handles the overlap.
+                unsafe {
+                    core::ptr::copy(
+                        self.base.add(lines * self.pitch),
+                        self.base,
+                        keep * self.pitch,
+                    )
+                }
+            }
+        }
+        self.fill_rect(0, keep, self.width, lines, rgb);
     }
 }
