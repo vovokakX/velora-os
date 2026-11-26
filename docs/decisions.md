@@ -656,3 +656,46 @@ through splitmix64. This is enough for password salts and GUIDs but is not a
 cryptographic generator with an entropy pool; without RDRAND the output is
 more predictable, which is listed as a known issue.
 
+## D36. Сетевой стек без ввода-вывода / A network stack without I/O
+
+**2026-11-26**
+
+**RU.** Стек `velora-net` — обычная структура данных: принимает кадры,
+выдаёт кадры, время ему передаётся. Ядро добавляет только драйвер и поток,
+который переносит кадры. Поэтому протоколы проверяются на хосте без QEMU:
+два стека соединяются напрямую, а потери и задержки задаются в тесте.
+Своя реализация, а не сторонняя библиотека: так требует задание («своё
+ядро, свои драйверы»), а объём (ARP, IPv4, ICMP, UDP, DHCP, TCP) остаётся
+небольшим. Поток `net` с высоким приоритетом просыпается по прерыванию
+MSI-X и раз в тик для таймеров. Системные вызовы ждут на общей очереди
+ожидания, которую поток будит после каждой обработки.
+
+**EN.** The `velora-net` stack is a plain data structure: frames in, frames out,
+time passed in. The kernel adds only the driver and a thread that moves frames,
+so the protocols are tested on the host without QEMU, with two stacks connected
+directly and loss and delay chosen by the test. It is our own implementation
+rather than a third-party library, as the specification requires ("own kernel,
+own drivers"), and the scope (ARP, IPv4, ICMP, UDP, DHCP, TCP) stays small. The
+high-priority `net` thread wakes on the MSI-X interrupt and every tick for the
+timers; system calls wait on a shared wait queue the thread wakes after each
+round.
+
+## D37. Упрощения TCP / TCP simplifications
+
+**2026-11-26**
+
+**RU.** Получатель принимает только сегменты по порядку. Сегменты не по
+порядку отбрасываются и подтверждаются повторным ACK. Отправитель после
+трёх повторных ACK или по таймеру повторяет данные начиная с первого
+неподтверждённого байта (go-back-N). Без управления перегрузкой это
+надёжно и просто, но при потерях медленнее, чем в полноценных
+реализациях; для локальной сети и QEMU этого достаточно. Ожидание SYN
+короче (5 повторов, около 15 с), чем для данных (8 повторов).
+
+**EN.** The receiver takes in-order segments only; out-of-order ones are dropped
+and answered with a duplicate ACK. After three duplicate ACKs or a timeout the
+sender repeats data from the first unacknowledged byte (go-back-N). Without
+congestion control this is reliable and simple but slower under loss than full
+implementations, which is enough for a LAN and QEMU. A SYN gives up sooner
+(5 retries, about 15 s) than data (8 retries).
+

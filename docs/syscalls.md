@@ -4,7 +4,7 @@
 
 ## Русский
 
-Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–9). Номера и коды
+Состояние: работают вызовы из таблицы «Реализовано» (этапы 4–10). Номера и коды
 ошибок определены в crate `velora-abi` (`kernel/abi`): им пользуются и ядро,
 и будущая vlibc.
 
@@ -66,6 +66,16 @@
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
 | 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
 | 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
+| 40 | `socket(kind)` | новый сокет: `1` — UDP, `2` — TCP; возвращает дескриптор | `EINVAL`, `ENETDOWN` (нет сети), `EMFILE` |
+| 41 | `bind(fd, port)` | UDP: занять порт (0 — любой свободный); TCP: порт для `listen` | `EADDRINUSE`, `EINVAL` |
+| 42 | `connect(fd, ip, port)` | TCP: соединиться и дождаться установки; UDP: адрес по умолчанию для `write` | `ECONNREFUSED`, `ETIMEDOUT`, `ENETUNREACH`, `EISCONN` |
+| 43 | `listen(fd)` | TCP: принимать соединения на порту из `bind` | `EADDRINUSE`, `EINVAL` |
+| 44 | `accept(fd)` | ждёт соединение, возвращает новый дескриптор | `EINVAL` |
+| 45 | `sendto(fd, buf, len, ip, port)` | UDP: датаграмма на адрес (ip 0 — адрес из `connect`); TCP: данные соединения | `EDESTADDRREQ`, `ENOTCONN`, `EPIPE`, `ECONNRESET` |
+| 46 | `recvfrom(fd, buf, len, from)` | ждёт данные; для UDP пишет отправителя (`SockAddr`); 0 — собеседник закрыл соединение | `ENOTCONN`, `ECONNRESET`, `ETIMEDOUT` |
+| 47 | `netinfo(out)` | пишет `NetInfo` (48 байт): флаги, адрес, маска, шлюз, DNS, MAC, счётчики кадров | `EFAULT` |
+| 48 | `ping(ip, seq, timeout_ms)` | эхо-запрос ICMP; возвращает время ответа в микросекундах | `ETIMEDOUT`, `ENETUNREACH`, `ENETDOWN` |
+| 49 | `shutdown(fd)` | TCP: закрыть передачу (FIN), приём продолжается | `ENOTCONN` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
@@ -145,7 +155,16 @@ ESPIPE 29, EROFS 30, ENAMETOOLONG 36, ENOSYS 38, ENOTEMPTY 39, EUCLEAN 117`
 
 ## English
 
-Status: the calls in the "Implemented" table work (stages 4–9). Stage 9
+Status: the calls in the "Implemented" table work (stages 4–10). Stage 10
+added the socket calls 40–49: `socket(kind)` (1 UDP, 2 TCP), `bind(fd, port)`,
+`connect(fd, ip, port)` (TCP waits for the handshake), `listen(fd)`,
+`accept(fd)`, `sendto(fd, buf, len, ip, port)`, `recvfrom(fd, buf, len, from)`
+(0 = the peer closed), `netinfo(out)` (48-byte `NetInfo`), `ping(ip, seq,
+timeout_ms)` (round trip in µs) and `shutdown(fd)` (TCP half-close). Sockets
+are file descriptors, so `read`, `write` and `close` work on them. New error
+numbers: ENOTSOCK 88, EDESTADDRREQ 89, EADDRINUSE 98, ENETDOWN 100,
+ENETUNREACH 101, ECONNRESET 104, EISCONN 106, ENOTCONN 107, ETIMEDOUT 110,
+ECONNREFUSED 111, EPIPE 32. Stage 9
 added 39 `getrandom(buf, len)` (up to 256 random bytes: RDRAND when present,
 mixed with the TSC). 30 `mount` and 31 `umount` stay reserved (decision D34). Numbers and
 error codes are defined in the `velora-abi` crate (`kernel/abi`), shared by

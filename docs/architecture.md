@@ -196,6 +196,12 @@
   теми же crate, что ядро (D34). Ядро и Limine для установки лежат в
   initramfs Live-образа в `/usr/lib/velora`.
 
+### Сеть (этап 10)
+
+- Драйвер virtio-net, стек `kernel/net` (`velora-net`, без ввода-вывода,
+  тесты на хосте), поток ядра `net`, сокеты как файловые дескрипторы.
+  Подробно — [network.md](network.md), решения D36–D37.
+
 ## English
 
 ### Overview
@@ -347,3 +353,9 @@ VeloraFS root partition whose GUID reaches the kernel as
 `installer/velora-setup` writes GPT, FAT32 and VeloraFS through `/dev/<disk>`
 with the same crates the kernel uses (D34). The kernel and Limine to install
 are in the Live image's initramfs under `/usr/lib/velora`.
+
+### Network (stage 10)
+
+A virtio-net driver, the `kernel/net` stack (`velora-net`, without I/O of its
+own, tested on the host), the `net` kernel thread, and sockets as file
+descriptors. Details in [network.md](network.md), decisions D36–D37.
