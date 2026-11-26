@@ -65,3 +65,17 @@ version = "0.6.0"
 [[package]]
 name = "velora-tar"
 version = "0.6.0"
+
+[[package]]
+name = "velora-vfs"
+version = "0.6.0"
+dependencies = [
+ "velora-abi",
+]
+
+[[package]]
+name = "velorafs"
+version = "0.6.0"
+dependencies = [
+ "velora-vfs",
+]

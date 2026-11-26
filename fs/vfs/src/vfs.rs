@@ -289,10 +289,10 @@ impl Vfs {
         dir_path: &str,
         pos: u64,
     ) -> Result<Option<(DirEntry, u64)>> {
-        if pos < MOUNT_POS {
-            if let Some(r) = self.fs(dir.mount)?.readdir(dir.ino, pos)? {
-                return Ok(Some(r));
-            }
+        if pos < MOUNT_POS
+            && let Some(r) = self.fs(dir.mount)?.readdir(dir.ino, pos)?
+        {
+            return Ok(Some(r));
         }
         let mut k = pos.saturating_sub(MOUNT_POS) as usize;
         let children: Vec<(String, MountId)> = self
