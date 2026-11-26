@@ -15,16 +15,17 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–4 (v0.4.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–5 (v0.5.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
 страницами. Работают прерывания (ACPI, APIC, таймер 100 Гц) и клавиатура PS/2
 с раскладками EN и RU. Есть процессы и потоки с вытесняющим планировщиком,
-режим пользователя (ring 3) с изоляцией памяти и системные вызовы. После
-загрузки занято 5,3 МиБ. Программ в файлах и оболочки пока нет: при загрузке
-запускается встроенная тестовая программа, а затем временная строка ввода с
-эхом для проверки клавиатуры.
+режим пользователя (ring 3) с изоляцией памяти и системные вызовы. Программы
+(ELF) загружаются из initramfs и пишутся на Rust с библиотекой vlibc. После
+загрузки занято 5,4 МиБ (вместе с initramfs). Оболочки пока нет: при загрузке
+запускается `/bin/hello`, а затем временная строка ввода с эхом для проверки
+клавиатуры.
 План этапов — ниже и в [docs/roadmap.md](docs/roadmap.md).
 
 ### Архитектура
@@ -45,11 +46,11 @@ boot/       конфигурация загрузчика
 kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
             kernel/mm, kernel/acpi, kernel/abi — библиотеки
 drivers/    аппаратно-независимые части драйверов (input: клавиатура и раскладки)
-fs/         файловые системы: velora-fat (FAT16 + LFN), позже VeloraFS
-libc/       vlibc (с этапа 5)
-userland/   vsh и базовые команды (с этапа 8)
+fs/         файловые системы: velora-fat (FAT16 + LFN), velora-tar (initramfs), позже VeloraFS
+libc/       vlibc — библиотека для программ
+userland/   программы (hello, vtest); vsh и команды — с этапа 8
 installer/  velora-setup (с этапа 9)
-tools/      mkiso (сборка ISO), fontgen
+tools/      mkiso (сборка ISO), mkinitrd (initramfs), fontgen
 tests/      запуск QEMU и проверки
 docs/       документация
 ```
@@ -84,7 +85,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 2 | Физический аллокатор, страничная память, куча | v0.2.0 (готово) |
 | 3 | APIC, таймер, клавиатура PS/2 | v0.3.0 (готово) |
 | 4 | Процессы, потоки, ring 3, системные вызовы | v0.4.0 (готово) |
-| 5 | Загрузчик ELF, интерфейс для PE, initramfs, vlibc | v0.5.0 |
+| 5 | Загрузчик ELF, интерфейс для PE, initramfs, vlibc | v0.5.0 (готово) |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 |
 | 7 | VFS, FAT32, VeloraFS с журналом | v0.7.0 |
 | 8 | vsh, команды, пользователи и вход, velofetch | v0.8.0 |
@@ -112,16 +113,16 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–4 (v0.4.0) are done. The kernel boots via UEFI, prints to the screen
+Stages 1–5 (v0.5.0) are done. The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
 Interrupts work (ACPI, APIC, 100 Hz timer), as does the PS/2 keyboard with EN
 and RU layouts. There are processes and threads with a preemptive scheduler,
-user mode (ring 3) with memory isolation, and system calls. 5.3 MiB are in use
-after boot. There are no programs in files and no shell yet: boot runs a
-built-in test program and then a temporary echoing line editor to try the
-keyboard. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
+user mode (ring 3) with memory isolation, and system calls. Programs (ELF) are
+loaded from the initramfs and written in Rust with the vlibc library. 5.4 MiB
+are in use after boot (initramfs included). There is no shell yet: boot runs
+`/bin/hello` and then a temporary echoing line editor to try the keyboard. The stage plan is below and in [docs/roadmap.md](docs/roadmap.md).
 
 ### Architecture
 
@@ -167,7 +168,7 @@ On Windows the firmware is at `C:\Program Files\qemu\share\edk2-x86_64-code.fd`.
 | 2 | Physical allocator, paging, kernel heap | v0.2.0 (done) |
 | 3 | APIC, timer, PS/2 keyboard | v0.3.0 (done) |
 | 4 | Processes, threads, ring 3, system calls | v0.4.0 (done) |
-| 5 | ELF loader, PE loader interface, initramfs, vlibc | v0.5.0 |
+| 5 | ELF loader, PE loader interface, initramfs, vlibc | v0.5.0 (done) |
 | 6 | PCI, virtio-blk, AHCI, NVMe, RTC | v0.6.0 |
 | 7 | VFS, FAT32, VeloraFS with a journal | v0.7.0 |
 | 8 | vsh, commands, users and login, velofetch | v0.8.0 |

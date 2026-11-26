@@ -285,3 +285,74 @@ program format; from stage 5 on programs are ordinary ELF files.
 **EN.** Error numbers match Linux (EFAULT = 14, ENOSYS = 38, ...); system call
 numbers are Velora's own. Matching error codes makes porting programs and
 libraries easier at no cost.
+
+## D17. Программы: статический ELF (ET_EXEC) / Programs: static ELF (ET_EXEC)
+
+**2026-11-26**
+
+**RU.** Загружаются только статически собранные ELF64 типа `ET_EXEC` с
+фиксированным адресом 0x400000. Для позиционно-независимых файлов (`ET_DYN`)
+нужны перемещения, для динамически собранных — динамический загрузчик. Ни то
+ни другое пока не нужно, а без них загрузчик проще и проверяемее. Каждая
+секция начинается с новой страницы, RELRO отключён (`-z norelro`), чтобы у
+каждой страницы был один набор прав. Загрузчик отклоняет сегменты, которые
+одновременно доступны на запись и исполнение или делят страницу. ASLR
+появится вместе с `ET_DYN`.
+
+**EN.** Only statically linked ELF64 `ET_EXEC` files at the fixed address
+0x400000 are loaded. Position-independent files (`ET_DYN`) need relocations
+and dynamically linked ones a dynamic loader; neither is needed yet, and the
+loader is simpler and easier to verify without them. Every section starts on
+its own page and RELRO is disabled (`-z norelro`) so each page has one set of
+permissions; the loader rejects writable+executable segments and segments that
+share a page. ASLR comes together with `ET_DYN`.
+
+## D18. initramfs в формате ustar / ustar initramfs
+
+**2026-11-26**
+
+**RU.** Формат tar прост, хорошо описан, и его можно читать прямо в памяти
+без копирования. Архив собирает свой инструмент `mkinitrd`: время
+модификации и владелец фиксированы, поэтому образ воспроизводим. До VFS
+(этап 7) initramfs — единственная файловая система, и доступна она только
+для чтения.
+
+**EN.** tar is simple, well documented and can be read in place without
+copying. The archive is built by the own `mkinitrd` tool with fixed times and
+owners, so the image is reproducible. Until the VFS (stage 7) the initramfs is
+the only file system and it is read-only.
+
+## D19. Отдельный workspace для программ / Separate workspace for programs
+
+**2026-11-26**
+
+**RU.** Ядро и программы собираются под одну цель (`x86_64-unknown-none`), но
+с разными флагами: ядро — `code-model=kernel` в верхней половине, программы —
+обычная модель в нижней половине. Cargo задаёт флаги на цель, а не на пакет,
+поэтому программы — отдельный workspace (`userland/`) с флагами из `build.sh`
+и своим каталогом сборки. vlibc лежит в `libc/` и подключается программами
+по пути.
+
+**EN.** The kernel and programs build for the same target
+(`x86_64-unknown-none`) but with different flags: the kernel with
+`code-model=kernel` in the higher half, programs with the normal model in the
+lower half. Cargo sets flags per target, not per package, so programs are a
+separate workspace (`userland/`) with flags from `build.sh` and their own
+target directory. vlibc lives in `libc/` and programs use it by path.
+
+## D20. Формат PE: распознавание без запуска / PE format: recognised, not run
+
+**2026-11-26**
+
+**RU.** Интерфейс `ExecFormat` уже содержит реализацию для PE. Она читает
+заголовки (тип процессора, подсистема, точка входа) и отвечает «нужен
+Win32-слой». Так `spawn` чужого .exe даёт точную ошибку, а не «неизвестный
+формат». Когда появится Win32-слой, `PeFormat::load` будет отображать секции и
+выдавать процессу personality Win32. Остальное ядро менять не придётся.
+
+**EN.** The `ExecFormat` interface already has a PE implementation: it reads
+the headers (machine, subsystem, entry point) and answers "the Win32 layer is
+needed", so spawning a foreign .exe gives a precise error rather than "unknown
+format". When the Win32 layer exists, `PeFormat::load` will map the sections
+and give the process the Win32 personality without changes elsewhere.
+

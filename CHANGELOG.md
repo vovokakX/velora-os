@@ -6,6 +6,52 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.5.0] — 2026-11-26
+
+### Что нового
+- Программы загружаются из файлов. Загрузчик ELF64 поддерживает статические исполняемые файлы x86_64 (`ET_EXEC`) и проверяет их: сегменты только в пространстве пользователя, без пересечений, без W+X, без исполняемого стека.
+- Интерфейс `ExecFormat` для форматов программ. Формат PE (.exe) распознаётся, его заголовки читаются, но запуск не реализован: ядро отвечает, что нужен Win32-слой.
+- initramfs: архив ustar, который загрузчик передаёт ядру как модуль. Это корневая файловая система Live-режима (только чтение). Свой инструмент `mkinitrd` собирает воспроизводимый архив.
+- Начальный стек программы по System V: argc, argv, envp, auxv.
+- Новые системные вызовы: `spawn` (запуск программы с аргументами и окружением), `wait` (только для своих потомков), `mmap` (анонимная память, W+X запрещено), `munmap`.
+- vlibc — библиотека для программ на Rust: точка входа, вывод, ввод с клавиатуры, аргументы и окружение, куча (`Vec`, `String`, `BTreeMap`) на `mmap`, процессы, время, небольшой C API (`include/vlibc.h`).
+- Программы: `/bin/hello` (запускается при загрузке) и `/bin/vtest` (14 проверок vlibc и системных вызовов из пространства пользователя).
+- Отчёт о памяти учитывает initramfs. В простое занято 5,4 МиБ.
+- Тесты: 62 юнит-теста на хосте (12 новых: ELF, PE, tar), 68 тестов ядра (8 новых), 14 проверок в `vtest`. CI проверяет форматирование и clippy для программ и vlibc.
+
+### Исправления
+- Нет.
+
+### Известные проблемы
+- Поддерживаются только статические исполняемые файлы с фиксированным адресом (без `ET_DYN`, динамической компоновки и ASLR).
+- Файлы доступны только для чтения и только из initramfs (VFS и диски — этапы 6–7).
+- Запуск программ Windows (.exe) не реализован.
+- Программы однопоточные; куча vlibc не защищена от одновременного доступа.
+- Потомки завершившегося процесса передаются ядру и убираются им автоматически; дождаться их уже нельзя.
+
+---
+
+### What's new
+- Programs load from files. The ELF64 loader supports static x86_64 executables (`ET_EXEC`) and validates them: segments only in user space, no overlaps, no W+X, no executable stack.
+- An `ExecFormat` interface for program formats. PE (.exe) files are recognised and their headers read, but running them is not implemented: the kernel reports that the Win32 layer is needed.
+- initramfs: a ustar archive the bootloader passes to the kernel as a module; the read-only root file system of the Live system. The own `mkinitrd` tool builds a reproducible archive.
+- System V initial program stack: argc, argv, envp, auxv.
+- New system calls: `spawn` (start a program with arguments and environment), `wait` (own children only), `mmap` (anonymous memory, W+X refused), `munmap`.
+- vlibc, the library for Rust programs: entry point, output, keyboard input, arguments and environment, a heap (`Vec`, `String`, `BTreeMap`) on `mmap`, processes, time, a small C API (`include/vlibc.h`).
+- Programs: `/bin/hello` (runs at boot) and `/bin/vtest` (14 checks of vlibc and the system calls from user space).
+- The memory report includes the initramfs; 5.4 MiB are in use when idle.
+- Tests: 62 host unit tests (12 new: ELF, PE, tar), 68 kernel tests (8 new), 14 checks in `vtest`. CI runs format and clippy checks for programs and vlibc.
+
+### Fixes
+- None.
+
+### Known issues
+- Only static, fixed-address executables are supported (no `ET_DYN`, dynamic linking or ASLR).
+- Files are read-only and only come from the initramfs (VFS and disks in stages 6–7).
+- Running Windows programs (.exe) is not implemented.
+- Programs are single-threaded; the vlibc heap is not safe for concurrent use.
+- Children of an exited process are handed to the kernel and removed automatically; they can no longer be waited for.
+
 ## [0.4.0] — 2026-11-26
 
 ### Что нового
