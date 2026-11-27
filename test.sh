@@ -39,4 +39,8 @@ echo "==> USB image test in QEMU (boot from a USB drive, no HPET)"
 echo "==> installation test in QEMU (install, boot from disk, files persist)"
 "$PY" tests/qemu_run.py install --timeout 900
 
+echo "==> graphical installation in QEMU (start menu, every screen, install, boot from disk)"
+"$PY" tests/qemu_run.py gui --timeout 1500 --screens build/logs/installer-screens
+"$PY" tests/qemu_run.py gui --resolution 1920x1080 --screens-only --timeout 600 --screens build/logs/installer-screens --log build/logs/gui-1920x1080.log
+
 echo "==> all tests passed"
