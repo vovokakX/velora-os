@@ -4,16 +4,21 @@ version = 4
 
 [[package]]
 name = "velora-abi"
-version = "0.15.0"
+version = "0.16.0"
+
+[[package]]
+name = "velora-dns"
+version = "0.16.0"
 
 [[package]]
 name = "velora-mm"
-version = "0.15.0"
+version = "0.16.0"
 
 [[package]]
 name = "vlibc"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "velora-abi",
+ "velora-dns",
  "velora-mm",
 ]

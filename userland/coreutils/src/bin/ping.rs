@@ -1,4 +1,4 @@
-//! ping [-c COUNT] ADDRESS: ICMP echo requests, one per second.
+//! ping [-c COUNT] HOST (address or name): ICMP echo requests, one per second.
 
 #![no_std]
 #![no_main]
@@ -6,7 +6,7 @@
 extern crate alloc;
 
 use coreutils::*;
-use vlibc::net::{self, Ipv4};
+use vlibc::net;
 use vlibc::{env, eprintln, println, time};
 
 vlibc::main!(main);
@@ -32,15 +32,15 @@ fn main() -> i32 {
         }
     }
     let Some(t) = target else {
-        eprintln!("usage: ping [-c COUNT] ADDRESS");
+        eprintln!("usage: ping [-c COUNT] HOST");
         return 2;
     };
-    let Some(ip) = Ipv4::parse(t) else {
-        eprintln!(
-            "ping: {}: not an IPv4 address (names are not resolved yet)",
-            t
-        );
-        return 2;
+    let ip = match net::resolve(t) {
+        Ok(ip) => ip,
+        Err(e) => {
+            eprintln!("ping: {}: {}", t, e.describe());
+            return 2;
+        }
     };
     println!("PING {}", ip);
     let mut received = 0;

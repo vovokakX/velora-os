@@ -5,6 +5,7 @@
 pub mod ahci;
 pub mod block;
 pub mod dma;
+pub mod e1000;
 pub mod msix;
 pub mod nvme;
 pub mod pci;
@@ -13,6 +14,25 @@ pub mod rtc;
 pub mod virtio_blk;
 pub mod virtio_net;
 pub mod xhci;
+
+/// A network card: sends and receives Ethernet frames.
+pub trait NetDevice: Send {
+    /// Model, for the boot log.
+    fn name(&self) -> &str;
+    fn mac(&self) -> [u8; 6];
+    /// Queues one frame; false if it cannot be sent now (it is lost).
+    fn send(&mut self, frame: &[u8]) -> bool;
+    /// The next received frame, if one is waiting.
+    fn receive(&mut self) -> Option<alloc::vec::Vec<u8>>;
+}
+
+/// The first network card: virtio-net, then Intel e1000 family.
+pub fn probe_network() -> Option<alloc::boxed::Box<dyn NetDevice>> {
+    if let Some(v) = virtio_net::probe() {
+        return Some(alloc::boxed::Box::new(v));
+    }
+    e1000::probe().map(|n| alloc::boxed::Box::new(n) as alloc::boxed::Box<dyn NetDevice>)
+}
 
 /// Enumerates PCI, starts the disk drivers and reads the RTC.
 pub fn init() {

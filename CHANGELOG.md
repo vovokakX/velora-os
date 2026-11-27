@@ -6,6 +6,42 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.16.0] — 2026-11-27
+
+### Что нового
+- Драйвер сетевых карт Intel e1000/e1000e: 82540EM, 82545EM, 82574L (проверены в QEMU) и встроенные во многие платы I217, I218, I219 (по идентификаторам; на реальном железе не проверены). Сетевая карта теперь — общий интерфейс `NetDevice`: virtio-net или e1000.
+- DNS: vlibc разрешает имена (записи A, цепочки CNAME) через сервер из DHCP или из переменной `DNS_SERVER=АДРЕС[:ПОРТ]`, три попытки с таймаутами. Разбор DNS — в крейте `velora-dns` (LGPL, тесты на хосте).
+- Команда `host ИМЯ [СЕРВЕР[:ПОРТ]]`; `ping` принимает имена.
+- Команда `fetch [-o ФАЙЛ] [-q] URL`: скачивание по HTTP/1.1, до 5 редиректов, тело по Content-Length или chunked; ошибки HTTP и `https://` (TLS нет) сообщаются понятно. Логика HTTP — в крейте `velora-http` с тестами на хосте (решение D45).
+- `recvfrom` получил таймаут (пятый аргумент), в vlibc — `UdpSocket::recv_from_timeout`.
+- Тесты: тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — на 82574L) с DNS- и HTTP-серверами на хосте и проверяет `host`, `fetch` (редирект, файл, 404, https) и `ping` по имени. Тест ядра проверяет, что TSC всех процессоров согласованы. 195 юнит-тестов на хосте, 101 тест ядра.
+
+### Исправления
+- Нет.
+
+### Известные проблемы
+- Нет HTTPS (TLS), IPv6, сетевых карт Realtek и Wi-Fi.
+- e1000 работает опросом раз в тик (10 мс), без прерываний.
+- Ограничения прошлых версий остаются (сигналов нет, одна блокировка VFS, только UEFI, USB без хабов, virtio-blk не работает с QEMU 8.2 — #19).
+
+---
+
+### What's new
+- An Intel e1000/e1000e network card driver: 82540EM, 82545EM, 82574L (tested in QEMU) and the I217, I218 and I219 built into many boards (by id; untested on real hardware). The network card is now a common `NetDevice` interface: virtio-net or e1000.
+- DNS: vlibc resolves names (A records, CNAME chains) through the server from DHCP or the `DNS_SERVER=ADDRESS[:PORT]` variable, three tries with timeouts. DNS handling is in the `velora-dns` crate (LGPL, host tests).
+- The `host NAME [SERVER[:PORT]]` command; `ping` takes names.
+- The `fetch [-o FILE] [-q] URL` command: HTTP/1.1 downloads, up to 5 redirects, bodies by Content-Length or chunked; HTTP errors and `https://` (no TLS) are reported clearly. The HTTP logic is in the `velora-http` crate with host tests (decision D45).
+- `recvfrom` has a timeout (fifth argument); vlibc has `UdpSocket::recv_from_timeout`.
+- Tests: the `net` test runs on e1000 (`VELORA_NET_NIC=e1000e` for the 82574L) with DNS and HTTP servers on the host and checks `host`, `fetch` (redirect, file, 404, https) and `ping` by name. A kernel test checks that all processors' TSCs agree. 195 host unit tests, 101 kernel tests.
+
+### Fixes
+- None.
+
+### Known issues
+- No HTTPS (TLS), IPv6, Realtek network cards or Wi-Fi.
+- The e1000 is polled every tick (10 ms), without interrupts.
+- Earlier limitations remain (no signals, one VFS lock, UEFI only, USB without hubs, virtio-blk does not work with QEMU 8.2 — #19).
+
 ## [0.15.0] — 2026-11-27
 
 ### Что нового

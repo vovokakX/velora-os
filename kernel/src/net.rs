@@ -6,7 +6,7 @@
 //! lock and wait on [`ACTIVITY`] when they have to block.
 
 use crate::arch::x86_64::cpu;
-use crate::drivers::virtio_net::{self, VirtioNet};
+use crate::drivers::{self, NetDevice};
 use crate::sched::{self, Priority, WaitQueue};
 use crate::sync::SpinLock;
 use crate::{kok, time};
@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use velora_net::{Handle, Ipv4, NetError, Stack, TcpState};
 
 struct Net {
-    dev: VirtioNet,
+    dev: alloc::boxed::Box<dyn NetDevice>,
     stack: Stack,
     sockets: BTreeMap<u32, Socket>,
     next_socket: u32,
@@ -100,7 +100,7 @@ extern "C" fn net_thread(_: u64) -> u64 {
 
 /// Finds the network card, starts DHCP and the network thread.
 pub fn init() {
-    let Some(dev) = virtio_net::probe() else {
+    let Some(dev) = drivers::probe_network() else {
         return;
     };
     let mac = dev.mac();
@@ -114,9 +114,11 @@ pub fn init() {
         announced: false,
     };
     pump(&mut n);
+    let model = alloc::string::String::from(n.dev.name());
     *NET.lock() = Some(n);
     kok!(
-        "net0: virtio-net, MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, asking DHCP for an address",
+        "net0: {}, MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, asking DHCP for an address",
+        model,
         mac[0],
         mac[1],
         mac[2],
@@ -365,10 +367,12 @@ pub fn send(id: u32, data: &[u8], to: Option<(Ipv4, u16)>) -> Result<usize, i64>
 /// Received bytes and, for UDP, the sender.
 pub type Received = (Vec<u8>, Option<(Ipv4, u16)>);
 
-pub fn recv(id: u32, max: usize) -> Result<Received, i64> {
+/// Waits for data (at most `timeout_ms` if not 0).
+pub fn recv(id: u32, max: usize, timeout_ms: u64) -> Result<Received, i64> {
     let (kind, h) = sock(id, |_, s| Ok((s.kind, s.handle)))?;
     let h = h.ok_or(-velora_abi::errno::ENOTCONN)?;
-    let r = block_until(None, |n| match kind {
+    let deadline = (timeout_ms > 0).then(|| now() + timeout_ms);
+    let r = block_until(deadline, |n| match kind {
         Kind::Udp => match n.stack.udp_recv(h) {
             Ok(Some((ip, port, mut data))) => {
                 data.truncate(max);
@@ -392,6 +396,7 @@ pub fn recv(id: u32, max: usize) -> Result<Received, i64> {
     match r {
         Some(Ok(v)) => Ok(v),
         Some(Err(e)) => Err(-errno(e)),
+        None if deadline.is_some() && present() => Err(-velora_abi::errno::ETIMEDOUT),
         None => Err(-velora_abi::errno::ENETDOWN),
     }
 }

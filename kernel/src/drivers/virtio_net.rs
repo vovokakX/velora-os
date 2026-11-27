@@ -298,6 +298,21 @@ impl VirtioNet {
     }
 }
 
+impl super::NetDevice for VirtioNet {
+    fn name(&self) -> &str {
+        "virtio-net"
+    }
+    fn mac(&self) -> [u8; 6] {
+        VirtioNet::mac(self)
+    }
+    fn send(&mut self, frame: &[u8]) -> bool {
+        VirtioNet::send(self, frame)
+    }
+    fn receive(&mut self) -> Option<Vec<u8>> {
+        VirtioNet::receive(self)
+    }
+}
+
 impl Drop for VirtioNet {
     fn drop(&mut self) {
         // SAFETY: resetting the device stops it from using our buffers.

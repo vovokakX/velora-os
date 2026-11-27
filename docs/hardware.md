@@ -54,7 +54,7 @@
    `velora-setup` (см. [installer/README.md](../installer/README.md)).
    Установщик стирает выбранный диск целиком.
 
-### Что поддерживается (v0.15.0)
+### Что поддерживается (v0.16.0)
 
 | Устройство | Состояние |
 |---|---|
@@ -62,7 +62,7 @@
 | Клавиатура | PS/2 (обычно встроенная клавиатура ноутбука) и USB (HID boot protocol) на корневых портах контроллера xHCI |
 | Диски | SATA (AHCI), NVMe, virtio-blk |
 | Таймеры | HPET, таймер ACPI PM или PIT для калибровки; TSC и таймер APIC |
-| Сеть | только virtio-net (виртуальные машины). Сетевые карты Intel — с этапа 16 |
+| Сеть | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (проверены в QEMU), I217/I218/I219 (встроены во многие платы Intel; на железе не проверены). Realtek и Wi-Fi не поддерживаются |
 | Процессоры | все ядра (до 64): программы работают параллельно, код ядра — под общей блокировкой |
 | Питание | выключение и перезагрузка через ACPI; кнопка питания на ПК, где она фиксированное событие ACPI (обычно настольные ПК). У многих ноутбуков кнопка — метод AML, она не работает: выключайте командой `shutdown` |
 | USB | контроллеры xHCI: клавиатура, мышь (`/dev/mouse`), флешки (разделы, FAT32). Только устройства на корневых портах, подключённые при загрузке: хабы и горячее подключение не поддерживаются |
@@ -144,7 +144,7 @@ example to edit `boot/limine.conf`.
    (see [installer/README.md](../installer/README.md)). The installer erases
    the whole chosen disk.
 
-### What is supported (v0.15.0)
+### What is supported (v0.16.0)
 
 | Device | State |
 |---|---|
@@ -152,7 +152,7 @@ example to edit `boot/limine.conf`.
 | Keyboard | PS/2 (usually a laptop's built-in keyboard) and USB (HID boot protocol) on xHCI root ports |
 | Disks | SATA (AHCI), NVMe, virtio-blk |
 | Timers | HPET, the ACPI PM timer or the PIT for calibration; the TSC and the APIC timer |
-| Network | virtio-net only (virtual machines). Intel network cards from stage 16 |
+| Network | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (tested in QEMU), I217/I218/I219 (built into many Intel boards; untested on hardware). No Realtek, no Wi-Fi |
 | Processors | all cores (up to 64): programs run in parallel, kernel code under one lock |
 | Power | ACPI power off and restart; the power button on PCs where it is a fixed ACPI event (usually desktops). On many laptops the button is an AML method and does not work: use `shutdown` |
 | USB | xHCI controllers: keyboard, mouse (`/dev/mouse`), flash drives (partitions, FAT32). Only devices on root ports present at boot: no hubs, no hot plugging |

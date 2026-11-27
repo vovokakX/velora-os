@@ -1,7 +1,7 @@
 [package]
 name = "vlibc"
 description = "Velora C-library-level runtime for user programs: startup, system calls, I/O, heap, processes"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 license = "LGPL-3.0-or-later"
 publish = false
@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 velora-abi = { path = "../../kernel/abi" }
 velora-mm = { path = "../../kernel/mm" }
+velora-dns = { path = "../dns" }
 
 [features]
 # Export a small C API (exit, write, read, malloc, free, ...) for C programs.

@@ -26,6 +26,10 @@ fn main() -> i32 {
     println!("  mem, uptime, date     memory, time since boot, date (UTC)");
     println!("  whoami                current user");
     println!("  dmesg                 kernel messages since boot");
+    println!("  ip, ping HOST         network settings, ICMP echo (names work)");
+    println!("  host NAME             look a name up in DNS");
+    println!("  fetch [-o F] URL      download over HTTP");
+    println!("  nc HOST PORT, nc -l   TCP client and one-connection server");
     println!("  velofetch             system summary");
     println!("  reboot, shutdown      restart / power off (root)");
     println!();

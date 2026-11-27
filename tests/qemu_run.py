@@ -411,11 +411,92 @@ BOOT_MARKERS = {
 
 # User-mode networking: the guest gets 10.0.2.15 by DHCP, the gateway
 # 10.0.2.2 answers ping and forwards TCP to the host's 127.0.0.1.
-def net_args(hostfwd=None):
+def net_args(hostfwd=None, nic="virtio-net-pci,disable-legacy=on"):
     netdev = "user,id=n0"
     if hostfwd:
         netdev += ",hostfwd=tcp:127.0.0.1:%d-:%d" % hostfwd
-    return ["-netdev", netdev, "-device", "virtio-net-pci,netdev=n0,disable-legacy=on"]
+    return ["-netdev", netdev, "-device", nic + ",netdev=n0"]
+
+
+# The net test uses an Intel card (virtio-net is covered by ktest):
+# e1000 (82540EM) by default, VELORA_NET_NIC=e1000e for the 82574L.
+NET_NIC = os.environ.get("VELORA_NET_NIC", "e1000")
+NET_NIC_NAME = {"e1000": "82540EM", "e1000e": "82574L"}.get(NET_NIC, "")
+
+HTTP_FILE = b"Velora fetch test file\n" + b"0123456789" * 2000 + b"\nEND-OF-FILE\n"
+
+
+class HostDns:
+    """A tiny DNS server on the host for the net test: velora.test and
+    www.velora.test (a CNAME) are 10.0.2.2, everything else does not
+    exist. The guest reaches it at 10.0.2.2:port."""
+
+    def __init__(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.port = self.sock.getsockname()[1]
+        self.queries = []
+        threading.Thread(target=self._run, daemon=True).start()
+
+    @staticmethod
+    def _name(q):
+        labels, i = [], 12
+        while q[i]:
+            labels.append(q[i + 1:i + 1 + q[i]].decode().lower())
+            i += 1 + q[i]
+        return ".".join(labels), i + 5
+
+    def _run(self):
+        while True:
+            try:
+                q, addr = self.sock.recvfrom(512)
+            except OSError:
+                return
+            name, end = self._name(q)
+            self.queries.append(name)
+            head = q[:2] + b"\x81\x80" + q[4:6]
+            question = q[12:end]
+            if name in ("velora.test", "www.velora.test"):
+                rr = b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + bytes([10, 0, 2, 2])
+                msg = head + b"\x00\x01\x00\x00\x00\x00" + question + rr
+            else:
+                msg = q[:2] + b"\x81\x83" + q[4:6] + b"\x00\x00\x00\x00\x00\x00" + question
+            self.sock.sendto(msg, addr)
+
+    def close(self):
+        self.sock.close()
+
+
+class HostHttp:
+    """An HTTP server on the host: /file.txt, and /old redirects to it."""
+
+    def __init__(self):
+        import http.server
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/old":
+                    self.send_response(302)
+                    self.send_header("Location", "/file.txt")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                elif self.path == "/file.txt":
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(HTTP_FILE)))
+                    self.end_headers()
+                    self.wfile.write(HTTP_FILE)
+                else:
+                    self.send_error(404)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
 
 
 def run_once(args, work, disks, log, check, iso="default", extra=None):
@@ -670,7 +751,7 @@ def run_net(args, work):
     def check(proc, reader, monitor, deadline):
         s = Session(proc, reader, monitor, deadline)
         try:
-            assert s.wait("net0: virtio-net"), "no network card found"
+            assert s.wait("net0: " + NET_NIC_NAME), "the %s card was not found" % NET_NIC
             login(s, "root", "velora", "root@velora")
             assert wait_for(proc, reader, "net0: 10.0.2.15/24", deadline), "DHCP did not configure 10.0.2.15"
             s.run("ip", "inet 10.0.2.15/24")
@@ -690,6 +771,19 @@ def run_net(args, work):
             s.type("nc 10.0.2.2 1 < /dev/null\n")
             assert s.wait("nc: 10.0.2.2:1: ", timeout=40), "no error for a closed port"
             s.run("ip", "frames received")
+            # DNS, HTTP and names, with servers on the host.
+            dns = "10.0.2.2:%d" % hdns.port
+            s.run("host velora.test %s" % dns, "velora.test has address 10.0.2.2")
+            s.run("host nothing.test %s" % dns, "host: nothing.test: no such name")
+            s.run("fetch -q http://10.0.2.2:%d/old | cat" % hhttp.port, "END-OF-FILE", exact=True)
+            s.run("DNS_SERVER=%s fetch -o /tmp/f.txt http://www.velora.test:%d/file.txt" % (dns, hhttp.port),
+                  "fetch: %d bytes from www.velora.test:%d/file.txt" % (len(HTTP_FILE), hhttp.port))
+            s.run("cat /tmp/f.txt", "Velora fetch test file", exact=True)
+            s.run("fetch http://10.0.2.2:%d/missing" % hhttp.port, "fetch: HTTP 404")
+            s.run("fetch https://velora.test/", "only http:// is supported")
+            s.run("DNS_SERVER=%s ping -c 1 velora.test" % dns, "1 packets transmitted, 1 received")
+            assert "www.velora.test" in hdns.queries, "the DNS server got no query"
+            print("qemu_run: DNS, fetch (redirect, file, errors) and ping by name work")
             s.type("shutdown\n")
             wait_exit(proc)
         except AssertionError as e:
@@ -697,12 +791,17 @@ def run_net(args, work):
         result["ok"] = True
         return 0
 
+    hdns = HostDns()
+    hhttp = HostHttp()
     try:
-        r = run_once(args, work, None, args.log, check, extra=net_args((fwd, 7000)))
+        r = run_once(args, work, None, args.log, check,
+                     extra=net_args((fwd, 7000), nic=NET_NIC))
     finally:
         server.close()
+        hdns.close()
+        hhttp.close()
     if r == 0:
-        print("qemu_run: PASS (network: DHCP, ping, TCP both ways)")
+        print("qemu_run: PASS (network on %s: DHCP, ping, TCP both ways, DNS, fetch)" % NET_NIC)
     return r
 
 

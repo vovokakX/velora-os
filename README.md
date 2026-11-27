@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–15 (v0.15.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы все этапы 1–16 (v0.16.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -71,7 +71,7 @@ kernel/     ядро (arch, boot, console, mm, sched, syscall, drivers, ...);
             kernel/mm, kernel/acpi, kernel/abi, kernel/net — библиотеки
 drivers/    аппаратно-независимые части драйверов (input, pci, rtc, usb)
 fs/         vfs (интерфейс и монтирование), velorafs, fat (FAT16/FAT32), gpt, tar (initramfs)
-libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh), editor (Plume)
+libc/       vlibc — библиотека для программ; auth (пароли), shell (язык vsh), editor (Plume), dns, http
 userland/   программы: login, vsh, plume, команды (coreutils), hello, vtest
 installer/  velora-setup — установщик
 tools/      mkiso (сборка ISO), mkusb (образ для флешки), mkinitrd (initramfs), mkpasswd (хеши паролей), kstrip, fsck (проверка образов), fontgen
@@ -122,7 +122,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 13 | ACPI: выключение, перезагрузка, кнопка питания | v0.13.0 (готово) |
 | 14 | Многопроцессорность (SMP) | v0.14.0 (готово) |
 | 15 | USB: xHCI, клавиатура, мышь, флешки | v0.15.0 (готово) |
-| 16 | Сеть на реальном ПК: e1000, DNS, `fetch` | v0.16.0 |
+| 16 | Сеть на реальном ПК: e1000, DNS, `fetch` | v0.16.0 (готово) |
 
 После этого: графическая оболочка Lumi (компоновщик в пространстве
 пользователя поверх framebuffer) и Win32-слой для запуска .exe (загрузчик
@@ -146,7 +146,7 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–15 are done (v0.15.0). The kernel boots via UEFI, prints to the screen
+All stages 1–16 are done (v0.16.0). The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -238,7 +238,7 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 13 | ACPI: power off, restart, power button | v0.13.0 (done) |
 | 14 | Multiprocessing (SMP) | v0.14.0 (done) |
 | 15 | USB: xHCI, keyboard, mouse, flash drives | v0.15.0 (done) |
-| 16 | Networking on a real PC: e1000, DNS, `fetch` | v0.16.0 |
+| 16 | Networking on a real PC: e1000, DNS, `fetch` | v0.16.0 (done) |
 
 After that: the Lumi graphical shell (a user-space compositor on top of the
 framebuffer) and a Win32 layer for .exe files (a PE loader plus translation
