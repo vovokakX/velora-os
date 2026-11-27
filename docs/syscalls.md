@@ -76,6 +76,8 @@
 | 47 | `netinfo(out)` | пишет `NetInfo` (48 байт): флаги, адрес, маска, шлюз, DNS, MAC, счётчики кадров | `EFAULT` |
 | 48 | `ping(ip, seq, timeout_ms)` | эхо-запрос ICMP; возвращает время ответа в микросекундах | `ETIMEDOUT`, `ENETUNREACH`, `ENETDOWN` |
 | 49 | `shutdown(fd)` | TCP: закрыть передачу (FIN), приём продолжается | `ENOTCONN` |
+| 50 | `display(op, arg)` | экран для графических программ: `0` — пишет `DisplayInfo` (ширина, высота, байт в строке, бит на пиксель, сдвиги каналов) по адресу `arg`; `1` — отображает framebuffer в процесс (write-combining) и забирает экран у консоли, возвращает адрес; `2` — отдаёт экран консоли. Экран принадлежит одному процессу; после его выхода консоль показывается снова | `ENODEV` (нет экрана), `EBUSY` (экран у другого процесса), `EINVAL` |
+| 51 | `diskinfo(path, path_len, out)` | пишет `DiskInfo` (64 байта) о `/dev/ИМЯ`: размер, сектор, вид (virtio, SATA, NVMe, USB, раздел), модель | `ENODEV`, `EFAULT` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
@@ -104,6 +106,11 @@
 - `RAW`: клавиши отдаются сразу, без эха; стрелки, Home, End, Delete —
   последовательности ANSI (`ESC [ A` и т. д.), Backspace — 0x7f. Так vsh
   сам редактирует строку.
+- `/dev/keyboard` — нажатия и отпускания клавиш пакетами по 8 байт
+  (`velora_abi::key`: код клавиши, флаги Shift/Ctrl/Alt, символ), для
+  графических программ. Чтение не ждёт. Клавиши, прочитанные там, консоль
+  не получает. `/dev/mouse` — пакеты по 4 байта (кнопки, dx, dy, колесо:
+  положительное — от себя) от мышей USB и PS/2.
 - Ctrl+C в строчном режиме при заданном процессе переднего плана
   завершает его со статусом 130 сразу, даже если он не читает клавиатуру.
 - Программы запускаются с любой файловой системы; нужен бит `x`
@@ -160,7 +167,20 @@ added the socket calls 40–49: `socket(kind)` (1 UDP, 2 TCP), `bind(fd, port)`,
 `connect(fd, ip, port)` (TCP waits for the handshake), `listen(fd)`,
 `accept(fd)`, `sendto(fd, buf, len, ip, port)`, `recvfrom(fd, buf, len, from)`
 (0 = the peer closed), `netinfo(out)` (48-byte `NetInfo`), `ping(ip, seq,
-timeout_ms)` (round trip in µs) and `shutdown(fd)` (TCP half-close). Sockets
+timeout_ms)` (round trip in µs) and `shutdown(fd)` (TCP half-close).
+`display(op, arg)` (50) is the screen for graphical programs: op 0 writes
+`DisplayInfo` (width, height, bytes per row, bits per pixel, channel shifts)
+to `arg`; op 1 maps the frame buffer into the process (write-combining), takes
+the screen from the console and returns the address; op 2 gives the screen
+back. One process owns the screen; the console shows again when it exits
+(`ENODEV` without a screen, `EBUSY` if another process owns it).
+`diskinfo(path, len, out)` (51) writes `DiskInfo` (64 bytes) about
+`/dev/NAME`: size, sector size, kind (virtio, SATA, NVMe, USB, partition) and
+model. `/dev/keyboard` gives key presses and releases as 8-byte packets
+(`velora_abi::key`: key code, Shift/Ctrl/Alt flags, character) without
+waiting; keys read there do not reach the console. `/dev/mouse` gives 4-byte
+packets (buttons, dx, dy, wheel: positive away from the user) from USB and
+PS/2 mice. Sockets
 are file descriptors, so `read`, `write` and `close` work on them. New error
 numbers: ENOTSOCK 88, EDESTADDRREQ 89, EADDRINUSE 98, ENETDOWN 100,
 ENETUNREACH 101, ECONNRESET 104, EISCONN 106, ENOTCONN 107, ETIMEDOUT 110,

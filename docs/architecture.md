@@ -558,3 +558,50 @@ then shows `assets/velora-logo.png`: the picture's background is made
 transparent and cut away, and the mark takes the height of the summary (13
 rows with the colour palette). Otherwise it prints the ASCII logo (also with
 `velofetch --ascii` and into a pipe).
+
+### Графическая основа velora-ui / Graphical toolkit velora-ui
+
+- `libc/ui` (`velora-ui`, тесты на хосте): холст с альфа-смешиванием,
+  скруглённые прямоугольники, круги, дуги, линии и мягкие тени через
+  функции расстояния в фиксированной точке (1/256 пикселя, без плавающей
+  точки), градиенты с упорядоченным дизерингом; текст Inter через fontdue с
+  кешем глифов; значки из примитивов; картинки PNG (`velora-gfx`); указатели
+  мыши из `assets/cursors`; темы (графитовая и светлая), фон с волнами и
+  окна (`decor`). Элементы в немедленном режиме (`Ui`, `Ctx`): кнопка,
+  переключатель, радиокнопки, выпадающий список, список выбора, поле ввода,
+  полоса и кольцо прогресса. Фокус — Tab/Shift+Tab по порядку рисования,
+  Enter/Пробел, стрелки, Escape. Клавиши подаются по одной на кадр.
+- Модуль `screen` (feature `velora`): `display` отображает framebuffer,
+  программа рисует в холст (двойная буферизация) и копирует изменённую
+  часть; указатель мыши рисуется только при копировании. Ввод —
+  `/dev/keyboard` и `/dev/mouse`.
+- Ядро: `display.rs` (владелец экрана, отображение с write-combining,
+  возврат экрана консоли после выхода владельца); консоль в это время
+  рисует только в копию в памяти. Мышь PS/2 на втором порту 8042 (с
+  колесом), разбор пакетов — `velora-input::ps2mouse`.
+- `/bin/uidemo` показывает все элементы; тест `boot` запускает его, снимает
+  экран (`build/logs/uidemo-*.png`), нажимает клавиши, двигает мышь и
+  проверяет, что консоль вернулась. `cargo run -p velora-ui --example render`
+  рисует ту же галерею на хосте.
+
+`libc/ui` (`velora-ui`, host-tested) has a canvas with alpha blending; rounded
+rectangles, circles, arcs, lines and soft shadows from fixed-point distance
+functions (1/256 pixel, no floating point); gradients with ordered dithering;
+Inter text through fontdue with a glyph cache; icons built from primitives;
+PNG pictures (`velora-gfx`); mouse pointers from `assets/cursors`; themes
+(graphite and light), the wavy backdrop and windows (`decor`). Widgets are
+immediate-mode (`Ui`, `Ctx`): button, switch, radio buttons, drop-down list,
+choice list, text field, progress bar and ring. Focus moves with Tab/Shift+Tab
+in drawing order; Enter/Space, arrows and Escape work; keys are fed one per
+frame. The `screen` module (feature `velora`) maps the frame buffer with
+`display`; the program draws into the canvas (double buffering) and copies the
+changed part; the mouse pointer is drawn only on the way to the screen. Input
+comes from `/dev/keyboard` and `/dev/mouse`. In the kernel, `display.rs` keeps
+the screen's owner, maps the frame buffer write-combining and gives the screen
+back to the console after the owner exits; meanwhile the console draws only
+into its RAM copy. A PS/2 mouse on the 8042's second port (with a wheel) is
+supported; packets are decoded by `velora-input::ps2mouse`. `/bin/uidemo`
+shows every widget; the `boot` test runs it, takes screenshots
+(`build/logs/uidemo-*.png`), presses keys, moves the mouse and checks that the
+console comes back. `cargo run -p velora-ui --example render` draws the same
+gallery on the host.

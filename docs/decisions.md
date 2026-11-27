@@ -1000,3 +1000,54 @@ image base64 is useless there and would fill the log. The terminal's answers
 (graphics, DA1, sizes `CSI 14/16/18 t`) become the program's input, as in any
 terminal. A program learns the cell size in pixels with `tty(3)` (`ENODEV`
 without a screen: no graphics).
+
+## D47. Графическая основа: velora-ui, Inter и fontdue / Graphical toolkit: velora-ui, Inter and fontdue
+
+**2026-11-27**
+
+**RU.** Графический установщик и будущая оболочка Lumi рисуются в
+программе, а не в ядре. Ядро отдаёт framebuffer одному процессу
+(`display`), даёт события клавиш (`/dev/keyboard`) и мыши (`/dev/mouse`,
+теперь и PS/2). Причины: сложный разбор шрифтов и картинок остаётся вне
+ядра; ошибка программы не роняет систему; консоль сохраняет свой текст и
+возвращается, когда программа завершается, в том числе аварийно.
+
+Шрифт — Inter (OFL 1.1, есть кириллица), растеризация — fontdue (MIT). Это
+первые внешние crate проекта (D42), добавлены с согласия владельца
+репозитория. Свой растеризатор TrueType писался бы дольше и был бы хуже
+проверен. fontdue собирается без std (с hashbrown) и работает без SSE:
+программы собираются без плавающей точки в регистрах, она эмулируется.
+Поэтому загрузка трёх начертаний под TCG занимает около 2 с; глифы
+кешируются. Остальное рисование целочисленное: функции расстояния в 1/256
+пикселя дают сглаживание, тени и дуги без плавающей точки.
+
+Элементы — в немедленном режиме: программа каждый кадр рисует экран
+заново из своего состояния, а `Ui` помнит только фокус, открытый список и
+прокрутку. Так экраны установщика остаются простыми функциями от
+состояния, и их можно отрисовать на хосте и сравнить. Клавиши подаются по
+одной на кадр, чтобы их порядок не терялся между элементами. Масштаб
+дробный (пикселей на единицу дизайна), поэтому один макет работает в
+1280x720, 1920x1080 и 4K.
+
+**EN.** The graphical installer and the future Lumi shell draw in a program,
+not in the kernel. The kernel gives the frame buffer to one process
+(`display`), key events (`/dev/keyboard`) and mouse events (`/dev/mouse`, now
+from PS/2 too). Reasons: complex font and image parsing stays out of the
+kernel; a crashing program does not bring the system down; the console keeps
+its text and comes back when the program exits, also when it crashes.
+
+The font is Inter (OFL 1.1, with Cyrillic) and rasterisation is fontdue
+(MIT). They are the project's first external crates (D42), added with the
+repository owner's consent. An own TrueType rasteriser would take longer and
+be less proven. fontdue builds without std (with hashbrown) and works without
+SSE: programs are built without floating point in registers, so it is
+emulated. Loading three faces therefore takes about 2 s under TCG; glyphs are
+cached. All other drawing is integer: distance functions in 1/256 pixel give
+anti-aliasing, shadows and arcs without floating point.
+
+Widgets are immediate-mode: every frame the program draws the screen again
+from its state, and `Ui` only remembers the focus, the open list and scroll
+positions. Installer screens thus stay plain functions of the state and can
+be drawn on the host and compared. Keys are fed one per frame so their order
+is not lost between widgets. The scale is fractional (pixels per design unit),
+so one layout works at 1280x720, 1920x1080 and 4K.
