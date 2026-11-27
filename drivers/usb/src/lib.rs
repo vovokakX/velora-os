@@ -4,6 +4,8 @@
 //! - [`hid`]: boot protocol keyboard and mouse reports. Keyboard reports
 //!   become PS/2 scancode set 1 bytes, so USB keyboards go through the
 //!   same decoder and layouts as PS/2 ones;
+//! - [`report`]: HID report descriptors of pointers (tablets and mice in
+//!   report protocol);
 //! - [`msc`]: mass storage bulk-only transport and the SCSI commands a
 //!   flash drive needs.
 //!
@@ -17,3 +19,4 @@ extern crate alloc;
 pub mod desc;
 pub mod hid;
 pub mod msc;
+pub mod report;
