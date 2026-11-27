@@ -101,6 +101,7 @@ static TESTS: &[Test] = tests![
     sched::user_clock_gettime,
     // stage 14: multiprocessing
     smp::all_cpus_online,
+    smp::tsc_synchronized,
     smp::programs_run_in_parallel,
     smp::kill_on_another_cpu,
     smp::big_kernel_lock_balanced,
