@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs velora.iso in a QEMU window for trying it by hand.
 #
-#   tools/run-qemu.sh                    1600x900 window, ISO and a 2 GiB disk
+#   tools/run-qemu.sh                    1920x1080, ISO and a 2 GiB disk
 #   tools/run-qemu.sh --resolution 1280x720
-#   tools/run-qemu.sh --full-screen      the screen's own size, full screen
+#   tools/run-qemu.sh --full-screen      the same in full screen
 #   tools/run-qemu.sh --disk-only        boot the installed system from the disk
 #
 # The disk is build/run-disk.img (created when missing, never another
@@ -67,12 +67,7 @@ if [ "$ISO" = 1 ] && [ ! -f velora.iso ]; then
 fi
 
 if [ -z "$RES" ] || [ "$RES" = "next" ]; then
-    RES="1600x900"
-    if [ "$FULL" = 1 ] && [ "$WINDOWS" = 1 ]; then
-        RES="$(powershell.exe -NoProfile -Command \
-            '$v = Get-CimInstance Win32_VideoController | Where-Object CurrentHorizontalResolution | Select-Object -First 1; "$($v.CurrentHorizontalResolution)x$($v.CurrentVerticalResolution)"' \
-            | tr -d '\r')"
-    fi
+    RES="1920x1080"
 fi
 W="${RES%x*}"
 H="${RES#*x}"

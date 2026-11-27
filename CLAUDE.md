@@ -119,7 +119,7 @@ ktest после каждой загрузки читает на хосте жу
 в CI виртуальные процессоры делят ядра хоста. Если тест ядра в CI упал,
 артефакт `kernel-elf` содержит точную сборку для `llvm-objdump --syms`.
 
-Запуск вручную: `tools/run-qemu.sh` (окно QEMU 1600x900, WHPX в Windows,
+Запуск вручную: `tools/run-qemu.sh` (окно QEMU 1920x1080, WHPX в Windows,
 4 процессора, usb-tablet — мышь без захвата; диск `build/run-disk.img`;
 `--resolution WxH`, `--full-screen`, `--disk-only`). В Windows с
 масштабом экрана больше 100% окно QEMU без поддержки DPI растягивается
