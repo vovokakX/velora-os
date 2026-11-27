@@ -24,7 +24,7 @@ use velora_ui::decor;
 use velora_ui::icons::Icon;
 use velora_ui::image::{Picture, Pointer};
 use velora_ui::text::{Fonts, Weight};
-use velora_ui::theme::{DARK, LIGHT, MIDNIGHT, Theme};
+use velora_ui::theme::{DARK, GAMERS, LIGHT, Theme};
 use velora_ui::ui::{ButtonKind, Ctx, Key, Ui};
 
 /// Design units of the window (the design's screens are 805 x 368).
@@ -68,11 +68,16 @@ pub struct Assets {
 }
 
 /// A disk offered for installation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct DiskEntry {
     pub name: String,
     pub size: u64,
     pub model: String,
+    /// "virtio", "SATA", "NVMe", "USB" or "".
+    pub bus: String,
+    /// Its file systems are mounted (the kernel mounts them at boot);
+    /// they are unmounted before the disk is erased.
+    pub in_use: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +137,8 @@ pub enum Action {
     Reboot,
     /// Leave the installer (back to the start menu).
     Quit,
+    /// Read the list of disks again ([`App::set_disks`]).
+    Rescan,
 }
 
 const STEPS: [(&str, &str); 8] = [
@@ -175,6 +182,14 @@ pub struct App {
     pub progress: u32,
     pub phase: Option<Phase>,
     pub failure: String,
+    /// The disk the system was started from: not offered, named when no
+    /// other disk is found.
+    pub boot_disk: Option<String>,
+    /// Refresh was pressed this frame.
+    rescan: bool,
+    /// The theme of the last frame: when the theme changes and the accent
+    /// is still the old theme's own, it becomes the new theme's own.
+    shown_theme: usize,
     background: decor::Cache,
     /// The screen and colours of the last frame drawn: a change starts a
     /// transition from that frame.
@@ -203,6 +218,9 @@ impl App {
             progress: 0,
             phase: None,
             failure: String::new(),
+            boot_disk: None,
+            rescan: false,
+            shown_theme: 0,
             background: decor::Cache::default(),
             last_drawn: None,
             transition: None,
@@ -215,7 +233,7 @@ impl App {
     pub fn theme(&self) -> Theme {
         let base = match self.settings.theme {
             1 => LIGHT,
-            2 => MIDNIGHT,
+            2 => GAMERS,
             _ => DARK,
         };
         if self.settings.use_accent {
@@ -309,6 +327,17 @@ impl App {
 
     pub fn selected_disk(&self) -> Option<&DiskEntry> {
         self.disks.get(self.disk)
+    }
+
+    /// A new list of disks (after Refresh); the chosen disk stays chosen
+    /// if it is still there.
+    pub fn set_disks(&mut self, disks: Vec<DiskEntry>) {
+        let name = self.selected_disk().map(|d| d.name.clone());
+        self.disks = disks;
+        self.disk = name
+            .and_then(|n| self.disks.iter().position(|d| d.name == n))
+            .unwrap_or(0);
+        self.error = None;
     }
 
     /// The partition layout of the chosen mode.
@@ -457,6 +486,13 @@ impl App {
         ui.scale = scale;
         ui.set_animations(self.animate && self.settings.animations);
         let now = ui.tw.now;
+        if self.settings.theme != self.shown_theme {
+            let own = |t: usize| settings::THEME_ACCENTS[t.min(settings::THEME_ACCENTS.len() - 1)];
+            if self.settings.accent == own(self.shown_theme) {
+                self.settings.accent = own(self.settings.theme);
+            }
+            self.shown_theme = self.settings.theme;
+        }
         if self.screen == Screen::Done && self.last_drawn.map(|l| l.0) != Some(Screen::Done) {
             ui.tw.set(903 << 8, 0);
         }
@@ -558,6 +594,9 @@ impl App {
                     _ => self.next(),
                 };
             }
+        }
+        if core::mem::take(&mut self.rescan) && action == Action::None {
+            action = Action::Rescan;
         }
         // A new screen is drawn at once, not at the next input.
         let again = x.end()
@@ -1098,7 +1137,7 @@ impl App {
         }
         let d = x.ui.s(11);
         for (i, (_, color)) in settings::ACCENTS.iter().enumerate() {
-            let cx = ox + d / 2 + i as i32 * x.ui.s(17);
+            let cx = ox + d / 2 + i as i32 * x.ui.s(16);
             let cy = win.y + x.ui.s(222);
             let r = Rect::new(cx - d / 2, cy - d / 2, d, d);
             let (resp, step) = x.selectable(70 + i as u32, r, d / 2);
@@ -1224,7 +1263,13 @@ impl App {
                     let names: Vec<String> = self
                         .disks
                         .iter()
-                        .map(|d| format!("{} · {}", d.name, size_text(d.size)))
+                        .map(|d| {
+                            if d.bus.is_empty() {
+                                format!("{} · {}", d.name, size_text(d.size))
+                            } else {
+                                format!("{} · {} · {}", d.name, d.bus, size_text(d.size))
+                            }
+                        })
                         .collect();
                     let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
                     let r = Rect::new(
@@ -1235,13 +1280,34 @@ impl App {
                     );
                     x.dropdown(90, r, x.ui.s(10), &refs, &mut self.disk, None, 9);
                 } else {
+                    let dev = if d.bus.is_empty() {
+                        format!("/dev/{}", d.name)
+                    } else {
+                        format!("/dev/{} · {}", d.name, d.bus)
+                    };
                     x.label_center(
                         Rect::new(card.x, card.y + x.ui.s(164), card.w, x.ui.s(14)),
                         Weight::Regular,
                         9,
-                        &format!("/dev/{}", d.name),
+                        &dev,
                         t.text_faint,
                     );
+                }
+                if d.in_use {
+                    let note = match self.lang() {
+                        Lang::Ru => format!(
+                            "Разделы диска {} сейчас подключены. Перед установкой \
+                             они будут отключены, а все данные на диске стёрты.",
+                            d.name
+                        ),
+                        Lang::En => format!(
+                            "The partitions of {} are mounted now. They will be \
+                             unmounted before the installation, and everything \
+                             on the disk will be erased.",
+                            d.name
+                        ),
+                    };
+                    self.note(x, win, 232, &note, t.warning);
                 }
             }
             None => {
@@ -1252,9 +1318,68 @@ impl App {
                     self.l("Диски не найдены", "No disks found"),
                     t.text_dim,
                 );
+                let mut note = String::from(self.l(
+                    "Система не нашла дисков SATA (AHCI), NVMe, virtio или USB, \
+                     на которые можно установить Velora OS.",
+                    "The system found no SATA (AHCI), NVMe, virtio or USB disk \
+                     to install Velora OS on.",
+                ));
+                if let Some(b) = &self.boot_disk {
+                    note.push(' ');
+                    note.push_str(&match self.lang() {
+                        Lang::Ru => format!("Диск {} не показан: с него запущена система.", b),
+                        Lang::En => {
+                            format!("{} is not offered: the system was started from it.", b)
+                        }
+                    });
+                }
+                note.push(' ');
+                note.push_str(self.l(
+                    "Диски ищутся при загрузке: подключите диск и перезагрузите компьютер.",
+                    "Disks are found at boot: connect a disk and restart the computer.",
+                ));
+                self.note(x, win, 232, &note, t.text_dim);
             }
         }
+        self.refresh_button(x, win);
         self.error_line(x, win, 300);
+    }
+
+    /// Refresh at the bottom left of the disk screen: reads the list of
+    /// disks again (in the Tab order before Back and Continue).
+    fn refresh_button(&mut self, x: &mut Ctx, win: Rect) {
+        let refresh = Rect::new(
+            win.x + x.ui.s(CONTENT_X),
+            win.y + x.ui.s(324),
+            x.ui.s(112),
+            x.ui.s(32),
+        );
+        if x.button(
+            902,
+            refresh,
+            self.l("Обновить", "Refresh"),
+            ButtonKind::Secondary,
+            Some(Icon::Refresh),
+            None,
+        ) {
+            self.rescan = true;
+        }
+    }
+
+    /// A short paragraph in the left column at `v` (design units), up to
+    /// three lines.
+    fn note(&self, x: &mut Ctx, win: Rect, v: i32, text: &str, color: velora_ui::canvas::Color) {
+        let lines = x.f.wrap(Weight::Regular, x.ui.px(10), text, x.ui.s(330));
+        for (i, l) in lines.iter().take(4).enumerate() {
+            x.label(
+                win.x + x.ui.s(CONTENT_X),
+                win.y + x.ui.s(v + 15 * i as i32),
+                Weight::Regular,
+                10,
+                l,
+                color,
+            );
+        }
     }
 
     fn partitions(&mut self, x: &mut Ctx, win: Rect) {
@@ -1700,7 +1825,7 @@ impl App {
                         spinner_turn(x.ui.tw.now),
                         40000,
                         true,
-                        t.accent,
+                        t.detail,
                     );
                     if x.ui.tw.enabled {
                         x.ui.tw.mark_active();

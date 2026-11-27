@@ -31,6 +31,8 @@ pub(crate) fn disks() -> Vec<DiskEntry> {
         name: String::from("nvme0n1"),
         size: 512_110_190_592,
         model: String::from("Samsung SSD 970 EVO"),
+        bus: String::from("NVMe"),
+        in_use: false,
     }]
 }
 
@@ -440,4 +442,163 @@ fn frame_times() {
         h.input(&[]);
         println!("{:?} again {:?}", s, t.elapsed());
     }
+}
+
+/// One installer drawn with planned frames (parts of the screen, or none)
+/// and one drawn whole every frame: after every step their pictures must
+/// be the same, so nothing a widget shows is left out of a planned part.
+#[test]
+fn planned_frames_draw_what_whole_frames_draw() {
+    use velora_ui::ui::Redraw;
+    struct Side {
+        app: App,
+        ui: Ui,
+        c: Canvas,
+    }
+    let new_side = || {
+        let mut app = App::new(disks());
+        app.animate = true;
+        Side {
+            app,
+            ui: Ui::new(256),
+            c: Canvas::new(1280, 720),
+        }
+    };
+    let (mut planned, mut whole) = (new_side(), new_side());
+    let mut f = fonts();
+    let mut a = assets();
+    let mut full = true;
+    let (mut skipped, mut parts) = (0, 0);
+    let mut step = |planned: &mut Side,
+                    whole: &mut Side,
+                    ev: &[Event],
+                    now: u64,
+                    f: &mut Fonts,
+                    a: &mut Assets| {
+        for s in [&mut *planned, &mut *whole] {
+            s.ui.set_time(now);
+        }
+        let plan = if full {
+            Redraw::All
+        } else {
+            planned.ui.plan(ev, now)
+        };
+        let b = planned.c.bounds();
+        match plan {
+            Redraw::Nothing => {
+                planned.ui.track_pointer(ev);
+                skipped += 1;
+            }
+            p => {
+                let area = if let Redraw::Area(r) = p {
+                    parts += 1;
+                    r
+                } else {
+                    b
+                };
+                planned.c.set_frame(area);
+                planned.ui.begin(ev);
+                let (action, again) = planned.app.draw(&mut planned.ui, &mut planned.c, f, a);
+                planned.c.set_frame(b);
+                full = again || action != Action::None;
+            }
+        }
+        whole.ui.begin(ev);
+        whole.app.draw(&mut whole.ui, &mut whole.c, f, a);
+        let diff = planned
+            .c
+            .pixels
+            .iter()
+            .zip(&whole.c.pixels)
+            .position(|(p, q)| p != q);
+        if let Some(i) = diff {
+            panic!(
+                "at {} ms ({:?}, plan {:?}): pixel {},{} differs",
+                now,
+                whole.app.screen,
+                plan,
+                i % 1280,
+                i / 1280
+            );
+        }
+    };
+    let mut now = 1000;
+    let mv = |x: i32, y: i32| Event::MouseMove { x, y };
+    let enter = Event::Key {
+        key: Key::Enter,
+        shift: false,
+    };
+    // Welcome, then Location (a slide), then Appearance.
+    for ev in [
+        vec![],
+        vec![enter],
+        vec![],
+        vec![enter],
+        vec![],
+        vec![enter],
+        vec![],
+    ] {
+        step(&mut planned, &mut whole, &ev, now, &mut f, &mut a);
+        for _ in 0..20 {
+            now += 17;
+            step(&mut planned, &mut whole, &[], now, &mut f, &mut a);
+        }
+    }
+    assert_eq!(whole.app.screen, Screen::Appearance);
+    // The pointer sweeps over the screen: hover effects start and end.
+    for y in (40..700).step_by(41) {
+        for x in (0..1280).step_by(41) {
+            now += 9;
+            step(&mut planned, &mut whole, &[mv(x, y)], now, &mut f, &mut a);
+        }
+    }
+    // A drop-down list opens; the pointer moves over its rows, the wheel
+    // scrolls it, a row is taken.
+    let areas = whole.ui.areas.clone();
+    let (_, field) = *areas
+        .iter()
+        .find(|(id, _)| *id == 53)
+        .expect("the theme list");
+    let (cx, cy) = (field.center_x(), field.center_y());
+    let down = Event::MouseButton { down: true };
+    let up = Event::MouseButton { down: false };
+    for ev in [vec![mv(cx, cy)], vec![down], vec![up]] {
+        now += 17;
+        step(&mut planned, &mut whole, &ev, now, &mut f, &mut a);
+    }
+    for k in 0..40 {
+        now += 17;
+        step(
+            &mut planned,
+            &mut whole,
+            &[mv(cx, cy + 10 + k * 4)],
+            now,
+            &mut f,
+            &mut a,
+        );
+    }
+    now += 17;
+    step(
+        &mut planned,
+        &mut whole,
+        &[Event::Wheel(1)],
+        now,
+        &mut f,
+        &mut a,
+    );
+    for ev in [vec![down], vec![up]] {
+        now += 17;
+        step(&mut planned, &mut whole, &ev, now, &mut f, &mut a);
+    }
+    for _ in 0..30 {
+        now += 17;
+        step(&mut planned, &mut whole, &[], now, &mut f, &mut a);
+    }
+    // Planned frames did their job: many were parts or skipped.
+    assert!(
+        skipped > 40 && parts > 40,
+        "skipped {}, parts {}",
+        skipped,
+        parts
+    );
 }

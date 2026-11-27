@@ -1,6 +1,6 @@
 //! Draws every installer screen and the start menu on the host, as PPM
 //! files: `cargo run --release -p velora-installer-gui --example screens
-//! -- OUT_DIR [WIDTHxHEIGHT] [dark|light|midnight] [ACCENT]`, where ACCENT
+//! -- OUT_DIR [WIDTHxHEIGHT] [dark|light|gamers] [ACCENT]`, where ACCENT
 //! is an index into `settings::ACCENTS` (0 amber, the default).
 
 use velora_install::{Phase, Progress};
@@ -50,12 +50,14 @@ fn main() {
         name: String::from("nvme0n1"),
         size: 512_110_190_592,
         model: String::from("Samsung SSD 970 EVO"),
+        bus: String::from("NVMe"),
+        in_use: false,
     }];
     let mut app = App::new(disks);
     app.animate = false;
     app.settings.theme = match args.get(2).map(|s| s.as_str()) {
         Some("light") => 1,
-        Some("midnight") => 2,
+        Some("gamers") => 2,
         _ => 0,
     };
     app.settings.accent = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -89,4 +91,19 @@ fn main() {
         app.draw(&mut ui, &mut c, &mut f, &mut a);
         save(&format!("{:02}-{}", i + 1, s.name()), &c);
     }
+    // The disk screen with a disk whose partitions are mounted, and with
+    // no disk at all (the system started from a USB drive).
+    app.mode = 0;
+    app.screen = Screen::Disk;
+    let mut mounted = app.disks.clone();
+    mounted[0].in_use = true;
+    app.set_disks(mounted);
+    ui.begin(&[]);
+    app.draw(&mut ui, &mut c, &mut f, &mut a);
+    save("05b-disk-mounted", &c);
+    app.set_disks(Vec::new());
+    app.boot_disk = Some(String::from("usb0"));
+    ui.begin(&[]);
+    app.draw(&mut ui, &mut c, &mut f, &mut a);
+    save("05c-disk-none", &c);
 }
