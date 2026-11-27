@@ -327,10 +327,22 @@ pub fn debug_dump(w: &mut dyn core::fmt::Write) {
     for c in 0..online() {
         let _ = writeln!(
             w,
-            "cpu {}: waits for ticket {:#x}",
+            "cpu {}: waits for ticket {:#x}; last operations (op depth owner line):",
             c,
             trace::WAITING[c].load(Ordering::Relaxed)
         );
+        let pos = trace::POS[c].load(Ordering::Relaxed) as usize;
+        for k in 0..trace::N {
+            let e = &trace::RING[c][(pos + k) % trace::N];
+            let _ = writeln!(
+                w,
+                "  {} {} {:#x} {}",
+                e[1].load(Ordering::Relaxed),
+                e[2].load(Ordering::Relaxed),
+                e[3].load(Ordering::Relaxed),
+                e[4].load(Ordering::Relaxed)
+            );
+        }
     }
 }
 
