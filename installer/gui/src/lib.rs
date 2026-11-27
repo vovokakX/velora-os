@@ -457,6 +457,9 @@ impl App {
         ui.scale = scale;
         ui.set_animations(self.animate && self.settings.animations);
         let now = ui.tw.now;
+        if self.screen == Screen::Done && self.last_drawn.map(|l| l.0) != Some(Screen::Done) {
+            ui.tw.set(903 << 8, 0);
+        }
         self.start_transition(c, win, scale, now, ui.tw.enabled);
         ui.theme = self.theme();
         let t = ui.theme;
@@ -569,6 +572,29 @@ impl App {
             }
         }
         (action, again)
+    }
+
+    /// A short summary of everything the user can change, for automatic
+    /// tests: it differs whenever a choice, a text or a switch changes.
+    pub fn state_digest(&self) -> u32 {
+        let text = format!(
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.settings,
+            self.disk,
+            self.mode,
+            self.esp,
+            self.root_share,
+            self.label,
+            self.user,
+            self.password.len(),
+            self.password2.len(),
+            self.root_password.len(),
+            self.root_password2.len()
+        );
+        // FNV-1a.
+        text.bytes().fold(0x811c_9dc5u32, |h, b| {
+            (h ^ b as u32).wrapping_mul(0x0100_0193)
+        })
     }
 
     /// Whether Continue (or Install) can be pressed on this screen: the
@@ -1708,8 +1734,9 @@ impl App {
         let t = x.ui.theme;
         let cx = win.center_x();
         let cy = win.y + x.ui.s(78);
-        let pop = x.ui.anim(903, 0, 1000, anim::SLOW);
-        let rad = x.ui.s(34) * (700 + 300 * pop) / 1000;
+        // The mark grows in when the screen opens.
+        let pop = x.ui.anim(903, 0, 1000, anim::SLOW).clamp(0, 1000);
+        let rad = x.ui.s(34) * (700 + 300 * pop / 1000) / 1000;
         x.c.fill_circle(cx, cy, rad, t.tint(t.selected, 60));
         let s = x.ui.s(32);
         x.icon(Icon::Check, cx - s / 2, cy - s / 2, s, t.accent);
