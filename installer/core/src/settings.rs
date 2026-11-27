@@ -105,7 +105,8 @@ pub const WALLPAPERS: [Choice; 3] = [
 ];
 
 /// Accent colours (0xRRGGBB), as in the design.
-pub const ACCENTS: [(&str, u32); 6] = [
+pub const ACCENTS: [(&str, u32); 7] = [
+    ("amber", 0xffb547),
     ("blue", 0x3f7ee8),
     ("violet", 0x724ecc),
     ("magenta", 0xaf44a4),
@@ -220,7 +221,7 @@ mod tests {
     fn configuration_files() {
         let mut s = Settings {
             theme: 2,
-            accent: 5,
+            accent: 6,
             large_pointer: true,
             ..Settings::default()
         };
