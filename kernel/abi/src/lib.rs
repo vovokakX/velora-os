@@ -124,6 +124,7 @@ pub mod errno {
     pub const EINVAL: i64 = 22;
     pub const EMFILE: i64 = 24;
     pub const EFBIG: i64 = 27;
+    pub const ENODEV: i64 = 19;
     pub const ENOSPC: i64 = 28;
     pub const ESPIPE: i64 = 29;
     pub const EROFS: i64 = 30;
@@ -244,6 +245,9 @@ pub mod tty {
     pub const SET_FOREGROUND: u64 = 1;
     /// Returns columns << 32 | rows.
     pub const SIZE: u64 = 2;
+    /// Returns the character cell size in pixels, width << 32 | height
+    /// (`ENODEV` without a screen: the console is the serial port only).
+    pub const CELL_SIZE: u64 = 3;
     /// Mode bit: deliver every key at once, without echo or line editing.
     /// Special keys arrive as ANSI sequences (arrows `ESC [ A`..`D`, Home
     /// `ESC [ H`, End `ESC [ F`, Delete `ESC [ 3 ~`), Backspace as 0x7f.

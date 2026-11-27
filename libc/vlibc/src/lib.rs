@@ -64,6 +64,7 @@ impl Errno {
             EINVAL => "EINVAL",
             EMFILE => "EMFILE",
             EFBIG => "EFBIG",
+            ENODEV => "ENODEV",
             ENOSPC => "ENOSPC",
             ESPIPE => "ESPIPE",
             EROFS => "EROFS",

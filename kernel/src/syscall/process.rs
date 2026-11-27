@@ -125,6 +125,10 @@ pub fn tty(what: u64, arg: u64) -> i64 {
             let (c, r) = tty::size();
             ((c << 32) | r) as i64
         }
+        op::CELL_SIZE => match tty::cell_size() {
+            Some((w, h)) => ((w << 32) | h) as i64,
+            None => -errno::ENODEV,
+        },
         _ => -errno::EINVAL,
     }
 }
