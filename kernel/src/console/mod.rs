@@ -61,6 +61,36 @@ pub fn enable_back_buffer() -> bool {
     }
 }
 
+/// The frame buffer for graphical programs: its description, physical
+/// address and size in bytes.
+pub fn display() -> Option<(velora_abi::DisplayInfo, u64, u64)> {
+    let screen = SCREEN.lock();
+    let fb = screen.as_ref()?.framebuffer();
+    let (r, g, b) = fb.shifts();
+    let info = velora_abi::DisplayInfo {
+        width: fb.width as u32,
+        height: fb.height as u32,
+        pitch: fb.pitch as u32,
+        bits_per_pixel: 32,
+        red_shift: r,
+        green_shift: g,
+        blue_shift: b,
+        _pad: [0; 5],
+    };
+    let phys = crate::mm::virt_to_phys_hhdm(fb.base() as u64);
+    Some((info, phys, (fb.pitch * fb.height) as u64))
+}
+
+/// Hides the text console (a graphical program owns the screen) or shows
+/// it again with everything written meanwhile. False if the console
+/// cannot be hidden (no back buffer).
+pub fn set_hidden(hidden: bool) -> bool {
+    match SCREEN.lock().as_mut() {
+        Some(c) => c.framebuffer_mut().set_hidden(hidden),
+        None => false,
+    }
+}
+
 /// Text grid size of the screen console, if there is one.
 pub fn screen_size() -> Option<(usize, usize)> {
     SCREEN.lock().as_ref().map(|c| (c.cols, c.rows))
@@ -116,6 +146,10 @@ pub fn emergency(f: impl FnOnce(&mut dyn Write)) {
         SERIAL.force_unlock();
         SCREEN.force_unlock();
         klog::force_unlock();
+    }
+    // A panic report must be seen even over a graphical program.
+    if let Some(c) = SCREEN.lock().as_mut() {
+        c.framebuffer_mut().set_hidden(false);
     }
     f(&mut Both);
 }

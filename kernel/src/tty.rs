@@ -242,6 +242,7 @@ fn incomplete_tail(b: &[u8]) -> usize {
 /// attributes, sizes) become input for the next read, as with any
 /// terminal.
 pub fn write(bytes: &[u8]) {
+    crate::display::poll();
     let mut data = Vec::with_capacity(bytes.len() + 4);
     {
         let mut p = PARTIAL.lock();
