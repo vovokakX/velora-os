@@ -352,6 +352,9 @@ fn theme_accent_and_transitions_animate() {
     now += 16;
     frame(&mut h, now, &[]);
     assert!(h.app.in_transition());
+    // The clock of a transition starts with its second frame.
+    now += 16;
+    frame(&mut h, now, &[]);
     now += 110;
     frame(&mut h, now, &[]);
     let mid = h.c.get(px, py);
@@ -382,6 +385,8 @@ fn theme_accent_and_transitions_animate() {
     now += 16;
     frame(&mut h, now, &[]);
     assert!(h.app.in_transition() && h.ui.animating());
+    now += 16;
+    frame(&mut h, now, &[]);
     now += 600;
     frame(&mut h, now, &[]);
     frame(&mut h, now, &[]);
@@ -404,4 +409,35 @@ fn window_scales_are_steps() {
     assert_eq!(window_rect(1024, 768).1, 256);
     let (r, s) = window_rect(800, 600);
     assert!(s < 256 && r.w <= 800 - 48);
+}
+
+/// Frame times at 2560x1440 (run with --ignored --nocapture).
+#[test]
+#[ignore]
+fn frame_times() {
+    use std::time::Instant;
+    let mut h = Harness::new();
+    h.c = Canvas::new(2560, 1440);
+    let (win, scale) = window_rect(2560, 1440);
+    let t = Instant::now();
+    velora_ui::decor::backdrop(&mut h.c, &velora_ui::theme::DARK);
+    println!("backdrop {:?}", t.elapsed());
+    let t = Instant::now();
+    velora_ui::decor::window(
+        &mut h.c,
+        win,
+        (16 * scale / 256) as i32,
+        &velora_ui::theme::DARK,
+        scale,
+    );
+    println!("window {:?}", t.elapsed());
+    for s in [Screen::Welcome, Screen::Location, Screen::Appearance] {
+        h.app.screen = s;
+        let t = Instant::now();
+        h.input(&[]);
+        println!("{:?} first {:?}", s, t.elapsed());
+        let t = Instant::now();
+        h.input(&[]);
+        println!("{:?} again {:?}", s, t.elapsed());
+    }
 }

@@ -157,6 +157,10 @@ pub struct Transition {
     start: u64,
     dur: u32,
     kind: Kind,
+    /// Frames shown so far: the clock starts with the second frame, so a
+    /// slow first frame (a new background drawn) does not eat the
+    /// transition.
+    frames: u32,
 }
 
 impl Transition {
@@ -170,6 +174,7 @@ impl Transition {
             start: now,
             dur,
             kind,
+            frames: 0,
         }
     }
 
@@ -190,6 +195,10 @@ impl Transition {
     /// Mixes the old picture into the frame just drawn in `c`. Returns
     /// false once the transition is over (nothing is changed then).
     pub fn apply(&mut self, c: &mut Canvas, now: u64) -> bool {
+        if self.frames < 2 {
+            self.frames += 1;
+            self.start = now;
+        }
         let e = self.progress(now);
         if e >= 1000 || self.rect.is_empty() {
             return false;
@@ -292,6 +301,12 @@ mod tests {
         let mut c = Canvas::new(8, 2);
         c.pixels.fill(0x000000);
         let mut t = Transition::capture(&c, c.bounds(), 0, 200, Kind::Fade);
+        c.pixels.fill(0xffffff);
+        // The first two frames show the old picture; the clock starts then.
+        assert!(t.apply(&mut c, 0));
+        assert_eq!(c.pixels[0], 0);
+        c.pixels.fill(0xffffff);
+        assert!(t.apply(&mut c, 0));
         c.pixels.fill(0xffffff);
         assert!(t.apply(&mut c, 100));
         let v = c.pixels[0] & 0xff;
