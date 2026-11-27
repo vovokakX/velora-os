@@ -71,6 +71,15 @@ impl Framebuffer {
         (r << self.r_shift) | (g << self.g_shift) | (b << self.b_shift)
     }
 
+    /// Converts a native pixel value back into 0xRRGGBB.
+    #[inline]
+    pub fn rgb(&self, native: u32) -> u32 {
+        let r = (native >> self.r_shift) & 0xff;
+        let g = (native >> self.g_shift) & 0xff;
+        let b = (native >> self.b_shift) & 0xff;
+        (r << 16) | (g << 8) | b
+    }
+
     #[inline]
     fn row_ptr(&self, y: usize) -> *mut u32 {
         // SAFETY: callers keep y < height.

@@ -9,11 +9,17 @@ pub mod text;
 use crate::arch::x86_64::serial::SERIAL;
 use crate::boot::limine;
 use crate::sync::SpinLock;
+use alloc::vec::Vec;
 use core::fmt::{self, Write};
 use framebuffer::Framebuffer;
 use text::TextConsole;
+use velora_gfx::kitty::ApcFilter;
 
 static SCREEN: SpinLock<Option<TextConsole>> = SpinLock::new(None);
+
+/// Takes images (APC strings) out of program output for the serial port
+/// and the kernel log, which only keep text.
+static TEXT_ONLY: SpinLock<ApcFilter> = SpinLock::new(ApcFilter::new());
 
 /// Sets up the framebuffer console. Returns (width, height) on success.
 pub fn init() -> Option<(usize, usize)> {
@@ -58,6 +64,28 @@ pub fn enable_back_buffer() -> bool {
 /// Text grid size of the screen console, if there is one.
 pub fn screen_size() -> Option<(usize, usize)> {
     SCREEN.lock().as_ref().map(|c| (c.cols, c.rows))
+}
+
+/// Cell size of the screen console in pixels, if there is one.
+pub fn cell_size() -> Option<(usize, usize)> {
+    SCREEN.lock().as_ref().map(|c| c.cell_size())
+}
+
+/// Program output: the screen gets all of it, including images; the
+/// serial port and the kernel log get it without images. Returns the
+/// terminal's answers to queries in the output.
+pub fn program_output(s: &str) -> Vec<u8> {
+    TEXT_ONLY.lock().filter(s, |text| {
+        klog::append(text);
+        let _ = SERIAL.lock().write_str(text);
+    });
+    match SCREEN.lock().as_mut() {
+        Some(c) => {
+            c.write_str(s);
+            c.take_replies()
+        }
+        None => Vec::new(),
+    }
 }
 
 struct Both;

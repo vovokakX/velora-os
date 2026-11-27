@@ -525,3 +525,36 @@ the `usb` thread reads keyboard and mouse reports every tick. A flash drive is
 block device `usbN`; its partitions (`usbNp1`) and FAT32 are mounted like any
 disk's, and a Velora EFI partition keeps the panic log. The mouse is
 `/dev/mouse` (4-byte packets).
+
+### Изображения в терминале / Images in the terminal
+
+- `kernel/gfx` (`velora-gfx`, тесты на хосте): протокол Kitty (разбор
+  команд по байту, склейка частей `m=1`, ответы, запрос поддержки, фильтр
+  строк APC), base64, изображения RGBA с предумноженной альфой,
+  масштабирование усреднением по площади, декодер PNG и inflate для
+  программ.
+- `kernel/src/console/text.rs`: состояние APC в разборе escape-
+  последовательностей; изображение рисуется в ячейках у курсора, экран
+  прокручивается, если оно не помещается; ответы на запросы копятся и
+  через `tty::write` становятся вводом программы. COM1 и `dmesg` получают
+  текст без изображений (D46).
+- `velofetch` проверяет, что ввод и вывод — консоль, есть экран
+  (`tty(3)`) и терминал отвечает на запрос, и тогда показывает
+  `assets/velora-logo.png`: фон картинки становится прозрачным и
+  обрезается, знак занимает высоту сводки (13 строк вместе с палитрой
+  цветов). Иначе — ASCII-логотип
+  (также `velofetch --ascii` и вывод в канал).
+
+`kernel/gfx` (`velora-gfx`, host-tested) has the Kitty protocol (byte-by-byte
+command parsing, joining `m=1` chunks, answers, the support query, an APC
+filter), base64, premultiplied RGBA images, area-average scaling, and a PNG
+decoder with inflate for programs. `kernel/src/console/text.rs` has an APC
+state in its escape parser; an image is drawn in cells at the cursor, and the
+screen scrolls first if it does not fit; answers to queries are collected and
+become program input through `tty::write`. COM1 and `dmesg` get the text
+without images (D46). `velofetch` checks that input and output are the
+console, there is a screen (`tty(3)`) and the terminal answers the query, and
+then shows `assets/velora-logo.png`: the picture's background is made
+transparent and cut away, and the mark takes the height of the summary (13
+rows with the colour palette). Otherwise it prints the ASCII logo (also with
+`velofetch --ascii` and into a pipe).

@@ -24,6 +24,18 @@ pub fn size() -> (u32, u32) {
     ((r >> 32) as u32, r as u32)
 }
 
+/// Character cell size in pixels, or `None` if the console has no
+/// screen (serial port only).
+pub fn cell_size() -> Option<(u32, u32)> {
+    // SAFETY: no pointers.
+    let r = unsafe { syscall2(nr::TTY, tty::CELL_SIZE, 0) };
+    if r < 0 {
+        return None;
+    }
+    let r = r as u64;
+    Some(((r >> 32) as u32, r as u32))
+}
+
 /// True if `fd` is the console (not a file or pipe).
 pub fn is_console(fd: u64) -> bool {
     let mut st = velora_abi::Stat::default();

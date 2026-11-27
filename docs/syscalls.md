@@ -64,7 +64,7 @@
 | 35 | `chmod(path, path_len, mode)` | права файла; владелец или root | `EPERM`, `EROFS`, `ENOENT` |
 | 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
-| 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
+| 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`), `3` — размер ячейки в пикселях (`width << 32 | height`) | `EINVAL`, `ENODEV` (`3`: нет экрана) |
 | 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
 | 40 | `socket(kind)` | новый сокет: `1` — UDP, `2` — TCP; возвращает дескриптор | `EINVAL`, `ENETDOWN` (нет сети), `EMFILE` |
 | 41 | `bind(fd, port)` | UDP: занять порт (0 — любой свободный); TCP: порт для `listen` | `EADDRINUSE`, `EINVAL` |
@@ -219,7 +219,8 @@ file system data is synced first), 24 `setuid(uid, gid)` (root only, one
 way), 32 `getcwd(buf, len)`, 33 `getuid()` (`uid | gid << 32`), 34
 `proclist(buf, len)` (72-byte `ProcEntry` records), 35 `chmod`, 36 `chown`
 (root only), 37 `dup(fd)`, 38 `tty(op, arg)` (0 mode: `RAW` 1, `NO_ECHO` 2;
-1 the process Ctrl+C ends; 2 size `cols << 32 | rows`). The console has a
+1 the process Ctrl+C ends; 2 size `cols << 32 | rows`; 3 cell size in
+pixels `width << 32 | height`, `ENODEV` without a screen). The console has a
 line mode (echo, Backspace, Enter delivers the line, Ctrl+D on an empty line
 is the end of input), `NO_ECHO` for passwords, and a raw mode where keys
 arrive at once and special keys as ANSI sequences (Backspace as 0x7f). In

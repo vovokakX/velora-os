@@ -56,6 +56,12 @@ CI вместе с прошивкой, у установленной систе�
 crate в проекте нет (D42): новые сторонние библиотеки не добавлять без
 вопроса пользователю.
 
+После v0.16.0 (ветка `term-graphics`): консоль показывает изображения по
+протоколу Kitty (D46, crate `kernel/gfx`), `velofetch` рисует логотип из
+`assets/velora-logo.png` картинкой, без графики — ASCII. Тест `boot` делает
+снимок экрана (`screendump`), ищет на нём логотип и сохраняет
+`build/logs/velofetch.png`.
+
 Известные ограничения, которые стоит закрыть в первую очередь (подробно —
 в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
 сигналов и фоновых заданий нет; одна блокировка VFS и опрос дисков
@@ -70,7 +76,7 @@ Live-образа по умолчанию `velora`. Тесты QEMU: `ktest` (д
 ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-накопителя
 на xHCI, без HPET, `reboot`), `install` (установка, загрузка с диска, сохранение
 файлов). ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D45. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
+(`velora-fsck --cat`). Решения D1–D46. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
 Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
 приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
@@ -244,7 +250,8 @@ cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -
 ```
 boot/        конфигурация Limine
 kernel/      ядро (arch, boot, console, mm, sched, syscall, drivers, exec, ...)
-kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net   библиотеки ядра с тестами на хосте
+kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net, kernel/gfx   библиотеки ядра с тестами на хосте
+assets/      логотип Velora (velofetch встраивает его при сборке)
 kernel/src/fs  VFS в ядре: монтирование, tarfs, devfs, каналы, дескрипторы
 drivers/     аппаратно-независимые части драйверов (input, pci, rtc, usb)
 fs/          vfs (интерфейс, монтирование, MemFs, conformance), velorafs,
@@ -258,7 +265,7 @@ userland/    отдельный workspace программ (login, vsh, plume, c
 tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen
 installer/   velora-setup (собирается в workspace userland)
 tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D45),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D46),
              план, сторонние компоненты, заметки к релизам
 ```
 
