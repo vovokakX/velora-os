@@ -10,6 +10,7 @@ pub enum Icon {
     Keyboard,
     Pointer,
     ChevronDown,
+    ChevronUp,
     ArrowLeft,
     ArrowRight,
     Check,
@@ -115,6 +116,10 @@ pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: Color,
         Icon::ChevronDown => {
             line(c, g.p(6, 9), g.p(12, 15));
             line(c, g.p(12, 15), g.p(18, 9));
+        }
+        Icon::ChevronUp => {
+            line(c, g.p(6, 15), g.p(12, 9));
+            line(c, g.p(12, 9), g.p(18, 15));
         }
         Icon::ArrowLeft => {
             line(c, g.p(19, 12), g.p(5, 12));
