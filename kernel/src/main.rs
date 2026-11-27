@@ -196,10 +196,11 @@ fn init_interrupts() {
     apic::init(madt.lapic_address, &nmis).unwrap_or_else(|e| panic!("local APIC: {}", e));
     ioapic::init(madt).unwrap_or_else(|e| panic!("I/O APIC: {}", e));
     kok!(
-        "local APIC {} (id {}, {} mode), legacy PIC masked",
+        "local APIC {} (id {}, {} mode, task priority via {}), legacy PIC masked",
         apic::version(),
         apic::id(),
-        if apic::is_x2apic() { "x2APIC" } else { "xAPIC" }
+        if apic::is_x2apic() { "x2APIC" } else { "xAPIC" },
+        if apic::tpr_via_cr8() { "CR8" } else { "TPR" }
     );
     if let Some(h) = acpi.hpet {
         match hpet::init(h.address) {

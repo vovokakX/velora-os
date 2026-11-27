@@ -133,6 +133,7 @@ pub fn init_ap(hz: u64) {
 
 fn program(nmis: &[LintNmi]) {
     write(REG_TPR, 0);
+    choose_tpr_path();
     write(REG_LVT_LINT0, LVT_MASKED);
     write(REG_LVT_LINT1, LVT_MASKED);
     for n in nmis {
@@ -185,28 +186,63 @@ pub fn send_nmi_to_others() {
     send_icr(0, ICR_NMI | ICR_ASSERT | ICR_ALL_BUT_SELF);
 }
 
-/// Sets the task priority: interrupts of priority class `class` (vector
-/// / 16) and below are held back.
-///
-/// Written through CR8, the architectural form of the TPR in 64-bit
-/// mode, and also through the APIC register. Some hypervisors (WHPX with
-/// QEMU's own APIC) keep the guest's CR8 and overwrite a TPR written
-/// through the APIC registers; others (KVM on AMD with AVIC) take the
-/// priority from the APIC page and may not see a CR8 write. Writing both,
-/// CR8 last, keeps the two the same everywhere.
-pub fn set_task_priority(class: u8) {
-    let class = class & 0xf;
-    write(REG_TPR, (class as u32) << 4);
-    // SAFETY: CR8 only sets which interrupt classes are delivered.
-    unsafe { asm!("mov cr8, {}", in(reg) class as u64, options(nomem, nostack)) }
-}
+/// The task priority goes through CR8 instead of the APIC register (see
+/// `choose_tpr_path`).
+static TPR_VIA_CR8: AtomicBool = AtomicBool::new(false);
+static TPR_CHOSEN: AtomicBool = AtomicBool::new(false);
 
-/// The current task priority class (CR8).
-pub fn task_priority() -> u8 {
+fn read_cr8() -> u8 {
     let v: u64;
     // SAFETY: reading CR8 has no side effects.
     unsafe { asm!("mov {}, cr8", out(reg) v, options(nomem, nostack)) }
     v as u8
+}
+
+fn write_cr8(class: u8) {
+    // SAFETY: CR8 only sets which interrupt classes are delivered.
+    unsafe { asm!("mov cr8, {}", in(reg) (class & 0xf) as u64, options(nomem, nostack)) }
+}
+
+/// Decides once how to set the task priority. On hardware and under KVM
+/// the APIC register and CR8 are the same thing, and the register is
+/// used (writing CR8 under KVM on AMD hosts stopped timer interrupts,
+/// #48). WHPX with QEMU's own APIC keeps the guest's CR8 apart from the
+/// register and overwrites the register from it (#45): there CR8 is used.
+fn choose_tpr_path() {
+    if TPR_CHOSEN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    write(REG_TPR, 0xe0);
+    let linked = read_cr8() == 0xe;
+    write(REG_TPR, 0);
+    if !linked {
+        write_cr8(0);
+    }
+    TPR_VIA_CR8.store(!linked, Ordering::SeqCst);
+}
+
+/// Sets the task priority: interrupts of priority class `class` (vector
+/// / 16) and below are held back.
+pub fn set_task_priority(class: u8) {
+    if TPR_VIA_CR8.load(Ordering::Relaxed) {
+        write_cr8(class);
+    } else {
+        write(REG_TPR, ((class & 0xf) as u32) << 4);
+    }
+}
+
+/// The current task priority class.
+pub fn task_priority() -> u8 {
+    if TPR_VIA_CR8.load(Ordering::Relaxed) {
+        read_cr8()
+    } else {
+        (read(REG_TPR) >> 4) as u8 & 0xf
+    }
+}
+
+/// True if the task priority is set through CR8 (for the boot log).
+pub fn tpr_via_cr8() -> bool {
+    TPR_VIA_CR8.load(Ordering::Relaxed)
 }
 
 #[inline]
