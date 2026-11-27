@@ -117,8 +117,8 @@ pub fn sendto_fd(fd: u64, buf: u64, len: u64, ip: u64, p: u64) -> i64 {
     }
 }
 
-pub fn recvfrom(id: u32, buf: u64, len: u64, from: u64) -> i64 {
-    match net::recv(id, len.min(64 * 1024) as usize) {
+pub fn recvfrom(id: u32, buf: u64, len: u64, from: u64, timeout_ms: u64) -> i64 {
+    match net::recv(id, len.min(64 * 1024) as usize, timeout_ms) {
         Ok((data, src)) => {
             if !uaccess::write(buf, &data) {
                 return -errno::EFAULT;
@@ -141,9 +141,9 @@ pub fn recvfrom(id: u32, buf: u64, len: u64, from: u64) -> i64 {
     }
 }
 
-pub fn recvfrom_fd(fd: u64, buf: u64, len: u64, from: u64) -> i64 {
+pub fn recvfrom_fd(fd: u64, buf: u64, len: u64, from: u64, timeout_ms: u64) -> i64 {
     match socket_of(fd) {
-        Ok(id) => recvfrom(id, buf, len, from),
+        Ok(id) => recvfrom(id, buf, len, from, timeout_ms),
         Err(e) => e,
     }
 }

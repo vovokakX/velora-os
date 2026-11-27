@@ -61,7 +61,7 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::LISTEN => socket::listen(a0),
         nr::ACCEPT => socket::accept(a0),
         nr::SENDTO => socket::sendto_fd(a0, a1, a2, f.r10, f.r8),
-        nr::RECVFROM => socket::recvfrom_fd(a0, a1, a2, f.r10),
+        nr::RECVFROM => socket::recvfrom_fd(a0, a1, a2, f.r10, f.r8),
         nr::NETINFO => socket::netinfo(a0),
         nr::PING => socket::ping(a0, a1, a2),
         nr::SHUTDOWN => socket::shutdown(a0),
@@ -117,7 +117,7 @@ fn read(fd: u64, buf: u64, len: u64) -> i64 {
     match target(&f) {
         Target::File => return files::read_file(&f, buf, len),
         Target::Pipe => return files::read_pipe(&f, buf, len),
-        Target::Socket(id) => return socket::recvfrom(id, buf, len, 0),
+        Target::Socket(id) => return socket::recvfrom(id, buf, len, 0, 0),
         Target::Console => {}
     }
     let data = tty::read(len.min(4096) as usize);
