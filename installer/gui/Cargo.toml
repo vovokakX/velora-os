@@ -1,0 +1,12 @@
+[package]
+name = "velora-installer-gui"
+description = "Screens of the graphical installer and the start menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-ui = { path = "../../libc/ui" }
+velora-install = { path = "../core" }
