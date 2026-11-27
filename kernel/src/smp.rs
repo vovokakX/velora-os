@@ -327,10 +327,22 @@ pub fn debug_dump(w: &mut dyn core::fmt::Write) {
     for c in 0..online() {
         let _ = writeln!(
             w,
-            "cpu {}: waits for ticket {:#x}",
+            "cpu {}: waits for ticket {:#x}; last operations (op depth owner line):",
             c,
             trace::WAITING[c].load(Ordering::Relaxed)
         );
+        let pos = trace::POS[c].load(Ordering::Relaxed) as usize;
+        for k in 0..trace::N {
+            let e = &trace::RING[c][(pos + k) % trace::N];
+            let _ = writeln!(
+                w,
+                "  {} {} {:#x} {}",
+                e[1].load(Ordering::Relaxed),
+                e[2].load(Ordering::Relaxed),
+                e[3].load(Ordering::Relaxed),
+                e[4].load(Ordering::Relaxed)
+            );
+        }
     }
 }
 
@@ -344,6 +356,16 @@ pub fn bkl_held() -> bool {
 static ONLINE: AtomicUsize = AtomicUsize::new(1);
 static PARKED: AtomicUsize = AtomicUsize::new(0);
 static GO: AtomicBool = AtomicBool::new(false);
+/// TSC of each AP right after it saw `GO` (to check the TSCs agree).
+static AP_TSC_AT_GO: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+/// Largest TSC difference between CPUs found at start-up, in cycles.
+static TSC_SKEW: AtomicU64 = AtomicU64::new(0);
+
+/// TSC difference between CPUs measured at start-up (cycles; 0 when
+/// every AP's TSC was inside the boot CPU's window).
+pub fn tsc_skew() -> u64 {
+    TSC_SKEW.load(Ordering::Relaxed)
+}
 static APIC_IDS: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(u32::MAX) }; MAX_CPUS];
 /// CPUs the firmware reported, including ones beyond `MAX_CPUS`.
 static REPORTED: AtomicUsize = AtomicUsize::new(1);
@@ -499,6 +521,7 @@ extern "C" fn ap_main(index: u64) -> ! {
     while !GO.load(Ordering::SeqCst) {
         core::hint::spin_loop();
     }
+    AP_TSC_AT_GO[b.index].store(cpu::rdtsc(), Ordering::SeqCst);
     // The boot CPU's CR4 features (EFER and PAT were copied in
     // `ap_entry`).
     // SAFETY: values read from the boot CPU, which runs the same code.
@@ -529,11 +552,33 @@ pub fn release_aps() -> usize {
     }
     // The APs need the big kernel lock to join.
     let depth = bkl_release_all();
+    let before = cpu::rdtsc();
     GO.store(true, Ordering::SeqCst);
     let deadline = cpu::rdtsc() + crate::time::tsc_hz();
     while online() < parked + 1 && cpu::rdtsc() < deadline {
         core::hint::spin_loop();
     }
+    let after = cpu::rdtsc();
     bkl_reacquire(depth);
+    // Each AP read its TSC between `before` and `after` of the boot CPU,
+    // unless the TSCs differ.
+    for (i, slot) in AP_TSC_AT_GO.iter().enumerate().take(online()).skip(1) {
+        let t = slot.load(Ordering::SeqCst);
+        let off = if t < before {
+            before - t
+        } else {
+            t.saturating_sub(after)
+        };
+        if off > TSC_SKEW.load(Ordering::Relaxed) {
+            TSC_SKEW.store(off, Ordering::Relaxed);
+        }
+        if off > 0 {
+            crate::kwarn!(
+                "CPU {}: its TSC differs from the boot CPU's by at least {} us",
+                i,
+                crate::time::tsc_to_ns(off) / 1000
+            );
+        }
+    }
     online()
 }

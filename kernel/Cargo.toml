@@ -32,3 +32,4 @@ velora-auth = { path = "../libc/auth", optional = true }
 velora-pci = { path = "../drivers/pci" }
 velora-rtc = { path = "../drivers/rtc" }
 velora-input = { path = "../drivers/input" }
+velora-usb = { path = "../drivers/usb" }

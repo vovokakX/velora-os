@@ -63,7 +63,7 @@ fn run(argv: &[&str]) -> i64 {
     sched::wait_pid(pid).expect("process vanished")
 }
 
-fn write_file(p: &str, data: &[u8]) {
+pub(crate) fn write_file(p: &str, data: &[u8]) {
     let now = fs::now();
     fs::with(|v| {
         let n = match v.resolve(p, &Cred::ROOT) {
@@ -78,7 +78,7 @@ fn write_file(p: &str, data: &[u8]) {
     .unwrap_or_else(|e| panic!("write {}: {}", p, e));
 }
 
-fn read_file(p: &str) -> Result<Vec<u8>, FsError> {
+pub(crate) fn read_file(p: &str) -> Result<Vec<u8>, FsError> {
     fs::with(|v| v.read_all(p, &Cred::ROOT))
 }
 

@@ -101,6 +101,7 @@ static TESTS: &[Test] = tests![
     sched::user_clock_gettime,
     // stage 14: multiprocessing
     smp::all_cpus_online,
+    smp::tsc_synchronized,
     smp::programs_run_in_parallel,
     smp::kill_on_another_cpu,
     smp::big_kernel_lock_balanced,
@@ -123,6 +124,9 @@ static TESTS: &[Test] = tests![
     drivers::virtio_blk_read_write,
     drivers::disks_are_independent,
     drivers::rtc_matches_bootloader_time,
+    drivers::usb_devices_found,
+    drivers::usb_storage_files,
+    drivers::usb_mouse_moves,
     // stage 7: file systems
     fs::vfs_mounted_at_boot,
     fs::devfs_exposes_disks,
@@ -151,7 +155,7 @@ static WATCHDOG_FIRED: AtomicBool = AtomicBool::new(false);
 /// Called by the boot CPU on every timer interrupt, before it takes the
 /// big kernel lock: a test that runs for more than 60 s is stuck, so the
 /// scheduler state is printed and the run ends.
-pub fn watchdog() {
+pub fn watchdog(frame: &crate::arch::x86_64::idt::InterruptFrame) {
     let start = TEST_STARTED.load(Ordering::Relaxed);
     let hz = crate::time::tsc_hz();
     if start == 0 || hz == 0 || crate::arch::cpu::rdtsc() - start < 60 * hz {
@@ -162,6 +166,12 @@ pub fn watchdog() {
     }
     crate::console::emergency(|w| {
         let _ = writeln!(w, "\nktest: watchdog: the test runs for more than 60 s");
+        let _ = writeln!(
+            w,
+            "CPU 0 was at RIP {:#x} RFLAGS {:#x}",
+            frame.rip, frame.rflags
+        );
+        let _ = crate::panic::write_backtrace(w, frame.rip, frame.rbp);
         crate::sched::debug_dump(w);
         crate::smp::debug_dump(w);
     });

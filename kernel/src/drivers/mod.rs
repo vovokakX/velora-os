@@ -12,6 +12,7 @@ pub mod ps2;
 pub mod rtc;
 pub mod virtio_blk;
 pub mod virtio_net;
+pub mod xhci;
 
 /// Enumerates PCI, starts the disk drivers and reads the RTC.
 pub fn init() {
@@ -23,6 +24,10 @@ pub fn init() {
         if ecam { "ECAM" } else { "I/O ports" }
     );
     let disks = virtio_blk::probe_all() + ahci::probe_all() + nvme::probe_all();
+    let usb = xhci::probe_all();
+    if usb > 0 {
+        crate::kok!("USB: {} device(s)", usb);
+    }
     for d in block::devices() {
         crate::kok!(
             "disk {}: {}, {} MiB ({} sectors of {} bytes)",

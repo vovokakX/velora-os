@@ -25,6 +25,11 @@ fn stop(pid: Pid) {
     assert_eq!(sched::wait_pid(pid), Some(KILLED));
 }
 
+/// The TSCs of all CPUs agree (time and sleeping rely on them).
+pub fn tsc_synchronized() {
+    assert_eq!(smp::tsc_skew(), 0, "the CPUs' TSCs differ");
+}
+
 pub fn all_cpus_online() {
     let enabled = acpi::get().madt.lapics.iter().filter(|l| l.enabled).count();
     assert!(smp::online() >= 2, "the tests run with -smp 4");

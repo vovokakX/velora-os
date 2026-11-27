@@ -76,3 +76,13 @@ jobs:
           name: serial-logs
           path: build/logs/
           if-no-files-found: ignore
+
+      # The kernels of this run, to turn addresses in a failure report
+      # into function names (llvm-objdump --syms, llvm-addr2line).
+      - name: Upload kernel images
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-elf
+          path: build/*.elf
+          if-no-files-found: ignore

@@ -4,32 +4,32 @@ version = 4
 
 [[package]]
 name = "kstrip"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "mkinitrd"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-tar",
 ]
 
 [[package]]
 name = "mkiso"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-fat",
 ]
 
 [[package]]
 name = "mkpasswd"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-auth",
 ]
 
 [[package]]
 name = "mkusb"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-fat",
  "velora-gpt",
@@ -38,34 +38,34 @@ dependencies = [
 
 [[package]]
 name = "velora-abi"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-acpi"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-auth"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-editor"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-exe"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-fat"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-vfs",
 ]
 
 [[package]]
 name = "velora-fsck"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-fat",
  "velora-vfs",
@@ -74,18 +74,18 @@ dependencies = [
 
 [[package]]
 name = "velora-gpt"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-vfs",
 ]
 
 [[package]]
 name = "velora-input"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-kernel"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-abi",
  "velora-acpi",
@@ -99,44 +99,49 @@ dependencies = [
  "velora-pci",
  "velora-rtc",
  "velora-tar",
+ "velora-usb",
  "velora-vfs",
  "velorafs",
 ]
 
 [[package]]
 name = "velora-mm"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-net"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-pci"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-rtc"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-shell"
-version = "0.14.0"
+version = "0.15.0"
 
 [[package]]
 name = "velora-tar"
-version = "0.14.0"
+version = "0.15.0"
+
+[[package]]
+name = "velora-usb"
+version = "0.15.0"
 
 [[package]]
 name = "velora-vfs"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-abi",
 ]
 
 [[package]]
 name = "velorafs"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "velora-vfs",
 ]

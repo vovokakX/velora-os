@@ -45,9 +45,12 @@ extern "C" fn counting_thread(i: u64) -> u64 {
 pub fn kernel_threads_are_preempted() {
     let stacks_before = kstack::mapped_pages();
     STOP.store(false, Ordering::SeqCst);
-    // All three on one CPU, so only the timer can share it among them
-    // (on several CPUs the test would also measure the big kernel lock).
-    let cpu = crate::smp::online() - 1;
+    // All three on one CPU, so only the timer can share it among them.
+    // CPU 0 keeps the clock and wakes sleepers, so this thread's sleep
+    // below ends on time even though the counters never block: kernel
+    // threads that compute without blocking hold the big kernel lock
+    // between ticks and slow the other CPUs' kernel threads down (D43).
+    let cpu = 0;
     for i in 0..3 {
         sched::spawn_kernel_on("counter", counting_thread, i, Priority::Normal, cpu)
             .expect("spawn");
