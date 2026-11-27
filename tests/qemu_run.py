@@ -21,7 +21,9 @@ Modes:
   boot   Boot velora.iso, measure the time to the login prompt, then log
          in through the emulated keyboard and run a shell scenario
          (commands, pipes, redirection, Tab, history, Ctrl+C, RU layout),
-         log out, log in as root and power off with `shutdown`.
+         log out, log in as root and power off with `shutdown`. velofetch
+         is checked on a screenshot (the logo is an image) and through a
+         pipe (ASCII logo); the screenshot is kept in build/logs.
 
 Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL,
 VELORA_QEMU_EXTRA (extra QEMU arguments, e.g. "-trace virtio*"),
@@ -34,11 +36,13 @@ import re
 import platform
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
 
 TIMESTAMPS = False
 QEMU_SUCCESS = 33  # (0x10 << 1) | 1, see kernel/src/arch/x86_64/qemu.rs
@@ -1014,6 +1018,89 @@ def run_install(args, work):
     return 0
 
 
+def screendump(monitor, path, timeout=10.0):
+    """Saves the screen through the QEMU monitor (PPM); returns
+    (width, height, RGB bytes)."""
+    if os.path.exists(path):
+        os.remove(path)
+    # Quoted: the path may contain spaces.
+    monitor.command("screendump \"%s\"" % os.path.abspath(path).replace("\\", "/"))
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", data)
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                pixels = data[m.end():]
+                if len(pixels) >= w * h * 3:
+                    return w, h, pixels[:w * h * 3]
+        except OSError:
+            pass
+        time.sleep(0.1)
+    raise AssertionError("screendump did not produce %s" % path)
+
+
+def write_png(path, w, h, rgb):
+    """A PNG of the screenshot (smaller than PPM and opens anywhere)."""
+    def chunk(kind, body):
+        return (struct.pack(">I", len(body)) + kind + body
+                + struct.pack(">I", zlib.crc32(kind + body) & 0xffffffff))
+    rows = b"".join(b"\0" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+        f.write(chunk(b"IDAT", zlib.compress(rows, 6)))
+        f.write(chunk(b"IEND", b""))
+
+
+# Colours of assets/velora-logo.png and of the console text.
+LOGO_BACKGROUND = (14, 19, 22)
+CONSOLE_FG = (0xc0, 0xca, 0xf5)
+
+
+def check_logo(w, h, rgb):
+    """Finds the velofetch logo on a screenshot: a square of the logo's
+    background colour at the left edge, white in the places where the
+    logo has its strokes, and the summary text to the right of it."""
+    def px(x, y):
+        i = (y * w + x) * 3
+        return rgb[i], rgb[i + 1], rgb[i + 2]
+
+    def near(c, ref):
+        return all(abs(a - b) <= 3 for a, b in zip(c, ref))
+
+    xs, ys = [], []
+    for y in range(0, h, 2):
+        for x in range(0, w // 2, 2):
+            if near(px(x, y), LOGO_BACKGROUND):
+                xs.append(x)
+                ys.append(y)
+    if len(xs) < 1000:
+        return "no logo on the screen"
+    x0, x1, y0, y1 = min(xs), max(xs) + 1, min(ys), max(ys) + 1
+    size = y1 - y0
+    print("qemu_run: velofetch logo at (%d, %d), %dx%d pixels" % (x0, y0, x1 - x0, size))
+    if x0 > 16 or size < 96 or abs((x1 - x0) - size) > 4:
+        return "the logo area is not a square at the left edge: (%d,%d)-(%d,%d)" % (x0, y0, x1, y1)
+
+    def at(fx, fy):
+        return px(x0 + int(fx * (x1 - x0)), y0 + int(fy * size))
+    white = [(0.5, 0.37), (0.25, 0.3), (0.75, 0.3), (0.475, 0.78)]
+    dark = [(0.5, 0.15), (0.5, 0.6), (0.1, 0.9)]
+    for f in white:
+        if min(at(*f)) < 230:
+            return "logo stroke missing at %s: %s" % (f, at(*f))
+    for f in dark:
+        if not near(at(*f), LOGO_BACKGROUND):
+            return "logo background wrong at %s: %s" % (f, at(*f))
+    text = sum(1 for y in range(y0, y1, 2) for x in range(x1, w, 2) if near(px(x, y), CONSOLE_FG))
+    if text < 200:
+        return "no summary text next to the logo"
+    return None
+
+
 def check_boot(proc, reader, monitor, deadline, max_seconds):
     out_bad = ("KERNEL PANIC", "CPU EXCEPTION")
     if not wait_for(proc, reader, "boot complete", deadline):
@@ -1062,6 +1149,20 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
         s.run("mem", "total:")
         s.run("ps", "PID  PPID")
         s.run("velofetch", "Memory:")
+        assert s.wait("Disks:"), "velofetch did not finish"
+        time.sleep(1.0)
+        shot = os.path.join(os.path.dirname(reader.log.name) or ".", "velofetch.png")
+        w, h, rgb = screendump(monitor, shot + ".ppm")
+        write_png(shot, w, h, rgb)
+        os.remove(shot + ".ppm")
+        problem = check_logo(w, h, rgb)
+        assert not problem, "%s (screenshot: %s)" % (problem, shot)
+        # Images go to the screen only: the serial port gets the text.
+        assert "\x1b_G" not in reader.text(), "image data reached the serial port"
+        print("qemu_run: velofetch shows the logo as an image (screenshot %s)" % shot)
+        s.run("velofetch | cat", "V E L O R A")
+        s.run("velofetch --ascii", "V E L O R A")
+        print("qemu_run: velofetch falls back to the ASCII logo")
         # Tab completion and history.
         s.type("velof\t\n")
         assert s.wait("Memory:"), "Tab completion did not run velofetch"
