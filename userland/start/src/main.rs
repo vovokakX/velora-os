@@ -7,9 +7,16 @@
 //! Without a frame buffer the menu is printed on the console and the Live
 //! system starts after 10 seconds.
 //!
-//! `velora-start --install` opens the graphical installer directly.
-//! Progress lines ("velora-start: screen welcome", ...) go to the console,
-//! which also reaches the serial port; the QEMU tests follow them.
+//! `velora-start --install` opens the graphical installer directly;
+//! `--no-animations` turns animations off (the kernel passes it for
+//! `velora.noanim`). Progress lines ("velora-start: screen welcome", ...)
+//! go to the console, which also reaches the serial port; the QEMU tests
+//! follow them. With `--uitest` (`velora.uitest`) the installer also
+//! reports its interactive areas and a digest of its state after each
+//! change, so a test can click every element and see that it reacted.
+//!
+//! Frames are drawn when something changes; while an animation runs they
+//! come at about 60 per second.
 
 #![no_std]
 #![no_main]
@@ -26,6 +33,9 @@ use velora_ui::screen::Screen;
 use velora_ui::text::Fonts;
 use velora_ui::ui::{Event, one_key_per_frame};
 use velora_ui::{Rect, Ui};
+
+/// Time between frames of an animation (about 60 per second).
+const FRAME_MS: u64 = 16;
 use vlibc::fs::File;
 use vlibc::{env, fs, println, process, time};
 
@@ -68,24 +78,101 @@ struct Gui {
     assets: Assets,
     queue: alloc::collections::VecDeque<Vec<Event>>,
     pointer: Option<(usize, bool)>,
+    animate: bool,
+    uitest: bool,
+    /// The last test report, printed again only when it changes.
+    reported: String,
 }
 
 impl Gui {
-    fn open(fonts: Fonts, assets: Assets) -> Result<Gui, Fonts> {
+    fn open(fonts: Fonts, assets: Assets, animate: bool, uitest: bool) -> Result<Gui, Fonts> {
         let screen = match Screen::open() {
             Ok(s) => s,
             Err(_) => return Err(fonts),
         };
+        let mut ui = Ui::new(256);
+        ui.set_animations(animate);
         let mut g = Gui {
             screen,
-            ui: Ui::new(256),
+            ui,
             fonts,
             assets,
             queue: alloc::collections::VecDeque::new(),
             pointer: None,
+            animate,
+            uitest,
+            reported: String::new(),
         };
         g.set_pointer(0, false);
         Ok(g)
+    }
+
+    /// Starts a frame: the clock for animations, then the input.
+    fn begin(&mut self, events: &[Event]) {
+        self.ui.set_time(ms());
+        self.ui.begin(events);
+    }
+
+    /// Input for the next frame. Without an animation it waits for input;
+    /// during one it waits until the next frame is due (`due`, in ms).
+    fn wait(&mut self, animating: bool, due: u64) -> Vec<Event> {
+        if animating {
+            self.next_events_until(due)
+        } else {
+            self.next_events(u64::MAX / 4)
+        }
+    }
+
+    /// Input until `due` (ms on the clock), or an empty frame then. The
+    /// timer ticks every 10 ms, so the last part is waited by yielding.
+    fn next_events_until(&mut self, due: u64) -> Vec<Event> {
+        loop {
+            if let Some(e) = self.queue.pop_front() {
+                return e;
+            }
+            let polled = self.screen.poll();
+            if !polled.is_empty() {
+                self.queue.extend(one_key_per_frame(&polled));
+                continue;
+            }
+            let now = ms();
+            if now >= due {
+                return Vec::new();
+            }
+            if due - now > 10 {
+                time::sleep_ms(1);
+            } else {
+                process::yield_now();
+            }
+        }
+    }
+
+    /// For `--uitest`: the screen, a digest of the state, the focus, the
+    /// open list, the last widget that took input and the interactive
+    /// areas, printed when any of it changes.
+    fn report(&mut self, screen: &str, digest: u32) {
+        if !self.uitest {
+            return;
+        }
+        let ui = &self.ui;
+        let opt = |v: Option<u32>| v.map_or(String::from("-"), |v| alloc::format!("{}", v));
+        let mut line = alloc::format!(
+            "velora-start: ui {} state={:08x} focus={} popup={} hit={} scroll={},{} areas",
+            screen,
+            digest,
+            opt(ui.focused()),
+            opt(ui.open_popup_id()),
+            opt(ui.last_hit),
+            ui.scroll_of(20),
+            ui.scroll_of(21),
+        );
+        for (id, r) in &ui.areas {
+            line.push_str(&alloc::format!(" {}:{},{},{},{}", id, r.x, r.y, r.w, r.h));
+        }
+        if line != self.reported {
+            println!("{}", line);
+            self.reported = line;
+        }
     }
 
     /// Shows pointer style `i` (large: one and a half times the size).
@@ -131,13 +218,15 @@ impl Gui {
 fn main() -> i32 {
     let args = env::args();
     let direct = args.iter().any(|a| a == "--install");
+    let animate = !args.iter().any(|a| a == "--no-animations");
+    let uitest = args.iter().any(|a| a == "--uitest");
     let t0 = ms();
     let assets = load_assets();
     let Some(fonts) = load_fonts() else {
         println!("velora-start: no fonts in {}; text menu", FONT_DIR);
         return text_menu();
     };
-    let mut gui = match Gui::open(fonts, assets) {
+    let mut gui = match Gui::open(fonts, assets, animate, uitest) {
         Ok(g) => g,
         Err(_) => {
             println!("velora-start: no screen; text menu");
@@ -163,7 +252,7 @@ fn main() -> i32 {
                 let assets = gui.assets;
                 drop(gui.screen);
                 terminal_install();
-                gui = match Gui::open(fonts, assets) {
+                gui = match Gui::open(fonts, assets, animate, uitest) {
                     Ok(g) => g,
                     Err(_) => return 0,
                 };
@@ -184,7 +273,8 @@ fn menu(gui: &mut Gui) -> Mode {
     let mut events = Vec::new();
     let mut second = ms() + 1000;
     loop {
-        gui.ui.begin(&events);
+        let start = ms();
+        gui.begin(&events);
         let (chosen, again) = ch.draw(
             &mut gui.ui,
             &mut gui.screen.canvas,
@@ -205,7 +295,11 @@ fn menu(gui: &mut Gui) -> Mode {
             continue;
         }
         let left = second.saturating_sub(ms());
-        events = gui.next_events(left);
+        events = if gui.ui.animating() {
+            gui.next_events_until((start + FRAME_MS).min(second))
+        } else {
+            gui.next_events(left)
+        };
         if events.is_empty() && ms() >= second {
             second += 1000;
             if let Some(m) = ch.tick() {
@@ -231,6 +325,7 @@ fn disk_entries() -> Vec<DiskEntry> {
 /// The graphical installer; returns when the user leaves it.
 fn installer(gui: &mut Gui) {
     let mut app = App::new(disk_entries());
+    app.animate = gui.animate;
     let mut shown = None;
     let mut events = Vec::new();
     loop {
@@ -238,7 +333,7 @@ fn installer(gui: &mut Gui) {
         gui.set_pointer(p, large);
         let before = app.screen;
         let t = ms();
-        gui.ui.begin(&events);
+        gui.begin(&events);
         let (action, again) = app.draw(
             &mut gui.ui,
             &mut gui.screen.canvas,
@@ -260,6 +355,10 @@ fn installer(gui: &mut Gui) {
             shown = Some(app.screen);
             println!("velora-start: screen {}", app.screen.name());
         }
+        let animating = gui.ui.animating();
+        if !again && !animating && action == Action::None {
+            gui.report(app.screen.name(), app.state_digest());
+        }
         match action {
             Action::Quit => return,
             Action::Reboot => {
@@ -278,7 +377,7 @@ fn installer(gui: &mut Gui) {
             events.clear();
             continue;
         }
-        events = gui.next_events(u64::MAX / 4);
+        events = gui.wait(animating, t + FRAME_MS);
     }
 }
 
@@ -311,7 +410,7 @@ fn install(gui: &mut Gui, app: &mut App) {
                 println!("velora-start: phase {:?} {}%", p.phase, p.permille / 10);
             }
             last = (Some(p.phase), p.permille);
-            gui.ui.begin(&[]);
+            gui.begin(&[]);
             app.draw(
                 &mut gui.ui,
                 &mut gui.screen.canvas,
