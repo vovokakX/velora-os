@@ -189,12 +189,16 @@ pub fn send_nmi_to_others() {
 /// / 16) and below are held back.
 ///
 /// Written through CR8, the architectural form of the TPR in 64-bit
-/// mode. Some hypervisors (WHPX with QEMU's own APIC) keep the guest's
-/// CR8 and overwrite a TPR written through the APIC registers, so that
-/// write would not hold anything back.
+/// mode, and also through the APIC register. Some hypervisors (WHPX with
+/// QEMU's own APIC) keep the guest's CR8 and overwrite a TPR written
+/// through the APIC registers; others (KVM on AMD with AVIC) take the
+/// priority from the APIC page and may not see a CR8 write. Writing both,
+/// CR8 last, keeps the two the same everywhere.
 pub fn set_task_priority(class: u8) {
+    let class = class & 0xf;
+    write(REG_TPR, (class as u32) << 4);
     // SAFETY: CR8 only sets which interrupt classes are delivered.
-    unsafe { asm!("mov cr8, {}", in(reg) (class & 0xf) as u64, options(nomem, nostack)) }
+    unsafe { asm!("mov cr8, {}", in(reg) class as u64, options(nomem, nostack)) }
 }
 
 /// The current task priority class (CR8).
