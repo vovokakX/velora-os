@@ -49,6 +49,10 @@ name = "velora-auth"
 version = "0.15.0"
 
 [[package]]
+name = "velora-dns"
+version = "0.15.0"
+
+[[package]]
 name = "velora-editor"
 version = "0.15.0"
 
@@ -78,6 +82,10 @@ version = "0.15.0"
 dependencies = [
  "velora-vfs",
 ]
+
+[[package]]
+name = "velora-http"
+version = "0.15.0"
 
 [[package]]
 name = "velora-input"

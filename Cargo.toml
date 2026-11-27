@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["kernel", "kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "kernel/net", "drivers/input", "drivers/usb", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "libc/editor", "tools/mkiso", "tools/mkusb", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
+members = ["kernel", "kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "kernel/net", "drivers/input", "drivers/usb", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "libc/editor", "libc/dns", "libc/http", "tools/mkiso", "tools/mkusb", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
 # The kernel only builds for x86_64-unknown-none, so host commands
 # (`cargo test`, `cargo build`) default to the host-side crates.
-default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "kernel/net", "drivers/input", "drivers/usb", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "libc/editor", "tools/mkiso", "tools/mkusb", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
+default-members = ["kernel/mm", "kernel/acpi", "kernel/abi", "kernel/exe", "kernel/net", "drivers/input", "drivers/usb", "drivers/pci", "drivers/rtc", "fs/fat", "fs/tar", "fs/vfs", "fs/velorafs", "fs/gpt", "libc/auth", "libc/shell", "libc/editor", "libc/dns", "libc/http", "tools/mkiso", "tools/mkusb", "tools/mkinitrd", "tools/fsck", "tools/mkpasswd", "tools/kstrip"]
 # User programs and vlibc have their own workspace (userland/) and target flags.
 exclude = ["userland", "libc/vlibc"]
 
