@@ -1055,6 +1055,60 @@ def write_png(path, w, h, rgb):
         f.write(chunk(b"IEND", b""))
 
 
+def share_near(w, h, rgb, colour, tol=6, step=7):
+    """Share of sampled pixels within `tol` of `colour`."""
+    hits = total = 0
+    for i in range(0, w * h, step):
+        r, g, b = rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]
+        total += 1
+        if abs(r - colour[0]) <= tol and abs(g - colour[1]) <= tol and abs(b - colour[2]) <= tol:
+            hits += 1
+    return hits / max(total, 1)
+
+
+# velora-ui dark theme window colour (libc/ui/src/theme.rs).
+UI_WINDOW = (36, 36, 39)
+
+
+def check_uidemo(s, monitor, reader):
+    """The graphical toolkit on the real screen: uidemo takes the screen,
+    reacts to keys and the mouse, and gives the screen back on Escape."""
+    logs = os.path.dirname(reader.log.name) or "."
+    s.type("uidemo\n")
+    assert s.wait("first frame", timeout=120), "uidemo did not draw its first frame"
+    time.sleep(1.0)
+
+    def shot(name):
+        path = os.path.join(logs, name)
+        w, h, rgb = screendump(monitor, path + ".ppm")
+        write_png(path, w, h, rgb)
+        os.remove(path + ".ppm")
+        return w, h, rgb
+
+    w, h, first = shot("uidemo-1.png")
+    share = share_near(w, h, first, UI_WINDOW, tol=10)
+    assert share > 0.15, "uidemo window not on the screen (%.2f)" % share
+    console = share_near(w, h, first, CONSOLE_BG, tol=2)
+    assert console < 0.05, "the text console still shows (%.2f)" % console
+    # Keyboard: Tab to the language list, open it, pick the next language.
+    s.keys(["tab", "tab", "ret", "down", "ret"])
+    # Mouse (PS/2): move and click somewhere empty.
+    monitor.command("mouse_move 40 30")
+    monitor.command("mouse_button 1")
+    monitor.command("mouse_button 0")
+    time.sleep(1.5)
+    _, _, second = shot("uidemo-2.png")
+    assert second != first, "the screen did not change after keys and mouse"
+    s.keys(["esc"])
+    assert s.wait("uidemo: done", timeout=30), "uidemo did not end on Escape"
+    s.run("A=ui; echo $A-back", "ui-back")
+    time.sleep(1.0)
+    _, _, after = shot("uidemo-3.png")
+    console = share_near(w, h, after, CONSOLE_BG, tol=2)
+    assert console > 0.5, "the text console did not come back (%.2f)" % console
+    print("qemu_run: uidemo drew %dx%d, took keys and the mouse, gave the screen back" % (w, h))
+
+
 # Console colours (kernel/src/console/text.rs). The logo's own dark
 # background is made transparent by velofetch, so the console background
 # shows through it.
@@ -1173,6 +1227,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
         s.run("velofetch | cat", "V E L O R A")
         s.run("velofetch --ascii", "V E L O R A")
         print("qemu_run: velofetch falls back to the ASCII logo")
+        check_uidemo(s, monitor, reader)
         # Tab completion and history.
         s.type("velof\t\n")
         assert s.wait("Memory:"), "Tab completion did not run velofetch"
