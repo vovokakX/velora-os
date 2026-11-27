@@ -148,6 +148,18 @@ pub fn prepare(
     Ok(())
 }
 
+/// Stops writing the panic log to the file system mounted at
+/// `mount_path` (it was unmounted: its sectors may soon hold other data).
+pub fn forget_under(mount_path: &str) {
+    let mut t = TARGET.lock();
+    let prefix = alloc::format!("{}/", mount_path.trim_end_matches('/'));
+    if t.as_ref().is_some_and(|t| t.path.starts_with(&prefix)) {
+        *t = None;
+        drop(t);
+        crate::kwarn!("panic log: off ({} was unmounted)", mount_path);
+    }
+}
+
 /// Where the panic log goes, if one was prepared.
 pub fn path() -> Option<String> {
     TARGET.lock().as_ref().map(|t| t.path.clone())

@@ -184,6 +184,13 @@ pub fn rename(from: &str, to: &str) -> Result<(), Errno> {
 }
 
 /// Writes all cached file system data to the disks.
+/// Unmounts a disk mounted at boot under /mnt (root only; `EBUSY` while
+/// files on it are open).
+pub fn umount(path: &str) -> Result<(), Errno> {
+    // SAFETY: the path is valid for the call.
+    check(unsafe { syscall2(nr::UMOUNT, path.as_ptr() as u64, path.len() as u64) }).map(|_| ())
+}
+
 pub fn sync() -> Result<(), Errno> {
     // SAFETY: no arguments.
     check(unsafe { syscall0(nr::SYNC) }).map(|_| ())

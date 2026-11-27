@@ -258,12 +258,39 @@ pub struct File {
     pub size: u64,
     path: *const u8,
     string: *const u8,
+    /// `MEDIA_GENERIC` (a disk), `MEDIA_OPTICAL` or `MEDIA_TFTP`.
+    pub media_type: u32,
+    unused: u32,
+    tftp_ip: u32,
+    tftp_port: u32,
+    /// 1-based partition number, 0 for a whole disk without partitions.
+    pub partition_index: u32,
+    mbr_disk_id: u32,
+    gpt_disk_uuid: [u8; 16],
+    /// The GPT unique partition GUID as stored on the disk (zero if none).
+    pub gpt_part_uuid: [u8; 16],
+    part_uuid: [u8; 16],
 }
+
+pub const MEDIA_GENERIC: u32 = 0;
 
 impl File {
     pub fn path(&self) -> &'static str {
         // SAFETY: NUL-terminated string from the bootloader.
         unsafe { c_str(self.path) }
+    }
+}
+
+#[repr(C)]
+pub struct ExecutableFileResponse {
+    pub revision: u64,
+    file: *const File,
+}
+
+impl ExecutableFileResponse {
+    pub fn file(&self) -> Option<&'static File> {
+        // SAFETY: Limine gives a valid pointer (or null).
+        unsafe { self.file.as_ref() }
     }
 }
 
@@ -441,6 +468,11 @@ pub static RSDP: Request<RsdpResponse> =
 #[unsafe(link_section = ".limine_requests")]
 pub static MODULES: Request<ModuleResponse> =
     Request::new(request_id(0x3e7e279702be32af, 0xca1c4f3bd1280cee));
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static EXECUTABLE_FILE: Request<ExecutableFileResponse> =
+    Request::new(request_id(0xad97e90e83f1ed67, 0x31eb5d1c5ff23b69));
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]

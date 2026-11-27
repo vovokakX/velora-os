@@ -525,6 +525,21 @@ pub fn sync() -> i64 {
     }
 }
 
+/// Unmounts a disk mounted at boot under /mnt (root only).
+pub fn umount(ptr: u64, len: u64) -> i64 {
+    let p = match user_path(ptr, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    if sched::current_cred().uid != 0 {
+        return -errno::EPERM;
+    }
+    match fs::umount(&p) {
+        Ok(()) => 0,
+        Err(e) => err(e),
+    }
+}
+
 pub fn statfs(ptr: u64, len: u64, out: u64) -> i64 {
     let p = match user_path(ptr, len) {
         Ok(p) => p,

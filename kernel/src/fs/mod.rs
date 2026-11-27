@@ -204,6 +204,21 @@ pub fn automounted() -> Vec<AutoMount> {
     AUTOMOUNTED.lock().clone()
 }
 
+/// Unmounts a file system mounted at boot under /mnt (the installer frees
+/// a disk before erasing it). Its data is written first; it fails with
+/// `Busy` while files on it are open. The panic log stops using it.
+pub fn umount(at: &str) -> Result<(), FsError> {
+    let at = path::normalize(at)?;
+    if !at.starts_with("/mnt/") {
+        return Err(FsError::Access);
+    }
+    with(|v| v.unmount(&at))?;
+    crate::crashlog::forget_under(&at);
+    AUTOMOUNTED.lock().retain(|m| m.path != at);
+    kok!("{} unmounted", at);
+    Ok(())
+}
+
 /// Reads a program file: the caller needs execute permission.
 pub fn read_program(p: &str, cred: &Cred) -> Result<Vec<u8>, FsError> {
     with(|v| {
