@@ -1230,3 +1230,109 @@ NOT IMPLEMENTED: there is no synchronisation with the display refresh (GOP
 has none), so tearing is possible, although a frame is always shown whole
 from the back buffer. The pointer does not move while a frame is being drawn.
 There is no hinting from the font's instructions.
+
+## D50. Кадры установщика по изменениям, ожидание ввода, освобождение диска, тема Velora Gamers / Installer frames by changes, waiting for input, freeing a disk, the Velora Gamers theme
+
+**2026-11-27**
+
+**RU.** Кадр рисуется только там, где что-то изменилось. Перед кадром
+`Ui::plan` смотрит на прошлый кадр: какие элементы указатель покинул
+или задел и у каких анимированных значений текущее значение по часам
+отличается от нарисованного. Результат: ничего (кадр пропускается, на
+экране двигается только указатель), часть экрана (объединение областей
+этих элементов с запасом под кольцо фокуса и тени) или весь экран (клавиши,
+щелчки, колесо, смена экрана, переходы и анимации без своего элемента).
+Часть рисуется с отсечением `Canvas::set_frame`: вложенные области
+отсечения не выходят за неё, фон копируется из кеша только в ней, на
+экран выводится только она. Тест на хосте рисует установщик двумя
+способами и после каждого шага сравнивает картинки попиксельно.
+
+Кадры идут не чаще 60 в секунду (16,7 мс от начала прошлого кадра), время
+анимаций берётся из часов, а не из числа кадров. Указатель рисуется
+отдельным слоем сразу при чтении его событий. Программа больше не спит по
+10 мс между опросами: новый вызов `input_wait(timeout_ms)` (52) будит её,
+как только ядро получило событие клавиатуры или указателя. Таймер ядра
+по-прежнему 100 Гц, поэтому последние миллисекунды до кадра ждутся через
+`yield`.
+
+Смешивание цветов считает красный и синий одним умножением, а заливки
+(прямоугольники, внутренность скруглённых фигур) — по два пикселя в `u64`.
+Результат побитово совпадает с прежней формулой. Скруглённые
+прямоугольники и обводки считают расстояние до края только у краёв:
+фигуры выпуклые, середина строки — один отрезок. Квадратный корень для
+текста берётся из таблицы, а не двоичным поиском.
+
+Счётчик кадров (F12) показывает кадры и перемещения указателя в секунду,
+среднее и самое долгое время кадра и интервал между кадрами анимации;
+каждую секунду строка уходит и в консоль. Режим `qemu_run.py fps` по
+этим строкам меряет установщик в 1920x1080.
+
+Диски. Ядро при загрузке подключает каждую известную ему файловую систему
+в `/mnt`. Раньше установщик прятал такие диски, и диск с прошлой
+установкой выглядел как «диск не найден». Теперь он показывает их с
+предупреждением, а перед записью отключает их разделы новым вызовом
+`umount(path)` (31, только root, только `/mnt/…`, `EBUSY`, пока открыты
+файлы). Журнал паники перестаёт писаться на отключённый раздел. Диск, с
+которого запущена система, не предлагается: Limine сообщает GUID раздела,
+с которого загружено ядро (запрос Executable File), и `diskinfo` ставит
+такому диску флаг `disk_kind::BOOT`. Кнопка «Обновить» перечитывает список.
+Новые диски после загрузки не появятся, потому что ядро ищет их только
+при загрузке.
+
+Тема Velora Gamers заменила Midnight: только цвета (фон #0B0A12, панели
+#15131F, обводки #2A2540, текст #F4F2FF и #A39DBD, акцент #A855F7, детали
+#38E1FF). Контраст текста не ниже 4.5:1, это проверяет тест. У темы свой
+акцент: если акцент не меняли, при выборе темы он становится её
+собственным. Цвет деталей (`Theme::detail`) — курсор ввода и значок
+текущего этапа установки. У тёмной и светлой тем он совпадает с акцентом.
+
+**EN.** A frame is drawn only where something changed. Before a frame
+`Ui::plan` looks at the last one: which widgets the pointer left or touched,
+and which animated values differ, on the clock, from the value drawn. The
+answer is nothing (the frame is skipped; only the pointer moves on the
+screen), a part of the screen (the union of those widgets' areas with a
+margin for focus rings and shadows) or the whole screen (keys, clicks, the
+wheel, a new screen, transitions and animations without a widget of their
+own). A part is drawn with the `Canvas::set_frame` clip: nested clips stay
+inside it, the background is copied from its cache only there, and only that
+part is shown. A host test draws the installer both ways and compares the
+pictures pixel by pixel after every step.
+
+Frames come at most 60 times a second (16.7 ms from the start of the last
+one); animations take their time from the clock, not from frame counts. The
+pointer is a layer of its own, drawn as soon as its events are read. The
+program no longer sleeps 10 ms between polls: the new call
+`input_wait(timeout_ms)` (52) wakes it as soon as the kernel has a key or
+pointer event. The kernel timer is still 100 Hz, so the last milliseconds
+before a frame are waited by yielding.
+
+Colour blending computes red and blue with one multiplication, and fills
+(rectangles, the inside of rounded shapes) blend two pixels per `u64`; the
+result is bit for bit that of the earlier formula. Rounded rectangles and
+outlines compute the distance to the edge only near the edges: the shapes are
+convex, the middle of a row is one span. The square root for text comes from
+a table instead of a binary search.
+
+The frame counter (F12) shows frames and pointer moves per second, the
+average and longest frame and the interval between frames of an animation;
+every second the line also goes to the console. `qemu_run.py fps` measures
+the installer at 1920x1080 from these lines.
+
+Disks. At boot the kernel mounts every file system it knows under `/mnt`. The
+installer used to hide such disks, so a disk with an earlier installation
+looked like "no disks found". It now offers them with a warning and, before
+writing, unmounts their partitions with the new call `umount(path)` (31, root
+only, only `/mnt/...`, `EBUSY` while files are open); the panic log stops
+using an unmounted partition. The disk the system was started from is not
+offered: Limine reports the GUID of the partition the kernel came from (the
+Executable File request), and `diskinfo` gives that disk the
+`disk_kind::BOOT` flag. Refresh reads the list again. Disks connected after
+boot do not appear, because the kernel looks for disks only at boot.
+
+The Velora Gamers theme replaced Midnight: colours only (backdrop #0B0A12,
+panels #15131F, borders #2A2540, text #F4F2FF and #A39DBD, accent #A855F7,
+details #38E1FF). Text contrast is at least 4.5:1, which a test checks. The
+theme has an accent of its own: when the accent was not changed, choosing the
+theme switches to it. The detail colour (`Theme::detail`) is used for the text
+cursor and the mark of the running installation step; in the dark and light
+themes it is the accent.
