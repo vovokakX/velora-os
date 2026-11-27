@@ -44,8 +44,11 @@ struct Harness {
 
 impl Harness {
     fn new() -> Harness {
+        let mut app = App::new(disks());
+        // Animations are checked in their own test with a clock.
+        app.animate = false;
         Harness {
-            app: App::new(disks()),
+            app,
             ui: Ui::new(256),
             c: Canvas::new(1280, 720),
             f: fonts(),
@@ -119,10 +122,11 @@ fn every_screen_with_the_keyboard() {
     assert_eq!(h.app.screen, Screen::Disk);
     h.keys(&[Key::Enter]);
     assert_eq!(h.app.screen, Screen::User);
-    // Empty name: an error, the screen stays.
+    // Empty fields: Continue is disabled, Enter does nothing.
+    assert!(!h.app.can_continue());
     h.keys(&[Key::Enter]);
     assert_eq!(h.app.screen, Screen::User);
-    assert!(h.app.error.is_some());
+    assert!(h.app.error.is_none());
     // Fill in the fields with Tab and typing.
     h.ui.set_focus(Some(110));
     h.type_text("anna");
@@ -211,7 +215,7 @@ fn no_disks_and_failure() {
     h.app.screen = Screen::Disk;
     h.keys(&[Key::Enter]);
     assert_eq!(h.app.screen, Screen::Disk);
-    assert!(h.app.error.is_some());
+    assert!(!h.app.can_continue());
     h.app.screen = Screen::Installing;
     h.app.finish(Err(String::from("GPT: I/O error")));
     assert_eq!(h.app.screen, Screen::Failed);
@@ -224,7 +228,7 @@ fn no_disks_and_failure() {
 fn english_and_light_theme_render() {
     let mut h = Harness::new();
     h.app.settings.installer_language = Lang::En;
-    h.app.dark = false;
+    h.app.settings.theme = 1;
     for s in [
         Screen::Welcome,
         Screen::Location,
@@ -314,4 +318,90 @@ fn menu_then_installer_share_the_ui() {
         again,
         "a new screen must be drawn without waiting for input"
     );
+}
+
+/// The theme and accent change the installer at once, with a cross-fade;
+/// screens slide; the Animations switch turns it off.
+#[test]
+fn theme_accent_and_transitions_animate() {
+    let mut h = Harness::new();
+    h.app.animate = true;
+    let mut now = 0u64;
+    let frame = |h: &mut Harness, now: u64, ev: &[Event]| {
+        h.ui.set_time(now);
+        h.ui.begin(ev);
+        h.app.draw(&mut h.ui, &mut h.c, &mut h.f, &mut h.a);
+    };
+    frame(&mut h, now, &[]);
+    let (win, scale) = window_rect(1280, 720);
+    let s = |u: i32| ((u as i64 * scale + 128) >> 8) as i32;
+    // A pixel of the window background, away from the widgets.
+    let (px, py) = (win.x + s(400), win.y + s(250));
+    let dark = h.c.get(px, py);
+    // The switch in the sidebar turns the light theme on.
+    h.ui.set_focus(Some(800));
+    frame(
+        &mut h,
+        now,
+        &[Event::Key {
+            key: Key::Enter,
+            shift: false,
+        }],
+    );
+    assert_eq!(h.app.settings.theme, 1);
+    now += 16;
+    frame(&mut h, now, &[]);
+    assert!(h.app.in_transition());
+    now += 110;
+    frame(&mut h, now, &[]);
+    let mid = h.c.get(px, py);
+    now += 400;
+    frame(&mut h, now, &[]);
+    frame(&mut h, now, &[]);
+    assert!(!h.app.in_transition());
+    let light = h.c.get(px, py);
+    let lum = |c: u32| (c >> 16 & 0xff) + (c >> 8 & 0xff) + (c & 0xff);
+    assert!(
+        lum(dark) < lum(mid) && lum(mid) < lum(light),
+        "{:x} {:x} {:x}",
+        dark,
+        mid,
+        light
+    );
+    // A step forward slides the content.
+    h.ui.set_focus(None);
+    frame(
+        &mut h,
+        now,
+        &[Event::Key {
+            key: Key::Enter,
+            shift: false,
+        }],
+    );
+    assert_eq!(h.app.screen, Screen::Location);
+    now += 16;
+    frame(&mut h, now, &[]);
+    assert!(h.app.in_transition() && h.ui.animating());
+    now += 600;
+    frame(&mut h, now, &[]);
+    frame(&mut h, now, &[]);
+    assert!(!h.app.in_transition());
+    // The accent colour is used at once; without "Animations" there is
+    // no transition.
+    h.app.settings.animations = false;
+    h.app.settings.accent = 1;
+    frame(&mut h, now, &[]);
+    assert!(!h.app.in_transition());
+    assert_eq!(h.ui.theme.accent, 0xff00_0000 | settings::ACCENTS[1].1);
+}
+
+#[test]
+fn window_scales_are_steps() {
+    assert_eq!(window_rect(1280, 720).1, 384);
+    assert_eq!(window_rect(1920, 1080).1, 512);
+    assert_eq!(window_rect(2560, 1440).1, 768);
+    assert_eq!(window_rect(3840, 2160).1, 1024);
+    assert_eq!(window_rect(1024, 768).1, 256);
+    let (r, s) = window_rect(800, 600);
+    assert!(s < 256 && r.w <= 800 - 48);
 }

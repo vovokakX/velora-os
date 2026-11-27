@@ -18,12 +18,13 @@ use art::StepState;
 use velora_install::settings::{self, Lang, Settings};
 use velora_install::{Layout, Phase, Plan};
 use velora_ui::Rect;
-use velora_ui::canvas::{Canvas, fade, rgb};
+use velora_ui::anim::{self, Kind, Transition};
+use velora_ui::canvas::{Canvas, fade, lerp};
 use velora_ui::decor;
 use velora_ui::icons::Icon;
 use velora_ui::image::{Picture, Pointer};
 use velora_ui::text::{Fonts, Weight};
-use velora_ui::theme::{DARK, LIGHT};
+use velora_ui::theme::{DARK, LIGHT, MIDNIGHT, Theme};
 use velora_ui::ui::{ButtonKind, Ctx, Key, Ui};
 
 /// Design units of the window (the design's screens are 805 x 368).
@@ -33,11 +34,28 @@ const SIDEBAR_W: i32 = 193;
 const CONTENT_X: i32 = 226;
 const CONTENT_R: i32 = 781;
 
+/// Scales the window is drawn at (pixels per design unit times 256):
+/// 1x, 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x, 3.5x, 4x.
+pub const SCALES: [i64; 9] = [256, 320, 384, 448, 512, 640, 768, 896, 1024];
+
 /// The window for a screen of `w` x `h` pixels and its scale (pixels per
-/// design unit times 256): the design's proportions, as large as fits.
+/// design unit times 256): the largest of [`SCALES`] that fits with a
+/// margin, so 1280x720 gets 1.5x, 1920x1080 2x, 2560x1440 3x and
+/// 3840x2160 4x. Everything is drawn at that scale in the screen's own
+/// resolution; nothing is stretched afterwards. Screens too small for 1x
+/// get a smaller scale that fits.
 pub fn window_rect(w: i32, h: i32) -> (Rect, i64) {
-    let ww = (w * 94 / 100).min(h * 94 / 100 * WIN_W / WIN_H);
-    let scale = ww as i64 * 256 / WIN_W as i64;
+    let mx = (w * 2 / 100).max(24);
+    let my = (h * 2 / 100).max(24);
+    let fit = ((w - 2 * mx).max(1) as i64 * 256 / WIN_W as i64)
+        .min((h - 2 * my).max(1) as i64 * 256 / WIN_H as i64);
+    let scale = SCALES
+        .iter()
+        .rev()
+        .find(|&&s| s <= fit)
+        .copied()
+        .unwrap_or(fit.max(64));
+    let ww = (WIN_W as i64 * scale / 256) as i32;
     let wh = (WIN_H as i64 * scale / 256) as i32;
     (Rect::new((w - ww) / 2, (h - wh) / 2, ww, wh), scale)
 }
@@ -136,8 +154,10 @@ pub const ROOT_SHARES: [u64; 4] = [100, 75, 50, 25];
 /// The installer's state.
 pub struct App {
     pub screen: Screen,
-    pub dark: bool,
     pub settings: Settings,
+    /// Animations of the installer itself (off for slow emulation); the
+    /// user's "Animations" switch also turns them off.
+    pub animate: bool,
     pub disks: Vec<DiskEntry>,
     pub disk: usize,
     /// 0 automatic, 1 manual, 2 expert.
@@ -156,14 +176,18 @@ pub struct App {
     pub phase: Option<Phase>,
     pub failure: String,
     background: decor::Cache,
+    /// The screen and colours of the last frame drawn: a change starts a
+    /// transition from that frame.
+    last_drawn: Option<(Screen, u64)>,
+    transition: Option<Transition>,
 }
 
 impl App {
     pub fn new(disks: Vec<DiskEntry>) -> App {
         App {
             screen: Screen::Welcome,
-            dark: true,
             settings: Settings::default(),
+            animate: true,
             disks,
             disk: 0,
             mode: 0,
@@ -180,6 +204,90 @@ impl App {
             phase: None,
             failure: String::new(),
             background: decor::Cache::default(),
+            last_drawn: None,
+            transition: None,
+        }
+    }
+
+    /// The theme chosen on the Appearance screen (or with the switch in
+    /// the sidebar) with the chosen accent colour; the installer uses it
+    /// at once.
+    pub fn theme(&self) -> Theme {
+        let base = match self.settings.theme {
+            1 => LIGHT,
+            2 => MIDNIGHT,
+            _ => DARK,
+        };
+        if self.settings.use_accent {
+            let a = settings::ACCENTS
+                .get(self.settings.accent)
+                .unwrap_or(&settings::ACCENTS[0]);
+            base.with_accent(a.1)
+        } else {
+            base.neutral()
+        }
+    }
+
+    pub fn dark(&self) -> bool {
+        self.settings.theme != 1
+    }
+
+    fn theme_key(&self) -> u64 {
+        self.settings.theme as u64
+            | (self.settings.accent as u64) << 4
+            | (self.settings.use_accent as u64) << 12
+    }
+
+    /// A transition between screens or colours is running.
+    pub fn in_transition(&self) -> bool {
+        self.transition.is_some()
+    }
+
+    /// The area of the window that moves when the step changes: the
+    /// content right of the sidebar, above the buttons.
+    fn content_rect(win: Rect, scale: i64) -> Rect {
+        let s = |du: i32| ((du as i64 * scale + 128) >> 8) as i32;
+        Rect::new(
+            win.x + s(SIDEBAR_W + 6),
+            win.y + s(10),
+            win.w - s(SIDEBAR_W + 6) - s(14),
+            s(308),
+        )
+    }
+
+    /// Starts a transition if the screen or the colours changed since the
+    /// last frame (which is still in `c`).
+    fn start_transition(&mut self, c: &Canvas, win: Rect, scale: i64, now: u64, on: bool) {
+        let key = (self.screen, self.theme_key());
+        let last = self.last_drawn.replace(key);
+        if !on {
+            self.transition = None;
+            return;
+        }
+        let Some((ls, lk)) = last else { return };
+        if lk != key.1 {
+            self.transition = Some(Transition::capture(
+                c,
+                c.bounds(),
+                now,
+                anim::SLOW,
+                Kind::Fade,
+            ));
+        } else if ls != key.0 {
+            let wide = |s: Screen| matches!(s, Screen::Installing | Screen::Done | Screen::Failed);
+            self.transition = Some(if wide(ls) || wide(key.0) {
+                Transition::capture(c, win, now, anim::SLOW, Kind::Fade)
+            } else {
+                let dir = if key.0 as u8 > ls as u8 { 1 } else { -1 };
+                let dist = ((28 * scale) >> 8) as i32;
+                Transition::capture(
+                    c,
+                    Self::content_rect(win, scale),
+                    now,
+                    anim::SLOW,
+                    Kind::Slide { dir, dist },
+                )
+            });
         }
     }
 
@@ -347,7 +455,10 @@ impl App {
         let start = self.screen;
         let (win, scale) = window_rect(c.width as i32, c.height as i32);
         ui.scale = scale;
-        ui.theme = if self.dark { DARK } else { LIGHT };
+        ui.set_animations(self.animate && self.settings.animations);
+        let now = ui.tw.now;
+        self.start_transition(c, win, scale, now, ui.tw.enabled);
+        ui.theme = self.theme();
         let t = ui.theme;
         let radius = ui.s(16);
         let kind = match self.screen {
@@ -355,16 +466,15 @@ impl App {
             _ => 1,
         };
         let side = Rect::new(win.x, win.y, ui.s(SIDEBAR_W), win.h);
-        self.background
-            .paint(c, (self.dark as u64) << 8 | kind, |c| {
-                decor::backdrop(c, &t);
-                decor::window(c, win, radius, &t, scale);
-                if kind == 2 {
-                    decor::waves_side(c, win, radius, &t, true);
-                } else {
-                    decor::sidebar(c, side, radius, &t);
-                }
-            });
+        self.background.paint(c, self.theme_key() << 8 | kind, |c| {
+            decor::backdrop(c, &t);
+            decor::window(c, win, radius, &t, scale);
+            if kind == 2 {
+                decor::waves_side(c, win, radius, &t, true);
+            } else {
+                decor::sidebar(c, side, radius, &t);
+            }
+        });
         let mut x = Ctx { ui, c, f };
         let mut action = Action::None;
         // Sidebar.
@@ -392,6 +502,7 @@ impl App {
         }
         // Buttons at the bottom right.
         let busy = self.screen == Screen::Installing;
+        let ready = self.can_continue();
         if !matches!(self.screen, Screen::Done | Screen::Installing) {
             let (go_label, kind) = match self.screen {
                 Screen::Confirm => (self.l("Установить", "Install"), ButtonKind::Primary),
@@ -424,7 +535,10 @@ impl App {
             } else {
                 Some(Icon::ArrowRight)
             };
-            if x.button(901, go, go_label, kind, None, icon) {
+            x.ui.set_enabled(ready);
+            let pressed = x.button(901, go, go_label, kind, None, icon);
+            x.ui.set_enabled(true);
+            if pressed {
                 action = if self.screen == Screen::Failed {
                     Action::Reboot
                 } else {
@@ -435,7 +549,7 @@ impl App {
         if !busy && action == Action::None && !x.ui.popup_open() {
             if x.ui.take_key(Key::Escape) {
                 action = self.back();
-            } else if x.ui.focused().is_none() && x.ui.take_key(Key::Enter) {
+            } else if x.ui.focused().is_none() && ready && x.ui.take_key(Key::Enter) {
                 action = match self.screen {
                     Screen::Failed => Action::None,
                     _ => self.next(),
@@ -443,8 +557,34 @@ impl App {
             }
         }
         // A new screen is drawn at once, not at the next input.
-        let again = x.end() || action != Action::None || self.screen != start;
+        let again = x.end()
+            || action != Action::None
+            || self.screen != start
+            || self.theme_key() != self.last_drawn.map_or(0, |l| l.1);
+        if let Some(tr) = self.transition.as_mut() {
+            if tr.apply(c, now) {
+                ui.tw.mark_active();
+            } else {
+                self.transition = None;
+            }
+        }
         (action, again)
+    }
+
+    /// Whether Continue (or Install) can be pressed on this screen: the
+    /// fields it needs are filled and there is a disk.
+    pub fn can_continue(&self) -> bool {
+        match self.screen {
+            Screen::Disk | Screen::Partitions | Screen::Confirm => !self.disks.is_empty(),
+            Screen::User => {
+                !self.user.is_empty()
+                    && !self.password.is_empty()
+                    && !self.password2.is_empty()
+                    && !self.root_password.is_empty()
+                    && !self.root_password2.is_empty()
+            }
+            _ => true,
+        }
     }
 
     fn sidebar(&mut self, x: &mut Ctx, win: Rect, a: &mut Assets, steps: bool) {
@@ -513,9 +653,12 @@ impl App {
             x.ui.s(24),
         );
         let (resp, step) = x.selectable(800, r, r.h / 2);
-        art::theme_switch(x.c, r, self.dark, resp.hovered, &t);
+        let (hover, _) = x.hover_press(800, &resp);
+        let v =
+            x.ui.anim(800, 9, if self.dark() { 1000 } else { 0 }, anim::NORMAL);
+        art::theme_switch(x.c, r, v, hover, &t);
         if resp.activated || step != 0 {
-            self.dark = !self.dark;
+            self.settings.theme = if self.dark() { 1 } else { 0 };
             x.ui.request_redraw();
         }
     }
@@ -544,11 +687,7 @@ impl App {
 
     fn error_line(&self, x: &mut Ctx, win: Rect, v: i32) {
         if let Some(e) = &self.error {
-            let color = if x.ui.theme.dark {
-                rgb(255, 138, 128)
-            } else {
-                rgb(196, 48, 40)
-            };
+            let color = x.ui.theme.error;
             x.icon(
                 Icon::Warning,
                 win.x + x.ui.s(CONTENT_X),
@@ -744,18 +883,17 @@ impl App {
                 x.ui.set_focus(Some(40 + n as u32));
                 x.ui.request_redraw();
             }
-            let bg = if resp.hovered { t.field_hover } else { t.field };
+            let (h, p) = x.hover_press(40 + i as u32, &resp);
+            let bg = lerp(lerp(t.field, t.field_hover, h), t.field_pressed, p);
             x.c.fill_rrect(r, x.ui.s(10), bg);
-            let border = if selected {
-                fade(t.text, 210)
-            } else {
-                t.field_border
-            };
-            let bw = if selected {
-                x.ui.sfx(400)
-            } else {
-                x.ui.sfx(256)
-            };
+            let sv = x.ui.anim(
+                40 + i as u32,
+                9,
+                if selected { 255 } else { 0 },
+                anim::NORMAL,
+            );
+            let border = lerp(t.field_border, t.accent, sv as u8);
+            let bw = x.ui.sfx(256 + 192 * sv as i64 / 255);
             x.c.stroke_rrect_fx(r, x.ui.s(10), bw.max(256), border);
             let ps = (bs * 6 / 10) as usize;
             let (img, hx, hy) = a.pointers[i].at(ps);
@@ -802,13 +940,23 @@ impl App {
                 x.ui.set_focus(Some(50 + n as u32));
                 x.ui.request_redraw();
             }
+            let (h, _) = x.hover_press(50 + i as u32, &resp);
             art::preview(x.c, r, x.ui.s(8), art::theme_colors(i));
-            if self.settings.theme == i {
+            if h > 0 {
+                x.c.fill_rrect(r, x.ui.s(8), fade(0xffffffff, h / 10));
+            }
+            let sv = x.ui.anim(
+                50 + i as u32,
+                9,
+                if self.settings.theme == i { 255 } else { 0 },
+                anim::NORMAL,
+            );
+            if sv > 0 {
                 x.c.stroke_rrect_fx(
-                    r.inset(-x.ui.s(2)),
-                    x.ui.s(10),
-                    x.ui.sfx(400).max(256),
-                    fade(t.text, 220),
+                    r.inset(-x.ui.s(3)),
+                    x.ui.s(11),
+                    x.ui.sfx(512).max(384),
+                    fade(t.accent, sv as u8),
                 );
             }
         }
@@ -924,7 +1072,7 @@ impl App {
         }
         let d = x.ui.s(11);
         for (i, (_, color)) in settings::ACCENTS.iter().enumerate() {
-            let cx = ox + d / 2 + i as i32 * x.ui.s(19);
+            let cx = ox + d / 2 + i as i32 * x.ui.s(17);
             let cy = win.y + x.ui.s(222);
             let r = Rect::new(cx - d / 2, cy - d / 2, d, d);
             let (resp, step) = x.selectable(70 + i as u32, r, d / 2);
@@ -945,16 +1093,21 @@ impl App {
             } else {
                 fade(col, 90)
             };
-            if self.settings.accent == i && self.settings.use_accent {
+            let (h, p) = x.hover_press(70 + i as u32, &resp);
+            let chosen = self.settings.accent == i && self.settings.use_accent;
+            let sv =
+                x.ui.anim(70 + i as u32, 9, if chosen { 255 } else { 0 }, anim::NORMAL);
+            if sv > 0 {
                 x.c.stroke_circle_fx(
                     cx as i64 * 256,
                     cy as i64 * 256,
-                    (d as i64 * 256) * 75 / 100,
-                    x.ui.sfx(300).max(256),
-                    fade(t.text, 200),
+                    (d as i64 * 256) * 78 / 100,
+                    x.ui.sfx(320).max(256),
+                    fade(t.text, sv as u8),
                 );
             }
-            x.c.fill_circle_fx(cx as i64 * 256, cy as i64 * 256, d as i64 * 128, col);
+            let grow = (d as i64 * 128) * (h as i64 - p as i64 / 2) / (255 * 8);
+            x.c.fill_circle_fx(cx as i64 * 256, cy as i64 * 256, d as i64 * 128 + grow, col);
         }
     }
 
@@ -1425,11 +1578,7 @@ impl App {
             ),
             t.text_dim,
         );
-        let warn = if t.dark {
-            rgb(255, 176, 92)
-        } else {
-            rgb(178, 92, 0)
-        };
+        let warn = t.warning;
         x.icon(Icon::Warning, tx, card.y + x.ui.s(100), x.ui.s(18), warn);
         x.label(
             tx + x.ui.s(26),
@@ -1455,8 +1604,9 @@ impl App {
     fn installing(&mut self, x: &mut Ctx, win: Rect) {
         let t = x.ui.theme;
         let (cx, cy) = (win.x + x.ui.s(352), win.y + x.ui.s(176));
-        x.progress_ring(cx, cy, x.ui.s(76), x.ui.s(7), self.progress);
-        let pct = format!("{}%", self.progress / 10);
+        let shown = x.smooth(950, self.progress as i32, 450).max(0) as u32;
+        x.progress_ring(cx, cy, x.ui.s(76), x.ui.s(7), shown);
+        let pct = format!("{}%", shown / 10);
         x.label_center(
             Rect::new(cx - x.ui.s(60), cy - x.ui.s(16), x.ui.s(120), x.ui.s(32)),
             Weight::SemiBold,
@@ -1502,7 +1652,7 @@ impl App {
                 x.ui.s(CONTENT_R - 478 - 8),
                 x.ui.s(4),
             ),
-            self.progress,
+            shown,
         );
         for (i, ph) in Phase::ALL.iter().enumerate() {
             let y = win.y + x.ui.s(180 + 26 * i as i32);
@@ -1513,7 +1663,7 @@ impl App {
                 _ => StepState::Ahead,
             };
             match state {
-                StepState::Done => x.icon(Icon::Check, tx, y, s, t.text),
+                StepState::Done => x.icon(Icon::Check, tx, y, s, t.accent),
                 StepState::Current => {
                     let w = x.ui.sfx(450).max(256);
                     x.c.arc_fx(
@@ -1521,11 +1671,14 @@ impl App {
                         (y + s / 2) as i64 * 256,
                         (s as i64 * 256) * 4 / 10,
                         w,
-                        10000,
-                        50000,
+                        spinner_turn(x.ui.tw.now),
+                        40000,
                         true,
-                        t.text,
+                        t.accent,
                     );
+                    if x.ui.tw.enabled {
+                        x.ui.tw.mark_active();
+                    }
                 }
                 StepState::Ahead => {
                     x.c.fill_circle(tx + s / 2, y + s / 2, s * 4 / 10, fade(t.text_faint, 80))
@@ -1555,9 +1708,11 @@ impl App {
         let t = x.ui.theme;
         let cx = win.center_x();
         let cy = win.y + x.ui.s(78);
-        x.c.fill_circle(cx, cy, x.ui.s(34), t.selected);
+        let pop = x.ui.anim(903, 0, 1000, anim::SLOW);
+        let rad = x.ui.s(34) * (700 + 300 * pop) / 1000;
+        x.c.fill_circle(cx, cy, rad, t.tint(t.selected, 60));
         let s = x.ui.s(32);
-        x.icon(Icon::Check, cx - s / 2, cy - s / 2, s, t.text);
+        x.icon(Icon::Check, cx - s / 2, cy - s / 2, s, t.accent);
         let title = self.l("Установка завершена!", "Installation complete!");
         x.label_center(
             Rect::new(win.x, win.y + x.ui.s(134), win.w, x.ui.s(28)),
@@ -1598,11 +1753,7 @@ impl App {
 
     fn failed(&mut self, x: &mut Ctx, win: Rect) {
         let t = x.ui.theme;
-        let warn = if t.dark {
-            rgb(255, 138, 128)
-        } else {
-            rgb(196, 48, 40)
-        };
+        let warn = t.error;
         self.title(
             x,
             win,
@@ -1640,6 +1791,11 @@ impl App {
             t.text_faint,
         );
     }
+}
+
+/// The angle of a spinner at time `ms`: a turn in 1.2 s (1/65536 turns).
+fn spinner_turn(ms: u64) -> u32 {
+    ((ms % 1200) * 65536 / 1200) as u32
 }
 
 /// "64 MiB", "476.4 GiB": binary units, for partitions.
