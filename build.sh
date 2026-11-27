@@ -3,6 +3,8 @@
 #
 #   ./build.sh           -> velora.iso       (normal kernel)
 #   ./build.sh --test    -> velora-test.iso  (kernel with the in-kernel test runner)
+#   ./build.sh --uitest  -> velora-uitest.iso (normal kernel; the installer
+#                           reports its widgets for tests/qemu_run.py clicks)
 #
 # Works on Linux and on Windows (Git Bash). Needs: cargo/rustup, curl,
 # unzip, sha256sum. The Rust toolchain is pinned in rust-toolchain.toml.
@@ -21,7 +23,8 @@ CMDLINE=""
 for arg in "$@"; do
     case "$arg" in
         --test) MODE="test"; OUT="velora-test.iso"; FEATURES="--features ktest"; CMDLINE="velora.test" ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        --uitest) OUT="velora-uitest.iso"; CMDLINE="velora.uitest" ;;
+        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "build.sh: unknown argument '$arg'" >&2; exit 2 ;;
     esac
 done
@@ -103,7 +106,7 @@ cargo run -q -p mkinitrd --release -- \
     --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.
-CONF="$BUILD/limine-$MODE.conf"
+CONF="$BUILD/limine-${OUT%.iso}.conf"
 sed "s|@CMDLINE@|$CMDLINE|" boot/limine.conf > "$CONF"
 
 # 5. ISO image.
@@ -122,7 +125,7 @@ cargo run -q -p mkiso --release -- \
     --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 
 # 6. Image for USB drives (release build only): GPT + FAT32 EFI partition.
-if [ "$MODE" = "release" ]; then
+if [ "$OUT" = "velora.iso" ]; then
     echo "==> building velora-usb.img"
     cargo run -q -p mkusb --release -- \
         --out velora-usb.img \
