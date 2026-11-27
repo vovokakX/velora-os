@@ -108,11 +108,18 @@ fn main() -> i32 {
     println!("Disks:");
     for d in &all {
         println!(
-            "  {:<10} {:>8} MiB  {}{}",
+            "  {:<10} {:>8} MiB  {:<6} {}{}",
             d.name,
             d.size / (1024 * 1024),
+            d.bus,
             d.model,
-            if d.in_use { "  (in use)" } else { "" }
+            if d.boot {
+                "  (the system was started from it)"
+            } else if d.in_use {
+                "  (mounted under /mnt)"
+            } else {
+                ""
+            }
         );
     }
     println!();
@@ -167,18 +174,18 @@ fn main() -> i32 {
         println!("velora-setup: no disk named {}", disk);
         return 1;
     };
+    if d.boot {
+        println!(
+            "velora-setup: the system was started from {}; it cannot be erased",
+            disk
+        );
+        return 1;
+    }
     if let Err(p) = velora_install::check(&plan, d.size) {
         println!("velora-setup: {}", p.text(Lang::En));
         if d.size < MIN_DISK_MIB * 1024 * 1024 {
             println!("velora-setup: {} is too small", disk);
         }
-        return 1;
-    }
-    if d.in_use {
-        println!(
-            "velora-setup: {} is mounted under /mnt; it cannot be erased now",
-            disk
-        );
         return 1;
     }
     println!(
@@ -194,6 +201,13 @@ fn main() -> i32 {
             println!("Nothing was changed.");
             return 1;
         }
+    }
+    if d.in_use {
+        println!("Unmounting the file systems of {}.", disk);
+    }
+    if let Err(e) = live::release(&disk) {
+        println!("velora-setup: {}", e);
+        return 1;
     }
     let dev = match live::open_disk(&disk) {
         Ok(d) => d,

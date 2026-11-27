@@ -90,7 +90,7 @@ pub const POINTERS: [Choice; 3] = [
 pub const THEMES: [Choice; 3] = [
     c("velora-dark", "Velora Dark", "Velora Dark"),
     c("velora-light", "Velora Light", "Velora Light"),
-    c("velora-midnight", "Velora Midnight", "Velora Midnight"),
+    c("velora-gamers", "Velora Gamers", "Velora Gamers"),
 ];
 
 pub const ICONS: [Choice; 2] = [
@@ -104,8 +104,9 @@ pub const WALLPAPERS: [Choice; 3] = [
     c("aurora", "Сияние", "Aurora"),
 ];
 
-/// Accent colours (0xRRGGBB), as in the design.
-pub const ACCENTS: [(&str, u32); 7] = [
+/// Accent colours (0xRRGGBB), as in the design, and the neon violet of
+/// Velora Gamers.
+pub const ACCENTS: [(&str, u32); 8] = [
     ("amber", 0xffb547),
     ("blue", 0x3f7ee8),
     ("violet", 0x724ecc),
@@ -113,7 +114,12 @@ pub const ACCENTS: [(&str, u32); 7] = [
     ("pink", 0xeb8cd0),
     ("periwinkle", 0x6f89c4),
     ("mint", 0x78bea2),
+    ("neon-violet", 0xa855f7),
 ];
+
+/// The accent each theme starts with (an index into [`ACCENTS`]): amber
+/// for dark and light, neon violet for Velora Gamers.
+pub const THEME_ACCENTS: [usize; 3] = [0, 0, 7];
 
 /// Everything chosen on the installer's screens.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -232,7 +238,7 @@ mod tests {
             .find(|f| f.0 == "/etc/velora/desktop.conf")
             .unwrap()
             .1;
-        assert!(desktop.contains("theme=velora-midnight\n"));
+        assert!(desktop.contains("theme=velora-gamers\n"));
         assert!(desktop.contains("accent=mint\naccent_color=#78bea2\n"));
         assert!(desktop.contains("large_pointer=yes\n"));
         let locale = &files[0].1;
