@@ -56,7 +56,11 @@ pub fn disks() -> Vec<Disk> {
         .map(|(name, size)| {
             let model = display::disk_info(&format!("/dev/{}", name))
                 .map(|d| {
-                    let end = d.model.iter().position(|&b| b == 0).unwrap_or(d.model.len());
+                    let end = d
+                        .model
+                        .iter()
+                        .position(|&b| b == 0)
+                        .unwrap_or(d.model.len());
                     String::from_utf8_lossy(&d.model[..end]).into_owned()
                 })
                 .unwrap_or_default();

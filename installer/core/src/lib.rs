@@ -87,7 +87,9 @@ impl Problem {
                 format!("The disk is smaller than {} MiB", min_mib)
             }
             (Problem::PartitionsTooLarge, Ru) => String::from("Разделы не помещаются на диск"),
-            (Problem::PartitionsTooLarge, En) => String::from("The partitions do not fit on the disk"),
+            (Problem::PartitionsTooLarge, En) => {
+                String::from("The partitions do not fit on the disk")
+            }
             (Problem::BadLabel, Ru) => String::from("Метка: до 16 латинских букв, цифр, «-» и «_»"),
             (Problem::BadLabel, En) => String::from("Label: up to 16 letters, digits, '-' and '_'"),
         }
@@ -110,8 +112,7 @@ pub fn valid_user_name(n: &str) -> bool {
 fn valid_label(l: &str) -> bool {
     !l.is_empty()
         && l.len() <= 16
-        && l
-            .chars()
+        && l.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
@@ -521,7 +522,9 @@ mod tests {
     fn read(fs: &mut dyn FileSystem, path: &str) -> Vec<u8> {
         let mut ino = fs.root();
         for p in path.split('/').filter(|p| !p.is_empty()) {
-            ino = fs.lookup(ino, p).unwrap_or_else(|e| panic!("{}: {:?}", path, e));
+            ino = fs
+                .lookup(ino, p)
+                .unwrap_or_else(|e| panic!("{}: {:?}", path, e));
         }
         let size = fs.stat(ino).unwrap().size as usize;
         let mut buf = alloc::vec![0; size];
@@ -561,7 +564,10 @@ mod tests {
         .unwrap();
         assert_eq!(read(&mut vfs, "/bin/vsh").len(), 50_000);
         assert_eq!(read(&mut vfs, "/etc/motd"), b"hello\n");
-        assert_eq!(read(&mut vfs, "/usr/share/fonts/Inter-Regular.ttf").len(), 3000);
+        assert_eq!(
+            read(&mut vfs, "/usr/share/fonts/Inter-Regular.ttf").len(),
+            3000
+        );
         let passwd = String::from_utf8(read(&mut vfs, "/etc/passwd")).unwrap();
         assert!(passwd.contains("anna:x:1000:1000:anna:/home/anna:/bin/vsh"));
         let shadow = String::from_utf8(read(&mut vfs, "/etc/shadow")).unwrap();
@@ -599,7 +605,10 @@ mod tests {
         assert_eq!(parts[0].sectors(), 128 * 2048);
         assert_eq!(parts[1].sectors(), 100 * 2048);
         let big = 1024 * MIB;
-        assert_eq!(check(&p, 64 * MIB), Err(Problem::DiskTooSmall { min_mib: 128 }));
+        assert_eq!(
+            check(&p, 64 * MIB),
+            Err(Problem::DiskTooSmall { min_mib: 128 })
+        );
         p.layout.root_mib = Some(2000);
         assert_eq!(check(&p, big), Err(Problem::PartitionsTooLarge));
         p.layout.root_mib = None;

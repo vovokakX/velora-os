@@ -40,7 +40,8 @@ pub enum Lang {
     En,
 }
 
-pub const INSTALLER_LANGUAGES: [Choice; 2] = [c("ru", "Русский", "Русский"), c("en", "English", "English")];
+pub const INSTALLER_LANGUAGES: [Choice; 2] =
+    [c("ru", "Русский", "Русский"), c("en", "English", "English")];
 
 /// Languages of the system (written as the user's choice; names in their
 /// own language). Inter has no CJK glyphs, so no such languages yet.
@@ -225,7 +226,11 @@ mod tests {
         };
         let files = s.files();
         assert_eq!(files.len(), 3);
-        let desktop = &files.iter().find(|f| f.0 == "/etc/velora/desktop.conf").unwrap().1;
+        let desktop = &files
+            .iter()
+            .find(|f| f.0 == "/etc/velora/desktop.conf")
+            .unwrap()
+            .1;
         assert!(desktop.contains("theme=velora-midnight\n"));
         assert!(desktop.contains("accent=mint\naccent_color=#78bea2\n"));
         assert!(desktop.contains("large_pointer=yes\n"));

@@ -11,7 +11,10 @@ use velora_ui::{Canvas, Ui};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let out = args.first().cloned().unwrap_or_else(|| String::from("build/installer-preview"));
+    let out = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| String::from("build/installer-preview"));
     let (w, h) = args
         .get(1)
         .and_then(|s| s.split_once('x'))
