@@ -30,6 +30,20 @@ pub fn tsc_synchronized() {
     assert_eq!(smp::tsc_skew(), 0, "the CPUs' TSCs differ");
 }
 
+/// A processor waiting for the big kernel lock raises its task priority
+/// so the reschedule IPI cannot enter and take a second ticket. The value
+/// must stick (it did not under WHPX when written through the APIC).
+pub fn task_priority_sticks() {
+    use crate::arch::x86_64::apic;
+    let was = crate::arch::x86_64::cpu::irq_save();
+    apic::set_task_priority(0xe);
+    let got = apic::task_priority();
+    apic::set_task_priority(0);
+    crate::arch::x86_64::cpu::irq_restore(was);
+    assert_eq!(got, 0xe, "the task priority did not stick");
+    assert_eq!(apic::task_priority(), 0);
+}
+
 pub fn all_cpus_online() {
     let enabled = acpi::get().madt.lapics.iter().filter(|l| l.enabled).count();
     assert!(smp::online() >= 2, "the tests run with -smp 4");

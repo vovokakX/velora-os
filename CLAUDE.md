@@ -78,6 +78,22 @@ ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-
 файлов). ktest после каждой загрузки читает на хосте журнал паники
 (`velora-fsck --cat`). Решения D1–D46. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
+Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
+приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
+запись не держится, и загрузка зависала, #45; тест `smp::task_priority_sticks`).
+Потоки ядра, которые вычисляют не блокируясь, держат BKL между тиками (D43),
+поэтому счётчики теста `kernel_threads_are_preempted` закреплены за
+процессором 0. Тест параллельности проверяет общую работу программ (#43):
+в CI виртуальные процессоры делят ядра хоста. Если тест ядра в CI упал,
+артефакт `kernel-elf` содержит точную сборку для `llvm-objdump --syms`.
+
+Запуск вручную в Windows (окно QEMU, WHPX, 4 процессора; диск — файл в `build/`):
+
+```sh
+cp "/c/Program Files/qemu/share/edk2-i386-vars.fd" build/run-vars.fd
+"/c/Program Files/qemu/qemu-system-x86_64.exe" -machine q35 -m 512M -smp 4   -accel whpx,kernel-irqchip=off -accel tcg   -drive if=pflash,format=raw,readonly=on,file="C:/Program Files/qemu/share/edk2-x86_64-code.fd"   -drive if=pflash,format=raw,file=build/run-vars.fd -cdrom velora.iso   -drive file=build/run-disk.img,format=raw,if=virtio   -netdev user,id=n0 -device e1000,netdev=n0   -device qemu-xhci -device usb-kbd -device usb-mouse -display sdl
+```
+
 Открытые issues:
 - **#19** — с QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов. С QEMU 9.1
   и 11.1 работает. Причина не найдена, факты собраны в issue. Из-за этого CI
