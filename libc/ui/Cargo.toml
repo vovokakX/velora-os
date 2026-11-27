@@ -1,0 +1,19 @@
+[package]
+name = "velora-ui"
+description = "Graphical interface toolkit: drawing, anti-aliased text, widgets, input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-gfx = { path = "../../kernel/gfx" }
+# Anti-aliased TrueType rendering (D47). Without "std" it needs hashbrown.
+fontdue = { version = "=0.9.5", default-features = false, features = ["hashbrown"] }
+velora-abi = { path = "../../kernel/abi", optional = true }
+vlibc = { path = "../vlibc", optional = true }
+
+[features]
+# The real screen and input devices (only for programs built for Velora).
+velora = ["dep:vlibc", "dep:velora-abi"]
