@@ -123,6 +123,9 @@ static TESTS: &[Test] = tests![
     drivers::virtio_blk_read_write,
     drivers::disks_are_independent,
     drivers::rtc_matches_bootloader_time,
+    drivers::usb_devices_found,
+    drivers::usb_storage_files,
+    drivers::usb_mouse_moves,
     // stage 7: file systems
     fs::vfs_mounted_at_boot,
     fs::devfs_exposes_disks,

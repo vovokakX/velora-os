@@ -117,6 +117,33 @@ def disk_args(kind, path):
     return ["-drive", drive, "-device", device]
 
 
+USB_STICK_TEXT = "VELORA-USB-STICK\n"
+
+
+def make_usb_stick(workdir):
+    """A 48 MiB USB drive image: GPT with one FAT32 partition holding
+    hello.txt (built by tools/mkusb)."""
+    src = os.path.join(workdir, "hello.txt")
+    with open(src, "w", newline="\n") as f:
+        f.write(USB_STICK_TEXT)
+    path = os.path.join(workdir, "stick.img")
+    subprocess.run(["cargo", "run", "-q", "--release", "-p", "mkusb", "--", "--out", path,
+                    "--size-mib", "48", "--file", "hello.txt=" + src], check=True,
+                   stdout=subprocess.DEVNULL)
+    return path
+
+
+def usb_args(stick):
+    """An xHCI controller with a USB keyboard, mouse and flash drive.
+    Key presses typed through the monitor go to the USB keyboard (the
+    last keyboard added)."""
+    return ["-device", "qemu-xhci,id=xhci",
+            "-device", "usb-kbd,bus=xhci.0",
+            "-device", "usb-mouse,bus=xhci.0",
+            "-drive", "if=none,id=stick,format=raw,file=" + stick,
+            "-device", "usb-storage,bus=xhci.0,drive=stick"]
+
+
 def make_disks(workdir):
     paths = {}
     for kind in DISK_KINDS:
@@ -130,6 +157,7 @@ def make_disks(workdir):
     with open(path, "wb") as f:
         f.truncate(FS_DISK_SIZE)
     paths["fs"] = path
+    paths["stick"] = make_usb_stick(workdir)
     return paths
 
 
@@ -171,7 +199,8 @@ def build_command(iso, workdir, memory, monitor_port, disks=None, extra=None):
     if iso:
         cmd += ["-cdrom", iso]
     for kind, path in (disks or {}).items():
-        cmd += disk_args(kind, path)
+        if kind != "stick":  # the USB drive comes with usb_args()
+            cmd += disk_args(kind, path)
     cmd += extra or []
     # Extra QEMU arguments for debugging, e.g. VELORA_QEMU_EXTRA="-trace virtio*".
     cmd += os.environ.get("VELORA_QEMU_EXTRA", "").split()
@@ -333,6 +362,20 @@ def host_fsck(path, offset, size, what):
     return None
 
 
+def check_usb_stick(path, boot):
+    """The kernel tests write usb.txt on the USB drive's FAT32 partition
+    (it starts at 1 MiB)."""
+    cmd = ["cargo", "run", "-q", "--release", "-p", "velora-fsck", "--",
+           path, "--offset", str(1024 * 1024), "--size", str(46 * 1024 * 1024),
+           "--cat", "/usb.txt"]
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    text = r.stdout.decode("utf-8", errors="replace")
+    want = "written over USB, boot %d" % boot
+    if r.returncode != 0 or want not in text:
+        return "the USB drive does not hold the file written by the kernel: " + text.strip()[:200]
+    return None
+
+
 def check_panic_log(path):
     """The deliberate panic at the end of the kernel tests must be in the
     panic log on the FAT32 half of the file system disk."""
@@ -379,7 +422,7 @@ def run_once(args, work, disks, log, check, iso="default", extra=None):
     port = free_port()
     iso = args.iso if iso == "default" else iso
     if extra is None and args.mode == "ktest":
-        extra = net_args()
+        extra = net_args() + usb_args(disks["stick"])
     cmd, accel = build_command(iso, work, args.memory, port, disks, extra)
     print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, iso or "none (boot from disk)"))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -428,6 +471,9 @@ def run(args):
                 if problem:
                     return fail("after boot %d: %s" % (boot, problem))
             print("qemu_run: VeloraFS and FAT32 checked on the host after boot %d" % boot)
+            problem = check_usb_stick(disks["stick"], boot)
+            if problem:
+                return fail("after boot %d: %s" % (boot, problem))
             problem = check_panic_log(disks["fs"])
             if problem:
                 return fail("after boot %d: %s" % (boot, problem))
@@ -458,10 +504,16 @@ def wait_for(proc, reader, text, deadline):
 
 def check_ktest(proc, reader, monitor, deadline, extra_markers):
     keys_sent = False
+    mouse_moved = False
     while proc.poll() is None and time.monotonic() < deadline:
         if not keys_sent and reader.find("ktest: keyboard: waiting for input") is not None:
             monitor.keys(KTEST_KEYS)
             keys_sent = True
+        if not mouse_moved and reader.find("ktest: mouse: waiting for movement") is not None:
+            monitor.command("mouse_move 12 -7")
+            monitor.command("mouse_button 1")
+            monitor.command("mouse_button 0")
+            mouse_moved = True
         time.sleep(0.1)
     if proc.poll() is None:
         return fail("timeout: kernel tests did not finish")
@@ -484,6 +536,9 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "backtrace:",
         "ktest: panic path ok",
         "net0: 10.0.2.15/24 via 10.0.2.2 (DHCP)",
+        "usb: storage usb0",
+        "usb: keyboard",
+        "usb: mouse",
     ] + extra_markers
     missing = [m for m in required if m not in out.replace("\\", "/")]
     if missing:
@@ -672,6 +727,11 @@ def run_usb(args, work):
         try:
             assert s.wait("calibrated against the ACPI PM timer"), \
                 "the timers were not calibrated against the ACPI PM timer"
+            # The drive the system booted from is seen over USB, and its
+            # EFI partition (with /boot/velora) gets the panic log.
+            assert s.wait("usb: storage usb0"), "the USB drive was not found"
+            assert s.wait("panic log: /mnt/usb0p1/velora-panic.log"), \
+                "no panic log on the USB drive"
             login(s, "user", "velora", "user@velora")
             print("qemu_run: booted from the USB image: login prompt after %.2f s"
                   % reader.find("velora login:"))
@@ -680,6 +740,7 @@ def run_usb(args, work):
             s.run("dmesg > /tmp/k.txt; ls -l /tmp/k.txt", "k.txt")
             s.run("cat /tmp/k.txt", "calibrated against the ACPI PM timer")
             s.run("ls /dev", "kmsg", exact=True)
+            s.run("ls /mnt/usb0p1/boot", "initramfs.tar", exact=True)
             s.type("exit\n")
             login(s, "root", "velora", "root@velora")
             # QEMU runs with -no-reboot, so a restart ends it.
@@ -692,7 +753,7 @@ def run_usb(args, work):
 
     r = run_once(args, work, None, args.log, check, iso=None, extra=extra)
     if r == 0:
-        print("qemu_run: PASS (boot from the USB image, PM timer, dmesg, reboot)")
+        print("qemu_run: PASS (boot from the USB image, USB drive seen, PM timer, dmesg, reboot)")
     return r
 
 

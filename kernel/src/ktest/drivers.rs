@@ -136,6 +136,65 @@ pub fn disks_are_independent() {
     assert_ne!(a, b);
 }
 
+/// The test runner attaches a USB keyboard, mouse and flash drive (with
+/// hello.txt on a FAT32 partition) to an xHCI controller.
+pub fn usb_devices_found() {
+    let (keyboards, mice) = crate::drivers::xhci::hid_devices();
+    assert_eq!((keyboards, mice), (1, 1), "USB keyboard and mouse");
+    let stick = block::devices()
+        .into_iter()
+        .find(|d| d.name() == "usb0")
+        .expect("no USB drive");
+    assert_eq!(stick.size_bytes(), 48 * 1024 * 1024);
+    assert!(block::devices().iter().any(|d| d.name() == "usb0p1"));
+}
+
+pub fn usb_storage_files() {
+    use super::fs::{read_file, write_file};
+    let text = read_file("/mnt/usb0p1/hello.txt").expect("read hello.txt");
+    assert_eq!(text, b"VELORA-USB-STICK\n");
+    // Larger than one 64 KiB transfer, so several SCSI commands are used.
+    let data: Vec<u8> = (0..200_000u32).map(|i| (i % 253) as u8).collect();
+    write_file("/mnt/usb0p1/big.bin", &data);
+    let back = read_file("/mnt/usb0p1/big.bin").expect("read big.bin");
+    assert!(back == data, "big.bin differs after reading it back");
+    // The host checks this file after the run.
+    let boot = if read_file("/mnt/usb0p1/usb.txt").is_ok() {
+        2
+    } else {
+        1
+    };
+    let msg = alloc::format!("written over USB, boot {}\n", boot);
+    write_file("/mnt/usb0p1/usb.txt", msg.as_bytes());
+    crate::fs::with(|v| v.sync_all()).expect("sync");
+}
+
+/// The test runner moves the mouse and clicks through the QEMU monitor.
+pub fn usb_mouse_moves() {
+    while crate::input::pop_mouse().is_some() {}
+    crate::kprintln!();
+    crate::kprintln!("ktest: mouse: waiting for movement");
+    let start = crate::arch::cpu::rdtsc();
+    let (mut dx, mut dy, mut clicked) = (0i32, 0i32, false);
+    while dx < 12 || !clicked {
+        if let Some(m) = crate::input::pop_mouse() {
+            dx += m.dx as i32;
+            dy += m.dy as i32;
+            clicked |= m.buttons & 1 != 0;
+            continue;
+        }
+        assert!(
+            crate::arch::cpu::rdtsc() - start < 20 * time::tsc_hz(),
+            "no mouse movement within 20 s (dx {}, clicked {})",
+            dx,
+            clicked
+        );
+        crate::sched::sleep_ms(10);
+    }
+    kprint!("ktest: mouse: dx {} dy {} ", dx, dy);
+    assert_eq!((dx, dy), (12, -7));
+}
+
 pub fn rtc_matches_bootloader_time() {
     let now = time::realtime_ns().expect("wall clock not set") / 1_000_000_000;
     kprint!("({}) ", velora_rtc::DateTime::from_unix(now as i64));
