@@ -22,7 +22,6 @@ Russian first, then English.
 ### Известные проблемы
 - Нет HTTPS (TLS), IPv6, сетевых карт Realtek и Wi-Fi.
 - e1000 работает опросом раз в тик (10 мс), без прерываний.
-- В CI изредка зависает тест ядра `kernel_threads_are_preempted` на второй загрузке: поток `kmain` не возвращается из `sleep_ms`, пока на другом ядре работают закреплённые потоки ядра. Причина не найдена; сторож тестовой сборки печатает состояние планировщика, блокировки и историю её операций.
 - Ограничения прошлых версий остаются (сигналов нет, одна блокировка VFS, только UEFI, USB без хабов, virtio-blk не работает с QEMU 8.2 — #19).
 
 ---
@@ -41,7 +40,6 @@ Russian first, then English.
 ### Known issues
 - No HTTPS (TLS), IPv6, Realtek network cards or Wi-Fi.
 - The e1000 is polled every tick (10 ms), without interrupts.
-- In CI the kernel test `kernel_threads_are_preempted` rarely hangs on the second boot: `kmain` does not come back from `sleep_ms` while pinned kernel threads run on another core. The cause was not found; the test build's watchdog prints the scheduler state, the lock and its operation history.
 - Earlier limitations remain (no signals, one VFS lock, UEFI only, USB without hubs, virtio-blk does not work with QEMU 8.2 — #19).
 
 ## [0.15.0] — 2026-11-27
