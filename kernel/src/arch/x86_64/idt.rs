@@ -260,7 +260,7 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
     }
     #[cfg(feature = "ktest")]
     if frame.vector == 0x20 && super::percpu::index() == 0 {
-        crate::ktest::watchdog();
+        crate::ktest::watchdog(frame);
     }
     crate::smp::bkl_enter();
     if frame.vector < 32 {
