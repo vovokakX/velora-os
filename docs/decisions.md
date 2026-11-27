@@ -858,6 +858,11 @@ are not handled. Powering off with `shutdown` works on such machines.
 Недостатки: системные вызовы разных процессоров не идут параллельно;
 опрос диска с выключенными прерываниями (D21) задерживает вход в ядро на
 остальных процессорах; потоки одной программы не работают параллельно.
+Поток ядра, который вычисляет не блокируясь, держит блокировку между
+тиками; потоки ядра на других процессорах тогда получают её только по
+очереди на тиках и сильно замедляются (тест ядра, который проверял это на
+четырёх процессорах, иногда не укладывался в минуту; теперь его потоки
+работают на процессоре 0). В Velora таких потоков нет.
 
 **EN.** The kernel was written for one CPU: system calls run with interrupts off
 and assume nothing else touches kernel data. Fine-grained locking across the
@@ -873,7 +878,11 @@ TLB shootdown on other CPUs; freed kernel stacks stay mapped and are reused, so
 kernel pages never change contents either. Drawbacks: system calls on
 different CPUs do not run in parallel; disk polling with interrupts off (D21)
 delays kernel entry on the other CPUs; threads of one program do not run in
-parallel.
+parallel. A kernel thread that computes without blocking holds the lock between
+ticks; kernel threads on other CPUs then only get it in turns at ticks and
+slow down a lot (a kernel test that checked this on four CPUs sometimes did
+not finish within a minute; its threads now run on CPU 0). Velora has no such
+threads.
 
 ## D44. USB: только корневые порты, опрос, boot protocol / USB: root ports only, polling, boot protocol
 
