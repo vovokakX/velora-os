@@ -110,7 +110,10 @@
   (`velora_abi::key`: код клавиши, флаги Shift/Ctrl/Alt, символ), для
   графических программ. Чтение не ждёт. Клавиши, прочитанные там, консоль
   не получает. `/dev/mouse` — пакеты по 4 байта (кнопки, dx, dy, колесо:
-  положительное — от себя) от мышей USB и PS/2.
+  положительное — от себя) от мышей USB и PS/2. `/dev/pointer` — все
+  события мышей и планшетов пакетами по 8 байт (`velora_abi::pointer`:
+  флаги, кнопки, колесо, x и y по `i16`; с флагом `ABSOLUTE` — позиция от
+  0 до 32767 по экрану). Чтение не ждёт.
 - Ctrl+C в строчном режиме при заданном процессе переднего плана
   завершает его со статусом 130 сразу, даже если он не читает клавиатуру.
 - Программы запускаются с любой файловой системы; нужен бит `x`
@@ -180,7 +183,10 @@ model. `/dev/keyboard` gives key presses and releases as 8-byte packets
 (`velora_abi::key`: key code, Shift/Ctrl/Alt flags, character) without
 waiting; keys read there do not reach the console. `/dev/mouse` gives 4-byte
 packets (buttons, dx, dy, wheel: positive away from the user) from USB and
-PS/2 mice. Sockets
+PS/2 mice. `/dev/pointer` gives every mouse and tablet event as an 8-byte
+packet (`velora_abi::pointer`: flags, buttons, wheel, x and y as `i16`; with
+the `ABSOLUTE` flag a position from 0 to 32767 across the screen) without
+waiting. Sockets
 are file descriptors, so `read`, `write` and `close` work on them. New error
 numbers: ENOTSOCK 88, EDESTADDRREQ 89, EADDRINUSE 98, ENETDOWN 100,
 ENETUNREACH 101, ECONNRESET 104, EISCONN 106, ENOTCONN 107, ETIMEDOUT 110,
