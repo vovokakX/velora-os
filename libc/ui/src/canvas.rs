@@ -591,17 +591,45 @@ impl Canvas {
     }
 
     /// A coverage mask (glyph): `mask[w * h]`, drawn in colour `c`.
+    ///
+    /// Text is blended in linear light (gamma 2), so the edges of light
+    /// text on a dark background and of dark text on a light one keep the
+    /// same weight, and the coverage gets a slight contrast boost so small
+    /// sizes stay crisp.
     pub fn draw_mask(&mut self, x: i32, y: i32, w: usize, h: usize, mask: &[u8], c: Color) {
         let Some((x0, y0, x1, y1)) = self.area(Rect::new(x, y, w as i32, h as i32)) else {
             return;
         };
+        let ca = c >> 24;
+        let s = [
+            SQUARE[((c >> 16) & 0xff) as usize],
+            SQUARE[((c >> 8) & 0xff) as usize],
+            SQUARE[(c & 0xff) as usize],
+        ];
         for py in y0..y1 {
             let mrow = (py - y) as usize * w;
             for px in x0..x1 {
-                let cov = mask[mrow + (px - x) as usize] as u32;
-                if cov != 0 {
-                    self.put(px, py, c, cov);
+                let cov = mask[mrow + (px - x) as usize] as usize;
+                if cov == 0 {
+                    continue;
                 }
+                let a = div255(ca * CONTRAST[cov] as u32);
+                if a == 0 {
+                    continue;
+                }
+                let i = py as usize * self.width + px as usize;
+                if a >= 255 {
+                    self.pixels[i] = c & 0x00ff_ffff;
+                    continue;
+                }
+                let d = self.pixels[i];
+                let inv = 255 - a;
+                let ch = |sh: u32, sl: u32| {
+                    let dl = SQUARE[((d >> sh) & 0xff) as usize];
+                    let l = (sl * a + dl * inv) / 255;
+                    (root(l) as u32) << sh
+                };
+                self.pixels[i] = ch(16, s[0]) | ch(8, s[1]) | ch(0, s[2]);
             }
         }
     }
@@ -711,6 +739,53 @@ fn sin_q(f: i64) -> i64 {
     }
     sum.clamp(-65536, 65536)
 }
+
+/// `v * v` for 0..=255: the light of an sRGB value with gamma 2.
+static SQUARE: [u32; 256] = {
+    let mut t = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = (i * i) as u32;
+        i += 1;
+    }
+    t
+};
+
+/// Square root of 0..=65025 (back from light to an sRGB value), rounded.
+#[inline]
+fn root(l: u32) -> u8 {
+    let mut lo = 0u32;
+    let mut hi = 255u32;
+    // Largest v with v * v <= l, then round to the nearer square.
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if mid * mid <= l {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo < 255 && l - lo * lo > lo {
+        (lo + 1) as u8
+    } else {
+        lo as u8
+    }
+}
+
+/// Glyph coverage with a slight contrast boost: thin stems at small sizes
+/// get a little darker, full coverage stays full.
+static CONTRAST: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        // c + 0.35 * c * (1 - c), in 1/255.
+        let c = i as u32;
+        let v = c + 35 * c * (255 - c) / (100 * 255);
+        t[i] = if v > 255 { 255 } else { v as u8 };
+        i += 1;
+    }
+    t
+};
 
 const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
