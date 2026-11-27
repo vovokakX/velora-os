@@ -77,6 +77,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "velora-gfx"
+version = "0.16.0"
+
+[[package]]
 name = "velora-gpt"
 version = "0.16.0"
 dependencies = [
@@ -100,6 +104,7 @@ dependencies = [
  "velora-auth",
  "velora-exe",
  "velora-fat",
+ "velora-gfx",
  "velora-gpt",
  "velora-input",
  "velora-mm",
