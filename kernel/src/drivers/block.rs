@@ -24,6 +24,14 @@ pub trait BlockDevice: Send + Sync {
     fn name(&self) -> &str;
     /// Driver and model, for listings.
     fn description(&self) -> String;
+    /// Model name for the installer ("" if the device has none).
+    fn model(&self) -> String {
+        String::new()
+    }
+    /// `velora_abi::disk_kind` value.
+    fn kind(&self) -> u32 {
+        velora_abi::disk_kind::OTHER
+    }
     fn sector_size(&self) -> usize;
     fn sector_count(&self) -> u64;
     /// Reads whole sectors starting at `lba` into `buf`.
@@ -67,6 +75,14 @@ impl BlockDevice for Partition {
 
     fn description(&self) -> String {
         alloc::format!("{} partition of {}", self.kind, self.disk.name())
+    }
+
+    fn model(&self) -> String {
+        self.disk.model()
+    }
+
+    fn kind(&self) -> u32 {
+        velora_abi::disk_kind::PARTITION
     }
 
     fn sector_size(&self) -> usize {
