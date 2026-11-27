@@ -39,6 +39,8 @@ struct Tween {
     start: u64,
     dur: u32,
     seen: u64,
+    /// The value the last frame drew.
+    drawn: i32,
 }
 
 impl Tween {
@@ -60,6 +62,11 @@ pub struct Tweens {
     /// Off: values jump to their targets.
     pub enabled: bool,
     active: bool,
+    /// Something without a key moves (a spinner, a transition): the next
+    /// frame must be drawn whole.
+    marked: bool,
+    /// When the last frame began.
+    frame: u64,
 }
 
 impl Default for Tweens {
@@ -69,6 +76,8 @@ impl Default for Tweens {
             now: 0,
             enabled: true,
             active: false,
+            marked: false,
+            frame: 0,
         }
     }
 }
@@ -77,7 +86,9 @@ impl Tweens {
     /// Starts a frame at time `now` (ms).
     pub fn begin(&mut self, now: u64) {
         self.now = now;
+        self.frame = now;
         self.active = false;
+        self.marked = false;
         // Forget values not used for a while (widgets of other screens).
         if self.map.len() > 256 {
             self.map.retain(|_, t| now.saturating_sub(t.seen) < 5000);
@@ -97,6 +108,7 @@ impl Tweens {
             start: now,
             dur,
             seen: now,
+            drawn: target,
         });
         t.seen = now;
         if t.to != target {
@@ -106,6 +118,7 @@ impl Tweens {
             t.dur = dur;
         }
         let v = t.at(now);
+        t.drawn = v;
         if v != t.to {
             self.active = true;
         }
@@ -123,6 +136,7 @@ impl Tweens {
                 start: now,
                 dur: 0,
                 seen: now,
+                drawn: v,
             },
         );
     }
@@ -134,6 +148,24 @@ impl Tweens {
 
     pub fn mark_active(&mut self) {
         self.active = true;
+        self.marked = true;
+    }
+
+    /// [`Tweens::mark_active`] was called this frame.
+    pub fn marked(&self) -> bool {
+        self.marked
+    }
+
+    /// Keys drawn in the last frame whose value at `now` differs from the
+    /// one drawn: the parts of the screen the next frame must draw again.
+    /// (Values of widgets no longer drawn, such as those of another
+    /// screen, do not count.)
+    pub fn changed(&self, now: u64) -> impl Iterator<Item = u64> + '_ {
+        let last = self.frame;
+        self.map
+            .iter()
+            .filter(move |(_, t)| t.seen == last && t.at(now) != t.drawn)
+            .map(|(k, _)| *k)
     }
 }
 

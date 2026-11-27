@@ -119,7 +119,12 @@ impl Cache {
             self.key = key;
         }
         let b = self.canvas.as_ref().unwrap();
-        c.pixels.copy_from_slice(&b.pixels);
+        let area = c.frame();
+        if area == c.bounds() {
+            c.pixels.copy_from_slice(&b.pixels);
+        } else {
+            c.copy_from(b, area);
+        }
     }
 }
 

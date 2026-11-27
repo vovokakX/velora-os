@@ -49,7 +49,10 @@ fn div255(x: u32) -> u32 {
     (x + 1 + (x >> 8)) >> 8
 }
 
-/// Blends `src` (0x..RRGGBB) over the opaque pixel `dst` with alpha `a`.
+/// Blends `src` (0x..RRGGBB) over the opaque pixel `dst` with alpha `a`:
+/// each channel is `(src * a + dst * (255 - a)) / 255`, rounded. Red and
+/// blue are computed together in one multiplication (16 bits apart),
+/// green in another; the division by 255 is a shift.
 #[inline]
 pub fn blend(dst: u32, src: u32, a: u32) -> u32 {
     if a >= 255 {
@@ -59,10 +62,47 @@ pub fn blend(dst: u32, src: u32, a: u32) -> u32 {
         return dst;
     }
     let inv = 255 - a;
-    let r = div255(((src >> 16) & 0xff) * a + ((dst >> 16) & 0xff) * inv + 128);
-    let g = div255(((src >> 8) & 0xff) * a + ((dst >> 8) & 0xff) * inv + 128);
-    let b = div255((src & 0xff) * a + (dst & 0xff) * inv + 128);
-    (r << 16) | (g << 8) | b
+    let rb = (src & 0x00ff_00ff) * a + (dst & 0x00ff_00ff) * inv + 0x0080_0080;
+    let g = (src & 0x0000_ff00) * a + (dst & 0x0000_ff00) * inv + 0x0000_8000;
+    let rb = ((rb + ((rb >> 8) & 0x00ff_00ff) + 0x0001_0001) >> 8) & 0x00ff_00ff;
+    let g = ((g + ((g >> 8) & 0x0000_ff00) + 0x0000_0100) >> 8) & 0x0000_ff00;
+    rb | g
+}
+
+/// Lanes of two pixels in a u64: blue and red of each (16 bits apart).
+const LANES: u64 = 0x00ff_00ff_00ff_00ff;
+const LANES_HALF: u64 = 0x0080_0080_0080_0080;
+const LANES_ONE: u64 = 0x0001_0001_0001_0001;
+
+/// Blends the colour `c` with alpha `a` over every pixel of `span`, two
+/// pixels per step (the same result as [`blend`] on each).
+pub fn blend_span(span: &mut [u32], c: Color, a: u32) {
+    if a == 0 {
+        return;
+    }
+    if a >= 255 {
+        span.fill(c & 0x00ff_ffff);
+        return;
+    }
+    let inv = (255 - a) as u64;
+    let c = (c & 0x00ff_ffff) as u64;
+    let c2 = c | c << 32;
+    let src_rb = (c2 & LANES) * a as u64 + LANES_HALF;
+    let src_g = ((c2 >> 8) & LANES) * a as u64 + LANES_HALF;
+    let (pairs, rest) = span.as_chunks_mut::<2>();
+    for p in pairs {
+        let d = p[0] as u64 | (p[1] as u64) << 32;
+        let rb = (d & LANES) * inv + src_rb;
+        let g = ((d >> 8) & LANES) * inv + src_g;
+        let rb = ((rb + ((rb >> 8) & LANES) + LANES_ONE) >> 8) & LANES;
+        let g = ((g + ((g >> 8) & LANES) + LANES_ONE) >> 8) & LANES;
+        let out = rb | g << 8;
+        p[0] = out as u32;
+        p[1] = (out >> 32) as u32;
+    }
+    for p in rest {
+        *p = blend(*p, c as u32, a);
+    }
 }
 
 /// Integer square root (floor). Newton's method from a first guess just
@@ -173,6 +213,9 @@ pub struct Canvas {
     pub height: usize,
     pub pixels: Vec<u32>,
     clip: Rect,
+    /// The part of the canvas the current frame redraws: clips set while
+    /// drawing stay inside it.
+    frame: Rect,
 }
 
 impl Canvas {
@@ -182,6 +225,7 @@ impl Canvas {
             height,
             pixels: vec![0; width * height],
             clip: Rect::new(0, 0, width as i32, height as i32),
+            frame: Rect::new(0, 0, width as i32, height as i32),
         }
     }
 
@@ -189,11 +233,24 @@ impl Canvas {
         Rect::new(0, 0, self.width as i32, self.height as i32)
     }
 
-    /// Limits drawing to `r` (within the canvas). Returns the old clip.
+    /// Limits drawing to `r` (within the frame area, see
+    /// [`Canvas::set_frame`]). Returns the old clip, to be set again.
     pub fn set_clip(&mut self, r: Rect) -> Rect {
         let old = self.clip;
-        self.clip = r.intersect(self.bounds());
+        self.clip = r.intersect(self.frame);
         old
+    }
+
+    /// Starts a frame that redraws only `r` (the whole canvas for a full
+    /// frame): drawing outside it does nothing.
+    pub fn set_frame(&mut self, r: Rect) {
+        self.frame = r.intersect(self.bounds());
+        self.clip = self.frame;
+    }
+
+    /// The part of the canvas the current frame redraws.
+    pub fn frame(&self) -> Rect {
+        self.frame
     }
 
     pub fn clip(&self) -> Rect {
@@ -239,9 +296,7 @@ impl Canvas {
         let a = c >> 24;
         for y in y0..y1 {
             let row = y as usize * self.width;
-            for p in &mut self.pixels[row + x0 as usize..row + x1 as usize] {
-                *p = blend(*p, c, a);
-            }
+            blend_span(&mut self.pixels[row + x0 as usize..row + x1 as usize], c, a);
         }
     }
 
@@ -325,17 +380,45 @@ impl Canvas {
             return;
         };
         let ca = c >> 24;
+        let w = self.width;
+        // The shape is convex, so on each row the fully covered pixels form
+        // one run: the edges are found from both ends, the run between them
+        // is blended as a span.
         for y in y0..y1 {
             let py = y as i64 * FX + 128;
+            let row = y as usize * w;
+            let mut full_from = x1;
             for x in x0..x1 {
-                let px = x as i64 * FX + 128;
-                let cov = coverage(rr.dist(px, py), feather);
-                if cov == 0 {
-                    continue;
+                let cov = coverage(rr.dist(x as i64 * FX + 128, py), feather);
+                if cov == 255 {
+                    full_from = x;
+                    break;
                 }
-                let i = y as usize * self.width + x as usize;
-                self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
+                if cov != 0 {
+                    let i = row + x as usize;
+                    self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
+                }
             }
+            if full_from == x1 {
+                continue;
+            }
+            let mut full_to = full_from;
+            for x in (full_from + 1..x1).rev() {
+                let cov = coverage(rr.dist(x as i64 * FX + 128, py), feather);
+                if cov == 255 {
+                    full_to = x;
+                    break;
+                }
+                if cov != 0 {
+                    let i = row + x as usize;
+                    self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
+                }
+            }
+            blend_span(
+                &mut self.pixels[row + full_from as usize..=row + full_to as usize],
+                c,
+                ca,
+            );
         }
     }
 
@@ -369,25 +452,50 @@ impl Canvas {
             return;
         };
         let ca = c >> 24;
+        let has_inner = inner.hw > 0 && inner.hh > 0;
+        let w = self.width;
+        // Coverage of the line at x; None inside the inner shape, where
+        // the rest of the row up to the other side is empty (convex).
+        let line = |x: i32, py: i64| -> Option<u32> {
+            let px = x as i64 * FX + 128;
+            let ci = if has_inner {
+                coverage(inner.dist(px, py), FX)
+            } else {
+                0
+            };
+            if ci == 255 {
+                return None;
+            }
+            let co = coverage(outer.dist(px, py), FX);
+            Some(co.saturating_sub(ci))
+        };
         for y in y0..y1 {
             let py = y as i64 * FX + 128;
+            let row = y as usize * w;
+            let mut hole = None;
             for x in x0..x1 {
-                let px = x as i64 * FX + 128;
-                let co = coverage(outer.dist(px, py), FX);
-                if co == 0 {
-                    continue;
+                match line(x, py) {
+                    None => {
+                        hole = Some(x);
+                        break;
+                    }
+                    Some(0) => {}
+                    Some(cov) => {
+                        let i = row + x as usize;
+                        self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
+                    }
                 }
-                let ci = if inner.hw > 0 && inner.hh > 0 {
-                    coverage(inner.dist(px, py), FX)
-                } else {
-                    0
-                };
-                let cov = co.saturating_sub(ci);
-                if cov == 0 {
-                    continue;
+            }
+            let Some(h) = hole else { continue };
+            for x in (h + 1..x1).rev() {
+                match line(x, py) {
+                    None => break,
+                    Some(0) => {}
+                    Some(cov) => {
+                        let i = row + x as usize;
+                        self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
+                    }
                 }
-                let i = y as usize * self.width + x as usize;
-                self.pixels[i] = blend(self.pixels[i], c, div255(ca * cov));
             }
         }
     }
@@ -792,26 +900,30 @@ static SQUARE: [u32; 256] = {
     t
 };
 
-/// Square root of 0..=65025 (back from light to an sRGB value), rounded.
+/// Square root of 0..=65025 (back from light to an sRGB value), rounded:
+/// the largest v with v * v <= l, plus one when l is past v * v + v.
 #[inline]
 fn root(l: u32) -> u8 {
-    let mut lo = 0u32;
-    let mut hi = 255u32;
-    // Largest v with v * v <= l, then round to the nearer square.
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        if mid * mid <= l {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    if lo < 255 && l - lo * lo > lo {
-        (lo + 1) as u8
-    } else {
-        lo as u8
-    }
+    ROOTS[l.min(65025) as usize]
 }
+
+static ROOTS: [u8; 65026] = {
+    let mut t = [0u8; 65026];
+    let mut lo = 0usize;
+    let mut l = 0usize;
+    while l < 65026 {
+        while (lo + 1) * (lo + 1) <= l {
+            lo += 1;
+        }
+        t[l] = if lo < 255 && l - lo * lo > lo {
+            (lo + 1) as u8
+        } else {
+            lo as u8
+        };
+        l += 1;
+    }
+    t
+};
 
 /// Glyph coverage with a slight contrast boost: thin stems at small sizes
 /// get a little darker, full coverage stays full.
@@ -979,5 +1091,106 @@ mod tests {
         c.fill_rect(Rect::new(0, 0, 20, 20), 0xffffffff);
         assert_eq!(c.get(9, 5), 0xffffff);
         assert_eq!(c.get(10, 5), 0);
+    }
+
+    /// The blend of the earlier version: one channel at a time.
+    fn blend_plain(dst: u32, src: u32, a: u32) -> u32 {
+        if a >= 255 {
+            return src & 0x00ff_ffff;
+        }
+        if a == 0 {
+            return dst;
+        }
+        let inv = 255 - a;
+        let ch =
+            |sh: u32| div255(((src >> sh) & 0xff) * a + ((dst >> sh) & 0xff) * inv + 128) << sh;
+        ch(16) | ch(8) | ch(0)
+    }
+
+    #[test]
+    fn blending_two_channels_and_two_pixels_at_once_is_exact() {
+        let samples = [0u32, 1, 2, 17, 64, 127, 128, 200, 254, 255];
+        for a in 0..=255u32 {
+            for &s in &samples {
+                for &d in &samples {
+                    let src = s << 16 | (255 - s) << 8 | (s ^ 0x5a);
+                    let dst = d << 16 | (d ^ 0xa5) << 8 | (255 - d);
+                    assert_eq!(
+                        blend(dst, src, a),
+                        blend_plain(dst, src, a),
+                        "a={} s={} d={}",
+                        a,
+                        s,
+                        d
+                    );
+                }
+            }
+        }
+        let mut span: Vec<u32> = (0..9u32)
+            .map(|i| i * 0x1d2b3f)
+            .map(|p| p & 0xffffff)
+            .collect();
+        let want: Vec<u32> = span
+            .iter()
+            .map(|&p| blend_plain(p, 0x80c0ffee, 0x80))
+            .collect();
+        blend_span(&mut span, 0x80c0ffee, 0x80);
+        assert_eq!(span, want);
+    }
+
+    #[test]
+    fn rounded_shapes_by_spans_match_per_pixel_coverage() {
+        // A rounded rectangle and an outline, compared with the coverage
+        // formula pixel by pixel.
+        let mut c = Canvas::new(64, 48);
+        c.clear(0x203040);
+        let r = Rect::new(5, 4, 50, 37);
+        c.fill_rrect(r, 9, 0xc0ffaa33);
+        let rr = RRect::from_rect(r, 9 * FX);
+        for y in 0..48 {
+            for x in 0..64 {
+                let cov = coverage(rr.dist(x as i64 * FX + 128, y as i64 * FX + 128), FX);
+                let want = blend_plain(0x203040, 0xffaa33, div255(0xc0 * cov));
+                assert_eq!(c.get(x, y), want, "fill at {},{}", x, y);
+            }
+        }
+        let mut d = Canvas::new(64, 48);
+        d.clear(0x203040);
+        d.stroke_rrect_fx(r, 9, 3 * FX / 2, 0xffffffff);
+        let outer = RRect::from_rect(r, 9 * FX);
+        let w = 3 * FX / 2;
+        let inner = RRect {
+            hw: outer.hw - w,
+            hh: outer.hh - w,
+            r: (outer.r - w).max(0),
+            ..outer
+        };
+        for y in 0..48 {
+            for x in 0..64 {
+                let (px, py) = (x as i64 * FX + 128, y as i64 * FX + 128);
+                let cov = coverage(outer.dist(px, py), FX)
+                    .saturating_sub(coverage(inner.dist(px, py), FX));
+                let want = blend_plain(0x203040, 0xffffff, div255(0xff * cov));
+                assert_eq!(d.get(x, y), want, "stroke at {},{}", x, y);
+            }
+        }
+    }
+
+    #[test]
+    fn frame_area_bounds_nested_clips() {
+        let mut c = Canvas::new(20, 20);
+        c.set_frame(Rect::new(5, 5, 5, 5));
+        let old = c.set_clip(Rect::new(0, 0, 20, 20));
+        assert_eq!(c.clip(), Rect::new(5, 5, 5, 5));
+        c.fill_rect(Rect::new(0, 0, 20, 20), 0xffffffff);
+        c.set_clip(old);
+        assert_eq!(c.get(4, 4), 0);
+        assert_eq!(c.get(5, 5), 0xffffff);
+        assert_eq!(c.get(10, 10), 0);
+        for l in [0u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 110, 111, 112, 65024, 65025] {
+            let r = root(l) as u32;
+            // Nearest integer square root.
+            assert!(r * r <= l + r && l <= r * r + r, "root({}) = {}", l, r);
+        }
     }
 }

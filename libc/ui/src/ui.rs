@@ -46,6 +46,8 @@ pub enum Key {
     PageDown,
     Space,
     Char(char),
+    /// A function key, F1 is 1.
+    F(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +66,18 @@ pub enum Event {
     },
     /// Wheel steps, positive towards the user (scrolls down a list).
     Wheel(i32),
+}
+
+/// What the next frame has to draw again (see [`Ui::plan`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Redraw {
+    /// Nothing visible changes: the frame can be skipped (only the
+    /// pointer moved).
+    Nothing,
+    /// Only this part of the screen.
+    Area(Rect),
+    /// The whole screen.
+    All,
 }
 
 /// Splits input into frames with at most one key each: widgets take keys
@@ -236,6 +250,66 @@ impl Ui {
     /// Something is still moving: draw another frame soon.
     pub fn animating(&self) -> bool {
         self.tw.active()
+    }
+
+    /// What the next frame must draw for `events`, judged from the last
+    /// frame: the widgets the pointer enters or leaves and the widgets
+    /// whose animated values moved since they were drawn (each with a
+    /// margin for focus rings and shadows). Keys, clicks, the wheel and
+    /// animations that belong to no widget need the whole screen.
+    pub fn plan(&self, events: &[Event], now: u64) -> Redraw {
+        if self.again || self.tw.marked() {
+            return Redraw::All;
+        }
+        let margin = self.s(8).max(2);
+        let mut area = Rect::default();
+        let mut add = |r: Rect| {
+            let r = r.inset(-margin);
+            area = if area.is_empty() { r } else { area.union(r) };
+        };
+        let mut at = self.mouse;
+        for ev in events {
+            match *ev {
+                Event::MouseMove { x, y } if !self.mouse_down => {
+                    for (_, r) in &self.areas {
+                        if r.contains(at.0, at.1) != r.contains(x, y) {
+                            add(*r);
+                        }
+                    }
+                    at = (x, y);
+                }
+                _ => return Redraw::All,
+            }
+        }
+        for key in self.tw.changed(now) {
+            let id = (key >> 8) as Id;
+            match self.areas.iter().find(|(i, _)| *i == id) {
+                Some((_, r)) => add(*r),
+                None => return Redraw::All,
+            }
+            if let Some(p) = self.popup.as_ref()
+                && p.id == id
+            {
+                // With its frame, the shadow and the soft edge of the
+                // opening (see `Ctx::end`).
+                add(p.rect.inset(-self.s(28)));
+            }
+        }
+        if area.is_empty() {
+            Redraw::Nothing
+        } else {
+            Redraw::Area(area)
+        }
+    }
+
+    /// Takes the pointer position from events whose frame is skipped
+    /// ([`Redraw::Nothing`]).
+    pub fn track_pointer(&mut self, events: &[Event]) {
+        for ev in events {
+            if let Event::MouseMove { x, y } = *ev {
+                self.mouse = (x, y);
+            }
+        }
     }
 
     /// The open drop-down list's id, if any.
@@ -1241,7 +1315,7 @@ impl Ctx<'_> {
             };
             self.c.fill_rect(
                 Rect::new(cx, r.center_y() - ch / 2, self.ui.s(1).max(1), ch),
-                t.accent,
+                t.detail,
             );
         }
         self.c.set_clip(old);
@@ -1619,5 +1693,67 @@ mod tests {
         // At the end the track left of the knob is the accent colour.
         assert_eq!(end.get(14, 20), crate::theme::AMBER & 0xffffff);
         assert_ne!(mid.get(14, 20), end.get(14, 20));
+    }
+
+    #[test]
+    fn plan_redraws_only_what_changes() {
+        let mut f = fonts();
+        let mut ui = Ui::new(256);
+        ui.set_animations(true);
+        let mut c = Canvas::new(400, 200);
+        let draw = |ui: &mut Ui, c: &mut Canvas, f: &mut Fonts, ev: &[Event], now: u64| {
+            ui.set_time(now);
+            ui.begin(ev);
+            let mut x = Ctx { ui, c, f };
+            x.button(
+                1,
+                Rect::new(10, 10, 80, 30),
+                "One",
+                ButtonKind::Secondary,
+                None,
+                None,
+            );
+            x.button(
+                2,
+                Rect::new(200, 10, 80, 30),
+                "Two",
+                ButtonKind::Secondary,
+                None,
+                None,
+            );
+            x.end();
+        };
+        draw(&mut ui, &mut c, &mut f, &[], 0);
+        // The pointer moves over empty space: nothing to draw.
+        let away = [Event::MouseMove { x: 150, y: 150 }];
+        assert_eq!(ui.plan(&away, 10), Redraw::Nothing);
+        ui.track_pointer(&away);
+        // It enters the first button: that button and a margin.
+        let over = [Event::MouseMove { x: 20, y: 20 }];
+        let Redraw::Area(r) = ui.plan(&over, 20) else {
+            panic!("expected an area");
+        };
+        assert!(r.contains(10, 10) && r.contains(89, 39));
+        assert!(!r.contains(200, 10));
+        draw(&mut ui, &mut c, &mut f, &over, 20);
+        // While its hover fades in, frames redraw just that button.
+        assert!(ui.animating());
+        let Redraw::Area(r) = ui.plan(&[], 60) else {
+            panic!("expected an area");
+        };
+        assert!(r.contains(50, 25) && !r.contains(240, 25));
+        // Once the fade is drawn to its end, nothing is left.
+        draw(&mut ui, &mut c, &mut f, &[], 400);
+        assert_eq!(ui.plan(&[], 410), Redraw::Nothing);
+        // Keys and clicks redraw everything.
+        assert_eq!(
+            ui.plan(&[Event::MouseButton { down: true }], 420),
+            Redraw::All
+        );
+        let tab = [Event::Key {
+            key: Key::Tab,
+            shift: false,
+        }];
+        assert_eq!(ui.plan(&tab, 420), Redraw::All);
     }
 }
