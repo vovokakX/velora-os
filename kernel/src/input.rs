@@ -86,3 +86,64 @@ pub fn wait(timeout_ms: Option<u64>) -> Option<KeyEvent> {
     cpu::irq_restore(was);
     result
 }
+
+// --- mouse ------------------------------------------------------------------
+
+/// One mouse movement or button change (as a boot protocol mouse reports
+/// it). Read from `/dev/mouse` as 4-byte packets: buttons, dx, dy, wheel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseEvent {
+    pub buttons: u8,
+    pub dx: i8,
+    pub dy: i8,
+    pub wheel: i8,
+}
+
+const MOUSE_CAPACITY: usize = 64;
+
+struct MouseQueue {
+    buf: [MouseEvent; MOUSE_CAPACITY],
+    head: usize,
+    len: usize,
+}
+
+static MOUSE: SpinLock<MouseQueue> = SpinLock::new(MouseQueue {
+    buf: [MouseEvent {
+        buttons: 0,
+        dx: 0,
+        dy: 0,
+        wheel: 0,
+    }; MOUSE_CAPACITY],
+    head: 0,
+    len: 0,
+});
+static MOUSE_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Adds a mouse event; the oldest one is dropped when the queue is full.
+pub fn push_mouse(ev: MouseEvent) {
+    MOUSE_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let mut q = MOUSE.lock();
+    if q.len == MOUSE_CAPACITY {
+        q.head = (q.head + 1) % MOUSE_CAPACITY;
+        q.len -= 1;
+    }
+    let tail = (q.head + q.len) % MOUSE_CAPACITY;
+    q.buf[tail] = ev;
+    q.len += 1;
+}
+
+pub fn pop_mouse() -> Option<MouseEvent> {
+    let mut q = MOUSE.lock();
+    if q.len == 0 {
+        return None;
+    }
+    let ev = q.buf[q.head];
+    q.head = (q.head + 1) % MOUSE_CAPACITY;
+    q.len -= 1;
+    Some(ev)
+}
+
+/// Mouse events received since boot.
+pub fn mouse_events() -> u64 {
+    MOUSE_TOTAL.load(Ordering::Relaxed)
+}

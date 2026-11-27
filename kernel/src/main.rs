@@ -114,6 +114,7 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
         Err(e) => kinfo!("initramfs: {}", e),
     }
     drivers::init();
+    drivers::xhci::start_thread();
     tty::init();
     match power::init(&acpi::get().madt) {
         Ok(what) => kok!("power management: {}", what),
