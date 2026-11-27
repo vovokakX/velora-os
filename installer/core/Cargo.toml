@@ -1,0 +1,20 @@
+[package]
+name = "velora-install"
+description = "Installer core shared by velora-setup and the graphical installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-auth = { path = "../../libc/auth" }
+velora-vfs = { path = "../../fs/vfs" }
+velora-gpt = { path = "../../fs/gpt" }
+velora-fat = { path = "../../fs/fat" }
+velorafs = { path = "../../fs/velorafs" }
+vlibc = { path = "../../libc/vlibc", optional = true }
+
+[features]
+# The Live system as the source and /dev disks (programs on Velora).
+velora = ["dep:vlibc"]
