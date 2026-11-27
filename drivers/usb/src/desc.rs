@@ -36,6 +36,18 @@ impl Setup {
         }
     }
 
+    /// GET_DESCRIPTOR addressed to an interface (a HID report
+    /// descriptor: `kind` 0x22).
+    pub fn get_interface_descriptor(kind: u8, interface: u8, length: u16) -> Self {
+        Self {
+            request_type: 0x81,
+            request: REQ_GET_DESCRIPTOR,
+            value: (kind as u16) << 8,
+            index: interface as u16,
+            length,
+        }
+    }
+
     pub fn set_configuration(value: u8) -> Self {
         Self {
             request_type: 0x00,

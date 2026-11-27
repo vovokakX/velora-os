@@ -1,6 +1,7 @@
 //! Draws every installer screen and the start menu on the host, as PPM
 //! files: `cargo run --release -p velora-installer-gui --example screens
-//! -- OUT_DIR [WIDTHxHEIGHT]`.
+//! -- OUT_DIR [WIDTHxHEIGHT] [dark|light|midnight] [ACCENT]`, where ACCENT
+//! is an index into `settings::ACCENTS` (0 amber, the default).
 
 use velora_install::{Phase, Progress};
 use velora_installer_gui::chooser::Chooser;
@@ -51,6 +52,13 @@ fn main() {
         model: String::from("Samsung SSD 970 EVO"),
     }];
     let mut app = App::new(disks);
+    app.animate = false;
+    app.settings.theme = match args.get(2).map(|s| s.as_str()) {
+        Some("light") => 1,
+        Some("midnight") => 2,
+        _ => 0,
+    };
+    app.settings.accent = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     app.user = String::from("anna");
     app.password = String::from("secret");
     app.root_password = String::from("secret");

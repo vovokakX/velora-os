@@ -80,6 +80,15 @@ Live-образ сначала запускает `/bin/velora-start` (граф�
 даёт режимов больше 2560x1440). Все тесты Live-образа выбирают в меню «3»
 (`choose_live`). Выбор оформления пока только сохраняется в
 `/etc/velora/*.conf` (NOT IMPLEMENTED: система их не читает).
+Доводка установщика (ветка `installer-polish`, D49): масштаб ступенями
+1x…4x в родном разрешении, текст в линейном свете с привязкой к пикселям,
+акцентный цвет (янтарный по умолчанию), тема и акцент применяются сразу с
+переходом, анимации элементов и шагов (`libc/ui/src/anim.rs`), вывод только
+изменённых пикселей. Планшеты USB (report protocol) → `/dev/pointer`, мышь в
+окне QEMU без захвата. Тест `clicks` щёлкает каждый элемент
+(`./build.sh --uitest`, `tests/uiclick.py`). Снимки тем и акцентов —
+`docs/design/installer-screens/themes/` (отрисовка на хосте, пример
+`screens` принимает тему и номер акцента).
 
 Известные ограничения, которые стоит закрыть в первую очередь (подробно —
 в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
@@ -95,9 +104,11 @@ Live-образа по умолчанию `velora`. Тесты QEMU: `ktest` (д
 ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-накопителя
 на xHCI, без HPET, `reboot`), `install` (установка, загрузка с диска, сохранение
 файлов), `gui` (стартовое меню, все экраны графического установщика со
-снимками, установка, загрузка с диска; `--resolution`, `--screens-only`).
+снимками, установка, загрузка с диска; `--resolution`, `--screens-only`),
+`clicks` (каждый элемент установщика щёлкается планшетом через QMP, нужен
+`velora-uitest.iso`).
 ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D48. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
+(`velora-fsck --cat`). Решения D1–D49. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
 Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
 приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
@@ -108,12 +119,12 @@ ktest после каждой загрузки читает на хосте жу
 в CI виртуальные процессоры делят ядра хоста. Если тест ядра в CI упал,
 артефакт `kernel-elf` содержит точную сборку для `llvm-objdump --syms`.
 
-Запуск вручную в Windows (окно QEMU, WHPX, 4 процессора; диск — файл в `build/`):
-
-```sh
-cp "/c/Program Files/qemu/share/edk2-i386-vars.fd" build/run-vars.fd
-"/c/Program Files/qemu/qemu-system-x86_64.exe" -machine q35 -m 512M -smp 4   -accel whpx,kernel-irqchip=off -accel tcg   -drive if=pflash,format=raw,readonly=on,file="C:/Program Files/qemu/share/edk2-x86_64-code.fd"   -drive if=pflash,format=raw,file=build/run-vars.fd -cdrom velora.iso   -drive file=build/run-disk.img,format=raw,if=virtio   -netdev user,id=n0 -device e1000,netdev=n0   -device qemu-xhci -device usb-kbd -device usb-mouse -display sdl
-```
+Запуск вручную: `tools/run-qemu.sh` (окно QEMU 1920x1080, WHPX в Windows,
+4 процессора, usb-tablet — мышь без захвата; диск `build/run-disk.img`;
+`--resolution WxH`, `--full-screen`, `--disk-only`). В Windows с
+масштабом экрана больше 100% окно QEMU без поддержки DPI растягивается
+системой и всё размыто; скрипт задаёт процессу QEMU
+`SDL_WINDOWS_DPI_AWARENESS=permonitorv2`.
 
 Открытые issues:
 - **#19** — с QEMU 8.2 (Ubuntu 24.04) virtio-blk не получает ответов. С QEMU 9.1
@@ -285,10 +296,10 @@ libc/editor  логика редактора Plume: клавиши, буфер, 
 libc/dns     запросы и ответы DNS (LGPL, входит в vlibc), libc/http — URL и HTTP для fetch
 libc/ui      velora-ui: графика, шрифты, элементы, ввод (тесты на хосте; screen — feature velora)
 userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo, start), свои флаги сборки
-tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fetch-fonts.sh
+tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fetch-fonts.sh, run-qemu.sh
 installer/   core (velora-install: логика установки), gui (экраны и меню), velora-setup (терминал)
-tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D48),
+tests/       qemu_run.py, uiclick.py (тест clicks)
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D49),
              план, сторонние компоненты, заметки к релизам
 ```
 

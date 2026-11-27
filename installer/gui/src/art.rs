@@ -123,8 +123,8 @@ pub fn wallpaper_colors(i: usize) -> (Color, Color, Color) {
     }
 }
 
-/// A step mark of the sidebar: done (a check), the current step (a bright
-/// disc with a check and a glow) or ahead (a dim disc).
+/// A step mark of the sidebar: done (an accent check), the current step
+/// (an accent disc with a check and a soft glow) or ahead (a dim disc).
 pub fn step_mark(c: &mut Canvas, cx: i32, cy: i32, d: i32, state: StepState, t: &Theme) {
     let r = d as i64 * FX / 2;
     let (fx, fy) = (cx as i64 * FX, cy as i64 * FX);
@@ -142,13 +142,13 @@ pub fn step_mark(c: &mut Canvas, cx: i32, cy: i32, d: i32, state: StepState, t: 
     };
     match state {
         StepState::Current => {
-            c.radial_glow(cx, cy, d * 3 / 2, fade(t.text, 60));
-            c.fill_circle_fx(fx, fy, r, t.text);
-            check(c, t.window);
+            c.radial_glow(cx, cy, d * 3 / 2, fade(t.accent, 70));
+            c.fill_circle_fx(fx, fy, r, t.accent);
+            check(c, t.on_accent);
         }
         StepState::Done => {
-            c.fill_circle_fx(fx, fy, r, fade(t.text_faint, 200));
-            check(c, t.sidebar);
+            c.fill_circle_fx(fx, fy, r, fade(t.accent, 46));
+            check(c, t.accent);
         }
         StepState::Ahead => {
             c.fill_circle_fx(fx, fy, r, fade(t.text_faint, 90));
@@ -164,22 +164,25 @@ pub enum StepState {
 }
 
 /// The light/dark switch at the bottom of the sidebar: a sun disc and a
-/// moon, the active one on a brighter background.
-pub fn theme_switch(c: &mut Canvas, r: Rect, dark: bool, hovered: bool, t: &Theme) {
-    let track = if hovered { t.field_hover } else { t.field };
+/// moon on a track; a pill slides under the active one (`dark` 0 for the
+/// sun ... 1000 for the moon, animated). `hover` 0..=255.
+pub fn theme_switch(c: &mut Canvas, r: Rect, dark: i32, hover: u8, t: &Theme) {
+    let track = lerp(t.field, t.field_hover, hover);
     c.fill_rrect(r, r.h / 2, track);
     let d = r.h - r.h / 4;
     let pad = (r.h - d) / 2;
     let sun = Rect::new(r.x + pad, r.y + pad, d, d);
     let moon = Rect::new(r.right() - pad - d, r.y + pad, d, d);
-    let active = if dark { moon } else { sun };
-    c.fill_rrect(active, d / 2, if t.dark { t.selected } else { t.knob });
+    let px = sun.x + (moon.x - sun.x) * dark.clamp(0, 1000) / 1000;
+    let pill = Rect::new(px, sun.y, d, d);
+    c.fill_rrect(pill, d / 2, if t.dark { t.selected } else { t.knob });
     // The sun as a plain light disc, the moon as a crescent.
+    let on = (dark.clamp(0, 1000) * 255 / 1000) as u8;
     c.fill_circle(
         sun.center_x(),
         sun.center_y(),
         d * 34 / 100,
-        if t.dark { t.text } else { t.primary },
+        lerp(t.accent, t.text_dim, on),
     );
     let ms = d * 8 / 10;
     icons::draw(
@@ -188,7 +191,7 @@ pub fn theme_switch(c: &mut Canvas, r: Rect, dark: bool, hovered: bool, t: &Them
         moon.center_x() - ms / 2,
         moon.center_y() - ms / 2,
         ms,
-        t.text,
+        lerp(t.text_dim, t.accent, on),
         0,
     );
 }

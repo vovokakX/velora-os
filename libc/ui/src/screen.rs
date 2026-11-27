@@ -1,17 +1,20 @@
 //! The real screen and input devices for programs on Velora (feature
 //! `velora`): the frame buffer mapped with `display`, `/dev/keyboard` and
-//! `/dev/mouse`.
+//! `/dev/pointer` (mice and tablets; `/dev/mouse` on older kernels).
 //!
 //! The program draws into [`Screen::canvas`] (the back buffer) and calls
-//! [`Screen::present`] with the part that changed; only that part is
-//! copied to video memory. The mouse pointer is drawn on the way to video
-//! memory and never into the canvas, so moving it costs two small copies.
+//! [`Screen::present`] with the part that may have changed. A copy of what
+//! video memory shows is kept, and only the pixels that differ from it
+//! are written, row span by row span: video memory is slow to write, and
+//! a frame shows whole (double buffering) without the cost of copying the
+//! whole screen. The mouse pointer is drawn on the way to video memory and
+//! never into the canvas, so moving it costs two small copies.
 
 use crate::canvas::Canvas;
 use crate::geom::Rect;
 use crate::ui::{Event, Key};
 use alloc::vec::Vec;
-use velora_abi::{DisplayInfo, key};
+use velora_abi::{DisplayInfo, key, pointer};
 use velora_gfx::image::Image;
 use vlibc::fs::File;
 use vlibc::{Errno, display};
@@ -22,6 +25,11 @@ pub struct Screen {
     pub canvas: Canvas,
     keyboard: Option<File>,
     mouse: Option<File>,
+    /// `/dev/pointer` (8-byte packets) rather than `/dev/mouse`.
+    packets8: bool,
+    /// What video memory shows (without the pointer).
+    front: Vec<u32>,
+    front_valid: bool,
     pub pointer_x: i32,
     pub pointer_y: i32,
     /// Pointer speed: pixels per mouse count, times 256.
@@ -41,12 +49,19 @@ impl Screen {
         let fb = display::map()?;
         let (w, h) = (info.width as usize, info.height as usize);
         let native = info.red_shift == 16 && info.green_shift == 8 && info.blue_shift == 0;
+        let (mouse, packets8) = match File::open("/dev/pointer") {
+            Ok(f) => (Some(f), true),
+            Err(_) => (File::open("/dev/mouse").ok(), false),
+        };
         Ok(Screen {
             fb,
             info,
             canvas: Canvas::new(w, h),
             keyboard: File::open("/dev/keyboard").ok(),
-            mouse: File::open("/dev/mouse").ok(),
+            mouse,
+            packets8,
+            front: alloc::vec![0; w * h],
+            front_valid: false,
             pointer_x: w as i32 / 2,
             pointer_y: h as i32 / 2,
             speed: 256,
@@ -136,63 +151,106 @@ impl Screen {
                 }
             }
         }
-        let (mut dx, mut dy) = (0i32, 0i32);
+        // Pointer packets as (buttons, dx, dy, wheel, absolute position).
+        let mut packets: Vec<(u8, i32, i32, i32, Option<(i32, i32)>)> = Vec::new();
         if let Some(mut m) = self.mouse.take() {
             while let Ok(n) = m.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
-                for p in buf[..n].chunks_exact(4) {
-                    dx += p[1] as i8 as i32;
-                    dy += p[2] as i8 as i32;
-                    // /dev/mouse: positive is away from the user; the
-                    // event counts towards the user (down the list).
-                    let wheel = -(p[3] as i8 as i32);
-                    if wheel != 0 {
-                        out.push(Event::Wheel(wheel));
+                if self.packets8 {
+                    for p in buf[..n].chunks_exact(pointer::PACKET) {
+                        let x = i16::from_le_bytes([p[4], p[5]]) as i32;
+                        let y = i16::from_le_bytes([p[6], p[7]]) as i32;
+                        let abs = (p[0] & pointer::ABSOLUTE != 0).then_some((x, y));
+                        let (dx, dy) = if abs.is_some() { (0, 0) } else { (x, y) };
+                        packets.push((p[1], dx, dy, p[2] as i8 as i32, abs));
                     }
-                    let left = p[0] & 1;
-                    if left != self.buttons & 1 {
-                        // Movement before the button change counts first.
-                        if dx != 0 || dy != 0 {
-                            self.move_pointer(dx, dy, &mut out);
-                            dx = 0;
-                            dy = 0;
-                        }
-                        out.push(Event::MouseButton { down: left != 0 });
+                } else {
+                    for p in buf[..n].chunks_exact(4) {
+                        packets.push((
+                            p[0],
+                            p[1] as i8 as i32,
+                            p[2] as i8 as i32,
+                            p[3] as i8 as i32,
+                            None,
+                        ));
                     }
-                    self.buttons = p[0];
                 }
             }
             self.mouse = Some(m);
         }
-        if dx != 0 || dy != 0 {
-            self.move_pointer(dx, dy, &mut out);
+        let (mut dx, mut dy) = (0i32, 0i32);
+        let mut moved = false;
+        for (buttons, pdx, pdy, wheel, abs) in packets {
+            if let Some((ax, ay)) = abs {
+                let (w, h) = (self.width() as i64, self.height() as i64);
+                let x = (ax as i64 * (w - 1) / pointer::ABS_MAX as i64) as i32;
+                let y = (ay as i64 * (h - 1) / pointer::ABS_MAX as i64) as i32;
+                if (x, y) != (self.pointer_x, self.pointer_y) {
+                    self.pointer_x = x;
+                    self.pointer_y = y;
+                    moved = true;
+                }
+            } else {
+                dx += pdx;
+                dy += pdy;
+            }
+            // The devices count the wheel away from the user; the event
+            // counts towards the user (down the list).
+            if wheel != 0 {
+                self.flush_motion(&mut dx, &mut dy, &mut moved, &mut out);
+                out.push(Event::Wheel(-wheel));
+            }
+            let left = buttons & 1;
+            if left != self.buttons & 1 {
+                // Movement before the button change counts first.
+                self.flush_motion(&mut dx, &mut dy, &mut moved, &mut out);
+                out.push(Event::MouseButton { down: left != 0 });
+            }
+            self.buttons = buttons;
         }
+        self.flush_motion(&mut dx, &mut dy, &mut moved, &mut out);
         out
     }
 
-    fn move_pointer(&mut self, dx: i32, dy: i32, out: &mut Vec<Event>) {
-        self.pointer_x = (self.pointer_x + dx * self.speed / 256).clamp(0, self.width() - 1);
-        self.pointer_y = (self.pointer_y + dy * self.speed / 256).clamp(0, self.height() - 1);
-        out.push(Event::MouseMove {
-            x: self.pointer_x,
-            y: self.pointer_y,
-        });
-        self.present(Rect::default());
+    /// Applies the movement gathered so far and reports the position.
+    fn flush_motion(&mut self, dx: &mut i32, dy: &mut i32, moved: &mut bool, out: &mut Vec<Event>) {
+        if *dx != 0 || *dy != 0 {
+            self.pointer_x = (self.pointer_x + *dx * self.speed / 256).clamp(0, self.width() - 1);
+            self.pointer_y = (self.pointer_y + *dy * self.speed / 256).clamp(0, self.height() - 1);
+            *dx = 0;
+            *dy = 0;
+            *moved = true;
+        }
+        if *moved {
+            *moved = false;
+            out.push(Event::MouseMove {
+                x: self.pointer_x,
+                y: self.pointer_y,
+            });
+            self.present(Rect::default());
+        }
     }
 
-    /// Copies `dirty` of the canvas to the screen and redraws the pointer.
+    /// Shows `dirty` of the canvas (only the pixels that changed are
+    /// written) and redraws the pointer.
     pub fn present(&mut self, dirty: Rect) {
         let bounds = self.canvas.bounds();
         let now = self.pointer_rect();
-        // Rows to copy plainly: the change and where the pointer was.
-        let mut area = dirty.intersect(bounds);
+        // Where the pointer was: back to the picture under it.
         if let Some(old) = self.shown {
-            area = area.union(old.intersect(bounds));
+            let old = old.intersect(bounds);
+            if !old.is_empty() {
+                self.copy(old, true);
+            }
         }
+        let area = dirty.intersect(bounds);
         if !area.is_empty() {
-            self.copy(area);
+            self.copy(area, !self.front_valid);
+            if area == bounds {
+                self.front_valid = true;
+            }
         }
         if let Some(r) = now {
             self.draw_pointer(r.intersect(bounds));
@@ -225,21 +283,36 @@ impl Screen {
         }
     }
 
-    fn copy(&mut self, r: Rect) {
+    /// Copies `r` to video memory: all of it if `force`, else only the
+    /// span of each row that differs from what is shown.
+    fn copy(&mut self, r: Rect, force: bool) {
         let w = self.canvas.width;
         for y in r.y..r.bottom() {
-            let src = &self.canvas.pixels
-                [y as usize * w + r.x as usize..y as usize * w + r.right() as usize];
+            let row = y as usize * w;
+            let (mut a, mut b) = (row + r.x as usize, row + r.right() as usize);
+            if !force {
+                let cur = &self.canvas.pixels[a..b];
+                let old = &self.front[a..b];
+                let Some(first) = cur.iter().zip(old).position(|(p, q)| p != q) else {
+                    continue;
+                };
+                let last = cur.iter().zip(old).rposition(|(p, q)| p != q).unwrap();
+                b = a + last + 1;
+                a += first;
+            }
+            self.front[a..b].copy_from_slice(&self.canvas.pixels[a..b]);
+            let x0 = (a - row) as i32;
+            let src = &self.canvas.pixels[a..b];
             let dst = self.row(y);
             if self.native {
                 // SAFETY: the row segment is inside the frame buffer.
                 unsafe {
-                    core::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(r.x as usize), src.len())
+                    core::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(x0 as usize), src.len())
                 }
             } else {
                 for (i, p) in src.iter().enumerate() {
                     // SAFETY: as above.
-                    unsafe { dst.add(r.x as usize + i).write_volatile(self.convert(*p)) }
+                    unsafe { dst.add(x0 as usize + i).write_volatile(self.convert(*p)) }
                 }
             }
         }

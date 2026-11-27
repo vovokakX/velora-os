@@ -23,7 +23,10 @@
 используют одно ядро установщика (`installer/core`, crate `velora-install`);
 экраны — `installer/gui`. Выбор оформления, языка и раскладки записывается в
 `/etc/velora/desktop.conf`, `locale.conf` и `keyboard.conf` для будущей
-оболочки; система эти файлы пока не читает.
+оболочки; система эти файлы пока не читает. Тема (тёмная, светлая,
+полуночная) и акцентный цвет применяются к установщику сразу, с плавным
+переходом; переключатель «Эффекты анимации» выключает анимации. Мыши и
+планшеты USB работают, в том числе usb-tablet в QEMU (`tools/run-qemu.sh`).
 
 ### Запуск
 
@@ -85,7 +88,10 @@ Enter, Escape goes back) and can be opened from the Live system with
 (`installer/core`, crate `velora-install`); the screens are in
 `installer/gui`. Appearance, language and layout choices are written to
 `/etc/velora/desktop.conf`, `locale.conf` and `keyboard.conf` for the future
-shell; the system does not read them yet.
+shell; the system does not read them yet. The theme (dark, light,
+midnight) and the accent colour apply to the installer at once, with a smooth
+transition; the "Animations" switch turns animations off. USB mice and tablets
+work, QEMU's usb-tablet included (`tools/run-qemu.sh`).
 
 Run `velora-setup`: it lists the disks and asks for the target disk, the name
 of the new user (lowercase letters, digits, `_`, `-`), the user's and root's

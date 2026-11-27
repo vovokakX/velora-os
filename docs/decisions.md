@@ -1129,3 +1129,104 @@ QEMU with OVMF offers no modes above 2560x1440, so the QEMU test captures
 1280x720, 1920x1080 and 2560x1440, and 3840x2160 is checked by drawing the
 same screens on the host (`cargo run -p velora-installer-gui --example
 screens`).
+
+## D49. Чёткость, акцент и анимации установщика; абсолютный указатель / Installer sharpness, accent and animations; absolute pointer
+
+**2026-11-27**
+
+**RU.** Режим экрана берётся из EDID монитора: его выбирает Limine, это
+родное разрешение. Окно рисуется сразу в нём, в одном из масштабов 1x,
+1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x, 3.5x, 4x (самый большой, который
+помещается с полями): 1280x720 — 1.5x, 1920x1080 — 2x, 2560x1440 — 3x,
+3840x2160 — 4x. Готовый кадр никогда не растягивается. Текст смешивается
+в линейном свете (гамма 2) с небольшим усилением контраста. Размер шрифта
+меняется не больше чем на 6%, чтобы высота строчных букв была целой в
+пикселях: это лёгкая замена хинтингу, которого в fontdue нет. Картинки
+уменьшаются усреднением площади.
+
+Размытость, которую было видно в окне QEMU, давала Windows: при
+масштабе экрана 125% окно QEMU без поддержки DPI растягивается системой
+(окно для кадра 1280x720 занимало 1620x949 пикселей). `tools/run-qemu.sh`
+задаёт процессу QEMU `SDL_WINDOWS_DPI_AWARENESS=permonitorv2`, и пиксели
+выводятся 1:1.
+
+Акцентный цвет темы (по умолчанию янтарный #FFB547) используется для
+включённых переключателей, выделения, кольца фокуса, прогресса и отметок
+шагов. Тема и акцент, выбранные на экране «Оформление» или переключателем
+в боковой панели, применяются к установщику сразу, через плавный переход
+(260 мс, ease-in-out). Переход сделан смешиванием последнего показанного
+кадра с новыми: так меняются все цвета разом, а фон с волнами не нужно
+перерисовывать в каждом кадре. Шаги сменяются сдвигом с затуханием.
+Состояния элементов (наведение, нажатие, фокус, неактивное) анимируются
+значениями `Tweens` с часами программы. Переключатель «Эффекты анимации»
+выключает анимации и в самом установщике. Кадры анимации идут примерно 60
+раз в секунду. Таймер ядра тикает 100 раз в секунду, поэтому последние
+миллисекунды до кадра программа ждёт через `yield`. На экран пишутся
+только пиксели, которые отличаются от показанных.
+
+Абсолютный указатель: USB-устройства HID, которые не являются
+boot-мышью (планшеты, в том числе `usb-tablet` в QEMU), читаются в report
+protocol по их report descriptor (`velora-usb::report`). События с
+позицией идут в `/dev/pointer` (пакеты по 8 байт); `/dev/mouse` остаётся
+для относительных. С планшетом мышь в окне QEMU работает без захвата, а
+тест `clicks` щёлкает в точные пиксели через QMP.
+
+Тест «каждый элемент реагирует»: образ `velora-uitest.iso`
+(`velora.uitest` в командной строке) печатает после каждого изменения
+дайджест состояния, фокус, открытый список, последний сработавший элемент
+и области всех интерактивных элементов. `tests/uiclick.py` проходит все
+экраны и щёлкает каждый элемент, а для списков ещё крутит колесо.
+Проверяется, что состояние изменилось.
+
+NOT IMPLEMENTED: синхронизации с кадровой развёрткой нет (у GOP её нет),
+поэтому разрывы изображения возможны, хотя кадр всегда выводится целиком
+из заднего буфера. Пока кадр рисуется, указатель мыши не двигается.
+Хинтинга по командам шрифта нет.
+
+**EN.** The display mode comes from the monitor's EDID: Limine picks it,
+and it is the native resolution. The window is drawn in it directly at one
+of the scales 1x, 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x, 3.5x, 4x (the largest
+that fits with margins): 1280x720 gets 1.5x, 1920x1080 2x, 2560x1440 3x,
+3840x2160 4x. A finished frame is never stretched. Text is blended in linear
+light (gamma 2) with a slight contrast boost. Font sizes change by at most 6%
+so that the x-height is a whole number of pixels, a light stand-in for the
+hinting fontdue does not have. Pictures are scaled down by area averaging.
+
+The blur seen in the QEMU window came from Windows: with 125% display scaling
+it stretches a QEMU window that is not DPI-aware (the window for a 1280x720
+frame took 1620x949 pixels). `tools/run-qemu.sh` sets
+`SDL_WINDOWS_DPI_AWARENESS=permonitorv2` for the QEMU process, and pixels
+are shown 1:1.
+
+A theme's accent colour (warm amber #FFB547 by default) is used for switches
+that are on, selections, the focus ring, progress and the step marks. The
+theme and accent picked on the Appearance screen or with the switch in the
+sidebar apply to the installer at once, with a smooth transition (260 ms,
+ease-in-out). The transition mixes the last frame shown with the new frames:
+every colour changes together, and the backdrop with its waves need not be
+drawn again for each frame. Steps change with a slide and a fade. Widget
+states (hover, press, focus, disabled) are animated with `Tweens` on the
+program's clock. The "Animations" switch also turns the installer's own
+animations off. Animation frames come about 60 times a second; the kernel
+timer ticks 100 times a second, so the program waits the last milliseconds
+before a frame with `yield`. Only pixels that differ from what is shown are
+written to the screen.
+
+Absolute pointer: USB HID devices that are not boot mice (tablets, QEMU's
+`usb-tablet` among them) are read in report protocol using their report
+descriptor (`velora-usb::report`). Events with a position go to
+`/dev/pointer` (8-byte packets); `/dev/mouse` keeps the relative ones. With
+the tablet the mouse works in a QEMU window without being grabbed, and the
+`clicks` test clicks exact pixels through QMP.
+
+The "every element reacts" test: `velora-uitest.iso` (`velora.uitest` on the
+command line) prints, after every change, a digest of the state, the focus,
+the open list, the widget that last took input and the areas of all
+interactive widgets. `tests/uiclick.py` goes through every screen, clicks
+each element (and turns the wheel over the lists) and checks that the state
+changed.
+
+NOT IMPLEMENTED: there is no synchronisation with the display refresh (GOP
+has none), so tearing is possible, although a frame is always shown whole
+from the back buffer. The pointer does not move while a frame is being drawn.
+There is no hinting from the font's instructions.

@@ -130,14 +130,38 @@ pub fn wait(timeout_ms: Option<u64>) -> Option<KeyEvent> {
 
 // --- mouse ------------------------------------------------------------------
 
-/// One mouse movement or button change (as a boot protocol mouse reports
-/// it). Read from `/dev/mouse` as 4-byte packets: buttons, dx, dy, wheel.
+/// One mouse movement or button change. Read from `/dev/mouse` as 4-byte
+/// packets (buttons, dx, dy, wheel; relative events only) and from
+/// `/dev/pointer` as 8-byte packets (`velora_abi::pointer`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEvent {
     pub buttons: u8,
     pub dx: i8,
     pub dy: i8,
     pub wheel: i8,
+    /// A tablet's position, 0..=32767 on each axis (dx and dy are 0).
+    pub abs: Option<(u16, u16)>,
+}
+
+impl MouseEvent {
+    /// The `/dev/pointer` packet.
+    pub fn packet(&self) -> [u8; velora_abi::pointer::PACKET] {
+        let (flags, x, y) = match self.abs {
+            Some((x, y)) => (velora_abi::pointer::ABSOLUTE, x as i16, y as i16),
+            None => (0, self.dx as i16, self.dy as i16),
+        };
+        let (x, y) = (x.to_le_bytes(), y.to_le_bytes());
+        [
+            flags,
+            self.buttons,
+            self.wheel as u8,
+            0,
+            x[0],
+            x[1],
+            y[0],
+            y[1],
+        ]
+    }
 }
 
 const MOUSE_CAPACITY: usize = 64;
@@ -154,6 +178,7 @@ static MOUSE: SpinLock<MouseQueue> = SpinLock::new(MouseQueue {
         dx: 0,
         dy: 0,
         wheel: 0,
+        abs: None,
     }; MOUSE_CAPACITY],
     head: 0,
     len: 0,

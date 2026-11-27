@@ -642,3 +642,44 @@ picks Expert mode with a 128 MiB EFI partition, installs onto an image, boots
 from it and checks the settings, saving a screenshot of every screen
 (`--screens`, `--resolution`, `--screens-only`). The other tests of the Live
 image choose "3" in the menu.
+
+### Чёткость, акцент, анимации / Sharpness, accent, animations
+
+- Масштаб окна установщика — ступени 1x…4x (`installer/gui::SCALES`),
+  кадр рисуется в родном разрешении экрана (D49). Текст — смешивание в
+  линейном свете и привязка высоты строчных букв к пикселям
+  (`Fonts::snapped_size`).
+- Темы: тёмная, светлая и полуночная, у каждой акцентный цвет
+  (`Theme::with_accent`, по умолчанию `theme::AMBER`); `Theme::mix`
+  смешивает две темы.
+- `libc/ui/src/anim.rs`: кривые ease-in-out, `Tweens` (значения, которые
+  плавно доходят до новой цели) и `Transition` (затухание или сдвиг между
+  последним показанным кадром и новыми). Элементы анимируют наведение,
+  нажатие, фокус, положение переключателя, раскрытие списков;
+  `Ui::animating` просит у программы следующий кадр.
+- `Screen::present` пишет в видеопамять только изменившиеся участки строк
+  (хранится копия показанного). Ввод указателя — `/dev/pointer`.
+- Ядро: `velora-usb::report` разбирает report descriptor; xHCI читает
+  планшеты и мыши, которые не являются boot-устройствами, в report
+  protocol (`Function::Pointer`). `/dev/pointer` отдаёт пакеты по 8 байт.
+- `tools/run-qemu.sh`: ручной запуск с usb-tablet и окном без растяжения в
+  Windows. Тест `clicks` (`velora-uitest.iso`, `tests/uiclick.py`) щёлкает
+  каждый элемент установщика.
+
+The installer window is drawn at a scale step from 1x to 4x
+(`installer/gui::SCALES`) in the screen's own resolution (D49). Text is
+blended in linear light and the x-height is snapped to whole pixels
+(`Fonts::snapped_size`). The dark, light and midnight themes each have an
+accent colour (`Theme::with_accent`, `theme::AMBER` by default); `Theme::mix`
+blends two themes. `libc/ui/src/anim.rs` has ease-in-out curves, `Tweens`
+(values that move smoothly to a new target) and `Transition` (a fade or a
+slide between the last frame shown and the new ones); widgets animate hover,
+press, focus, a switch's knob and a list opening, and `Ui::animating` asks the
+program for another frame. `Screen::present` writes only the row spans that
+changed (a copy of what is shown is kept); pointer input comes from
+`/dev/pointer`. In the kernel, `velora-usb::report` reads report descriptors,
+and xHCI reads tablets and mice that are not boot devices in report protocol
+(`Function::Pointer`); `/dev/pointer` gives 8-byte packets.
+`tools/run-qemu.sh` runs QEMU by hand with a USB tablet and, on Windows, a
+window that is not stretched. The `clicks` test (`velora-uitest.iso`,
+`tests/uiclick.py`) clicks every element of the installer.

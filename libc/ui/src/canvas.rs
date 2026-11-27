@@ -65,18 +65,21 @@ pub fn blend(dst: u32, src: u32, a: u32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
-/// Integer square root (floor).
+/// Integer square root (floor). Newton's method from a first guess just
+/// above the root (from the bit length), so a few steps suffice.
 pub fn isqrt(n: u64) -> u64 {
     if n < 2 {
         return n;
     }
-    let mut x = n;
-    let mut y = x.div_ceil(2);
-    while y < x {
+    let bits = 64 - n.leading_zeros();
+    let mut x = 1u64 << bits.div_ceil(2);
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x {
+            return x;
+        }
         x = y;
-        y = (x + n / x) / 2;
     }
-    x
 }
 
 /// Coverage 0..=255 of a point at signed distance `d` from an edge
@@ -249,9 +252,24 @@ impl Canvas {
             return;
         };
         let len = if vertical { r.h } else { r.w }.max(1) as i64;
+        if vertical {
+            // One colour per row and dither column: four per row.
+            for y in y0..y1 {
+                let t = (((y - r.y) as i64) * 65536 / len).clamp(0, 65536);
+                let cols: [Color; 4] =
+                    core::array::from_fn(|k| dither_lerp(c0, c1, t, k as i32, y));
+                let row = y as usize * self.width;
+                for x in x0..x1 {
+                    let c = cols[(x & 3) as usize];
+                    let p = &mut self.pixels[row + x as usize];
+                    *p = blend(*p, c, c >> 24);
+                }
+            }
+            return;
+        }
         for y in y0..y1 {
             for x in x0..x1 {
-                let pos = if vertical { y - r.y } else { x - r.x } as i64;
+                let pos = (x - r.x) as i64;
                 // t in 1/65536.
                 let t = (pos * 65536 / len).clamp(0, 65536);
                 let c = dither_lerp(c0, c1, t, x, y);
@@ -269,16 +287,24 @@ impl Canvas {
         };
         let r2 = (radius as i64 * radius as i64).max(1);
         let a0 = (c >> 24) as i64;
+        // d^2 / r^2 in 1/65536 as a multiplication: no division per pixel.
+        let inv = (1i64 << 48) / r2;
         for y in y0..y1 {
-            for x in x0..x1 {
+            let dy = (y - cy) as i64;
+            if dy * dy >= r2 {
+                continue;
+            }
+            // The row's part inside the circle.
+            let w = isqrt((r2 - dy * dy) as u64) as i32;
+            let (xa, xb) = ((cx - w).max(x0), (cx + w + 1).min(x1));
+            for x in xa..xb {
                 let dx = (x - cx) as i64;
-                let dy = (y - cy) as i64;
                 let d2 = dx * dx + dy * dy;
                 if d2 >= r2 {
                     continue;
                 }
                 // Smooth falloff: (1 - d^2/r^2)^2, with dithering.
-                let f = 65536 - d2 * 65536 / r2;
+                let f = 65536 - ((d2 * inv) >> 32).min(65536);
                 let f = (f * f) >> 16;
                 let a16 = a0 * f; // alpha * 65536
                 let a = ((a16 + BAYER[(y & 3) as usize][(x & 3) as usize] as i64 * 4096) >> 16)
@@ -396,16 +422,31 @@ impl Canvas {
             return;
         };
         let ca = c >> 24;
+        let half = feather / 2;
+        // The disc's coverage is full within r - half of the centre and
+        // nothing beyond r + (feather - half): per row these are spans,
+        // so the square root is needed only in the soft edge.
+        let span = |dy: i64, rad: i64| -> Option<i64> {
+            let rad = rad.max(0);
+            (dy <= rad).then(|| isqrt((rad * rad - dy * dy) as u64) as i64)
+        };
         for y in y0..y1 {
             let py = y as i64 * FX + 128;
             // Rows the disc does not reach.
             let dy = (py - cy).abs();
-            if dy > r + feather {
+            let Some(outer) = span(dy, r + feather - half) else {
                 continue;
-            }
-            for x in x0..x1 {
+            };
+            let inner = span(dy, r - half);
+            // Pixels whose centre is within the outer span.
+            let xa = (((cx - outer - 128) >> 8) as i32).max(x0);
+            let xb = (((cx + outer - 128) >> 8) as i32 + 1).min(x1);
+            for x in xa..xb {
                 let px = x as i64 * FX + 128;
-                let a = coverage(disc.dist(px, py), feather);
+                let a = match inner {
+                    Some(w) if (px - cx).abs() < w => 255,
+                    _ => coverage(disc.dist(px, py), feather),
+                };
                 if a == 0 {
                     continue;
                 }
@@ -591,17 +632,45 @@ impl Canvas {
     }
 
     /// A coverage mask (glyph): `mask[w * h]`, drawn in colour `c`.
+    ///
+    /// Text is blended in linear light (gamma 2), so the edges of light
+    /// text on a dark background and of dark text on a light one keep the
+    /// same weight, and the coverage gets a slight contrast boost so small
+    /// sizes stay crisp.
     pub fn draw_mask(&mut self, x: i32, y: i32, w: usize, h: usize, mask: &[u8], c: Color) {
         let Some((x0, y0, x1, y1)) = self.area(Rect::new(x, y, w as i32, h as i32)) else {
             return;
         };
+        let ca = c >> 24;
+        let s = [
+            SQUARE[((c >> 16) & 0xff) as usize],
+            SQUARE[((c >> 8) & 0xff) as usize],
+            SQUARE[(c & 0xff) as usize],
+        ];
         for py in y0..y1 {
             let mrow = (py - y) as usize * w;
             for px in x0..x1 {
-                let cov = mask[mrow + (px - x) as usize] as u32;
-                if cov != 0 {
-                    self.put(px, py, c, cov);
+                let cov = mask[mrow + (px - x) as usize] as usize;
+                if cov == 0 {
+                    continue;
                 }
+                let a = div255(ca * CONTRAST[cov] as u32);
+                if a == 0 {
+                    continue;
+                }
+                let i = py as usize * self.width + px as usize;
+                if a >= 255 {
+                    self.pixels[i] = c & 0x00ff_ffff;
+                    continue;
+                }
+                let d = self.pixels[i];
+                let inv = 255 - a;
+                let ch = |sh: u32, sl: u32| {
+                    let dl = SQUARE[((d >> sh) & 0xff) as usize];
+                    let l = (sl * a + dl * inv) / 255;
+                    (root(l) as u32) << sh
+                };
+                self.pixels[i] = ch(16, s[0]) | ch(8, s[1]) | ch(0, s[2]);
             }
         }
     }
@@ -711,6 +780,53 @@ fn sin_q(f: i64) -> i64 {
     }
     sum.clamp(-65536, 65536)
 }
+
+/// `v * v` for 0..=255: the light of an sRGB value with gamma 2.
+static SQUARE: [u32; 256] = {
+    let mut t = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        t[i] = (i * i) as u32;
+        i += 1;
+    }
+    t
+};
+
+/// Square root of 0..=65025 (back from light to an sRGB value), rounded.
+#[inline]
+fn root(l: u32) -> u8 {
+    let mut lo = 0u32;
+    let mut hi = 255u32;
+    // Largest v with v * v <= l, then round to the nearer square.
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if mid * mid <= l {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo < 255 && l - lo * lo > lo {
+        (lo + 1) as u8
+    } else {
+        lo as u8
+    }
+}
+
+/// Glyph coverage with a slight contrast boost: thin stems at small sizes
+/// get a little darker, full coverage stays full.
+static CONTRAST: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let mut i = 0;
+    while i < 256 {
+        // c + 0.35 * c * (1 - c), in 1/255.
+        let c = i as u32;
+        let v = c + 35 * c * (255 - c) / (100 * 255);
+        t[i] = if v > 255 { 255 } else { v as u8 };
+        i += 1;
+    }
+    t
+};
 
 const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 

@@ -47,6 +47,7 @@ static TESTS: &[Test] = tests![
     text_console_answers_queries,
     hidden_console_keeps_drawing_in_ram,
     key_events_become_packets,
+    pointer_events_become_packets,
     gdt_and_tss_loaded,
     idt_loaded,
     breakpoint_resumes,
@@ -496,6 +497,31 @@ fn key_events_become_packets() {
     assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 'й' as u32);
     let p = crate::input::key_packet(&ev(KeyCode::Left, None, false));
     assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::LEFT);
+}
+
+fn pointer_events_become_packets() {
+    use crate::input::MouseEvent;
+    use velora_abi::pointer;
+    let rel = MouseEvent {
+        buttons: 1,
+        dx: -3,
+        dy: 4,
+        wheel: 1,
+        abs: None,
+    };
+    let p = rel.packet();
+    assert_eq!(p.len(), pointer::PACKET);
+    assert_eq!((p[0], p[1], p[2] as i8), (0, 1, 1));
+    assert_eq!(i16::from_le_bytes([p[4], p[5]]), -3);
+    assert_eq!(i16::from_le_bytes([p[6], p[7]]), 4);
+    let abs = MouseEvent {
+        abs: Some((32767, 100)),
+        ..MouseEvent::default()
+    };
+    let p = abs.packet();
+    assert_eq!(p[0], pointer::ABSOLUTE);
+    assert_eq!(i16::from_le_bytes([p[4], p[5]]) as i32, pointer::ABS_MAX);
+    assert_eq!(i16::from_le_bytes([p[6], p[7]]), 100);
 }
 
 fn text_console_answers_queries() {

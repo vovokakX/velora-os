@@ -43,4 +43,8 @@ echo "==> graphical installation in QEMU (start menu, every screen, install, boo
 "$PY" tests/qemu_run.py gui --timeout 1500 --screens build/logs/installer-screens
 "$PY" tests/qemu_run.py gui --resolution 1920x1080 --screens-only --timeout 600 --screens build/logs/installer-screens --log build/logs/gui-1920x1080.log
 
+echo "==> every element of the graphical installer clicked with a USB tablet"
+./build.sh --uitest
+"$PY" tests/qemu_run.py clicks --timeout 900
+
 echo "==> all tests passed"

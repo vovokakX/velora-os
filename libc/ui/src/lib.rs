@@ -9,6 +9,7 @@
 
 extern crate alloc;
 
+pub mod anim;
 pub mod canvas;
 pub mod decor;
 pub mod gallery;

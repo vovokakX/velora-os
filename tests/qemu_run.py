@@ -24,6 +24,12 @@ Modes:
          log out, log in as root and power off with `shutdown`. velofetch
          is checked on a screenshot (the logo is an image) and through a
          pipe (ASCII logo); the screenshot is kept in build/logs.
+  gui    The start menu and every screen of the graphical installer with
+         the keyboard, installation, boot from the disk (--resolution,
+         --screens, --screens-only).
+  clicks Boot velora-uitest.iso (./build.sh --uitest) with a USB tablet:
+         every interactive element of the graphical installer is clicked
+         through QMP and must react (tests/uiclick.py).
 
 Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL,
 VELORA_QEMU_EXTRA (extra QEMU arguments, e.g. "-trace virtio*"),
@@ -534,6 +540,8 @@ def run(args):
             return run_install(args, work)
         if args.mode == "gui":
             return run_gui(args, work)
+        if args.mode == "clicks":
+            return run_clicks(args, work)
         if args.mode == "net":
             return run_net(args, work)
         if args.mode == "usb":
@@ -1175,6 +1183,51 @@ def run_gui(args, work):
     return r
 
 
+def run_clicks(args, work):
+    """Every interactive element of the graphical installer, clicked with
+    a USB tablet through QMP; each must react (tests/uiclick.py). Needs
+    velora-uitest.iso (./build.sh --uitest)."""
+    import uiclick
+    w, h = (int(v) for v in args.resolution.split("x"))
+    qmp_port = free_port()
+    extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h),
+             "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
+             "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % qmp_port]
+    disk = os.path.join(work, "install.img")
+    with open(disk, "wb") as f:
+        f.truncate(INSTALL_DISK_SIZE)
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        qmp = uiclick.Qmp(qmp_port)
+        try:
+            assert s.wait("usb: tablet", timeout=60), "the USB tablet was not found"
+            assert s.wait("velora-start: menu", timeout=120), "no start menu"
+            qmp.connect()
+            s.keys(["1"])
+            assert s.wait("velora-start: chose graphical"), "graphical installation not chosen"
+            n = uiclick.walk(s, qmp, (w, h))
+            print("qemu_run: %d interactive elements reacted to the mouse" % n)
+            monitor.command("system_powerdown")
+            wait_exit(proc)
+        except AssertionError as e:
+            if proc.poll() is None:
+                path = os.path.join(os.path.dirname(reader.log.name) or ".", "clicks-failure.png")
+                fw, fh, rgb = screendump(monitor, path + ".ppm")
+                write_png(path, fw, fh, rgb)
+                os.remove(path + ".ppm")
+                print("qemu_run: screen at the failure: %s" % path)
+            return fail(str(e))
+        finally:
+            qmp.close()
+        return 0
+
+    r = run_once(args, work, {"install": disk}, args.log, check, extra=extra)
+    if r == 0:
+        print("qemu_run: PASS (every element of the installer reacted to clicks at %s)" % args.resolution)
+    return r
+
+
 def run_install(args, work):
     disk = os.path.join(work, "install.img")
     with open(disk, "wb") as f:
@@ -1481,7 +1534,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks"])
     p.add_argument("--resolution", default="1280x720", help="screen size for the gui mode")
     p.add_argument("--screens", default=os.path.join("docs", "design", "installer-screens"),
                    help="where the gui mode saves its screenshots")
@@ -1498,7 +1551,7 @@ def main():
     global TIMESTAMPS
     TIMESTAMPS = args.timestamps
     if not args.iso:
-        args.iso = "velora-test.iso" if args.mode == "ktest" else "velora.iso"
+        args.iso = {"ktest": "velora-test.iso", "clicks": "velora-uitest.iso"}.get(args.mode, "velora.iso")
     if not args.log:
         args.log = os.path.join("build", "logs", args.mode + ".log")
     sys.exit(run(args))

@@ -1,7 +1,8 @@
 //! /dev: null, zero, console, kmsg (the kernel log), mouse (4-byte
-//! packets: buttons, dx, dy, wheel; reads do not wait), keyboard (8-byte
-//! key packets, `velora_abi::key`; reads do not wait) and one node per
-//! disk.
+//! packets: buttons, dx, dy, wheel; relative movements only; reads do not
+//! wait), pointer (8-byte packets of every mouse and tablet event,
+//! `velora_abi::pointer`; reads do not wait), keyboard (8-byte key
+//! packets, `velora_abi::key`; reads do not wait) and one node per disk.
 //!
 //! Disks are read and written at byte offsets that are multiples of the
 //! sector size. The console node is turned into a console handle when it
@@ -20,6 +21,7 @@ pub const CONSOLE_INO: Ino = 4;
 const KMSG: Ino = 5;
 const MOUSE: Ino = 6;
 const KEYBOARD: Ino = 7;
+const POINTER: Ino = 8;
 const FIRST_DISK: Ino = 16;
 
 pub struct DevFs {
@@ -42,6 +44,7 @@ impl DevFs {
             (String::from("kmsg"), KMSG, Kind::File),
             (String::from("mouse"), MOUSE, Kind::CharDevice),
             (String::from("keyboard"), KEYBOARD, Kind::CharDevice),
+            (String::from("pointer"), POINTER, Kind::CharDevice),
         ];
         for (i, d) in self.disks.iter().enumerate() {
             v.push((
@@ -91,7 +94,7 @@ impl FileSystem for DevFs {
             ROOT => (Kind::Dir, 0o755, 0),
             NULL | ZERO | CONSOLE_INO => (Kind::CharDevice, 0o666, 0),
             KMSG => (Kind::File, 0o444, crate::console::klog::len() as u64),
-            MOUSE | KEYBOARD => (Kind::CharDevice, 0o444, 0),
+            MOUSE | KEYBOARD | POINTER => (Kind::CharDevice, 0o444, 0),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 (Kind::BlockDevice, 0o600, d.size_bytes())
@@ -149,6 +152,9 @@ impl FileSystem for DevFs {
                     let Some(m) = crate::input::pop_mouse() else {
                         break;
                     };
+                    if m.abs.is_some() {
+                        continue;
+                    }
                     buf[n..n + 4].copy_from_slice(&[
                         m.buttons,
                         m.dx as u8,
@@ -156,6 +162,18 @@ impl FileSystem for DevFs {
                         m.wheel as u8,
                     ]);
                     n += 4;
+                }
+                Ok(n)
+            }
+            POINTER => {
+                const P: usize = velora_abi::pointer::PACKET;
+                let mut n = 0;
+                while n + P <= buf.len() {
+                    let Some(m) = crate::input::pop_mouse() else {
+                        break;
+                    };
+                    buf[n..n + P].copy_from_slice(&m.packet());
+                    n += P;
                 }
                 Ok(n)
             }
@@ -186,7 +204,7 @@ impl FileSystem for DevFs {
         match ino {
             ROOT => Err(FsError::IsDir),
             NULL | ZERO => Ok(data.len()),
-            CONSOLE_INO | KMSG | MOUSE | KEYBOARD => Err(FsError::Unsupported),
+            CONSOLE_INO | KMSG | MOUSE | KEYBOARD | POINTER => Err(FsError::Unsupported),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, data.len())?;
