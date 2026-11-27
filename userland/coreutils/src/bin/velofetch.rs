@@ -40,6 +40,9 @@ const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/velora-logo.png");
 /// the ASCII logo.
 const TEXT_COLS: usize = 40;
 
+const ACCENT: &str = "\x1b[1;35m";
+const RESET: &str = "\x1b[0m";
+
 fn main() -> i32 {
     let ascii = env::args().iter().skip(1).any(|a| a == "--ascii");
     let s = match process::sysinfo() {
@@ -52,55 +55,88 @@ fn main() -> i32 {
         .map(|d| d.flatten().map(|e| e.name).collect())
         .unwrap_or_default();
     let (cols, rows) = term::size();
-    let title = format!("{}@velora", user);
-    let lines = [
-        title.clone(),
-        "-".repeat(title.chars().count()),
-        format!("OS:      Velora OS {} x86_64", field_str(&s.version)),
-        format!("Kernel:  velora {}", field_str(&s.version)),
-        format!("Uptime:  {}", duration(s.uptime_ns / 1_000_000_000)),
-        format!("Shell:   {}", shell),
-        format!(
-            "CPU:     {} ({} core{})",
-            field_str(&s.cpu),
-            s.cpus,
-            if s.cpus == 1 { "" } else { "s" }
+    let color = colors();
+    let fields = [
+        ("OS", format!("Velora OS {} x86_64", field_str(&s.version))),
+        ("Kernel", format!("velora {}", field_str(&s.version))),
+        ("Uptime", duration(s.uptime_ns / 1_000_000_000)),
+        ("Shell", String::from(shell)),
+        (
+            "CPU",
+            format!(
+                "{} ({} core{})",
+                field_str(&s.cpu),
+                s.cpus,
+                if s.cpus == 1 { "" } else { "s" }
+            ),
         ),
-        format!("Memory:  {} / {}", human(s.mem_used), human(s.mem_total)),
-        format!("Console: {}x{}, processes: {}", cols, rows, s.processes),
-        format!(
-            "Disks:   {}",
+        (
+            "Memory",
+            format!("{} / {}", human(s.mem_used), human(s.mem_total)),
+        ),
+        (
+            "Console",
+            format!("{}x{}, processes: {}", cols, rows, s.processes),
+        ),
+        (
+            "Disks",
             if disks.is_empty() {
                 String::from("none mounted")
             } else {
                 disks.join(", ")
-            }
+            },
         ),
     ];
+    let title_len = user.chars().count() + "@velora".len();
+    let mut lines = Vec::new();
+    if color {
+        lines.push(format!(
+            "{}{}{}@{}velora{}",
+            ACCENT, user, RESET, ACCENT, RESET
+        ));
+    } else {
+        lines.push(format!("{}@velora", user));
+    }
+    lines.push("-".repeat(title_len));
+    for (label, value) in &fields {
+        let pad = " ".repeat(9 - label.len() - 1);
+        if color {
+            lines.push(format!("{}{}:{}{}{}", ACCENT, label, RESET, pad, value));
+        } else {
+            lines.push(format!("{}:{}{}", label, pad, value));
+        }
+    }
+    if color {
+        // The 16 console colours, as two rows of swatches.
+        lines.push(String::new());
+        for base in [40, 100] {
+            let mut row = String::new();
+            for i in 0..8 {
+                row.push_str(&format!("\x1b[{}m   ", base + i));
+            }
+            row.push_str(RESET);
+            lines.push(row);
+        }
+    }
     let picture = if ascii {
         None
     } else {
         graphics_cell().and_then(|(cw, ch)| logo_image(lines.len(), cw, ch, cols as usize))
     };
-    let color = colors();
     match picture {
         Some((sequence, width)) => {
             // The image keeps the cursor in place (C=1); each line then
             // skips the columns it covers.
             let _ = io::write_all(1, sequence.as_bytes());
-            for (i, l) in lines.iter().enumerate() {
-                if color && i == 0 {
-                    println!("\x1b[{}C\x1b[1;35m{}\x1b[0m", width + 2, l);
-                } else {
-                    println!("\x1b[{}C{}", width + 2, l);
-                }
+            for l in &lines {
+                println!("\x1b[{}C{}", width + 2, l);
             }
         }
         None => {
             for (i, l) in lines.iter().enumerate() {
                 let logo = LOGO.get(i).copied().unwrap_or("              ");
                 if color {
-                    println!("\x1b[1;35m{}\x1b[0m  {}", logo, l);
+                    println!("{}{}{}  {}", ACCENT, logo, RESET, l);
                 } else {
                     println!("{}  {}", logo, l);
                 }
@@ -153,19 +189,30 @@ fn shows_images() -> bool {
 }
 
 /// The escape sequence that shows the logo over `rows` text rows, and
-/// the number of columns it covers. The image is made in the exact pixel
-/// size of those cells, so the terminal shows it without scaling.
+/// the number of columns it covers.
+///
+/// The background of the picture (the colour of its corner) is made
+/// transparent and cut away, so only the mark is left and it sits on the
+/// console background. The mark is scaled to the text height minus half a
+/// row above and below, in the exact pixel size of the cells, so the
+/// terminal shows it without scaling it again.
 fn logo_image(rows: usize, cw: usize, ch: usize, screen_cols: usize) -> Option<(String, usize)> {
+    let mut logo = png::decode(LOGO_PNG, 4 << 20).ok()?;
+    let corner = logo.pixel(0, 0);
+    logo.color_to_alpha((corner[0] as u32) << 16 | (corner[1] as u32) << 8 | corner[2] as u32);
+    let mark = logo.trim();
     let h = rows * ch;
-    let cols = h.div_ceil(cw);
+    let mark_h = h - ch;
+    let mark_w = (mark.width * mark_h).div_ceil(mark.height);
+    // Half a cell of space on each side.
+    let cols = (mark_w + cw).div_ceil(cw);
     if cols + 2 + TEXT_COLS > screen_cols {
         return None;
     }
     let w = cols * cw;
-    let logo = png::decode(LOGO_PNG, 4 << 20).ok()?;
-    let (lw, lh) = image::fit(logo.width, logo.height, w, h);
+    let (lw, lh) = image::fit(mark.width, mark.height, w - cw, mark_h);
     let mut canvas = Image::new(w, h);
-    canvas.draw(&logo.resize(lw, lh), (w - lw) / 2, (h - lh) / 2);
+    canvas.draw(&mark.resize(lw, lh), (w - lw) / 2, (h - lh) / 2);
     let keys = format!("a=T,f=32,s={},v={},c={},r={},C=1,q=2", w, h, cols, rows);
     Some((kitty::transmit(&keys, &canvas.to_rgba()), cols))
 }
