@@ -9,11 +9,17 @@ pub mod text;
 use crate::arch::x86_64::serial::SERIAL;
 use crate::boot::limine;
 use crate::sync::SpinLock;
+use alloc::vec::Vec;
 use core::fmt::{self, Write};
 use framebuffer::Framebuffer;
 use text::TextConsole;
+use velora_gfx::kitty::ApcFilter;
 
 static SCREEN: SpinLock<Option<TextConsole>> = SpinLock::new(None);
+
+/// Takes images (APC strings) out of program output for the serial port
+/// and the kernel log, which only keep text.
+static TEXT_ONLY: SpinLock<ApcFilter> = SpinLock::new(ApcFilter::new());
 
 /// Sets up the framebuffer console. Returns (width, height) on success.
 pub fn init() -> Option<(usize, usize)> {
@@ -55,9 +61,61 @@ pub fn enable_back_buffer() -> bool {
     }
 }
 
+/// The frame buffer for graphical programs: its description, physical
+/// address and size in bytes.
+pub fn display() -> Option<(velora_abi::DisplayInfo, u64, u64)> {
+    let screen = SCREEN.lock();
+    let fb = screen.as_ref()?.framebuffer();
+    let (r, g, b) = fb.shifts();
+    let info = velora_abi::DisplayInfo {
+        width: fb.width as u32,
+        height: fb.height as u32,
+        pitch: fb.pitch as u32,
+        bits_per_pixel: 32,
+        red_shift: r,
+        green_shift: g,
+        blue_shift: b,
+        _pad: [0; 5],
+    };
+    let phys = crate::mm::virt_to_phys_hhdm(fb.base() as u64);
+    Some((info, phys, (fb.pitch * fb.height) as u64))
+}
+
+/// Hides the text console (a graphical program owns the screen) or shows
+/// it again with everything written meanwhile. False if the console
+/// cannot be hidden (no back buffer).
+pub fn set_hidden(hidden: bool) -> bool {
+    match SCREEN.lock().as_mut() {
+        Some(c) => c.framebuffer_mut().set_hidden(hidden),
+        None => false,
+    }
+}
+
 /// Text grid size of the screen console, if there is one.
 pub fn screen_size() -> Option<(usize, usize)> {
     SCREEN.lock().as_ref().map(|c| (c.cols, c.rows))
+}
+
+/// Cell size of the screen console in pixels, if there is one.
+pub fn cell_size() -> Option<(usize, usize)> {
+    SCREEN.lock().as_ref().map(|c| c.cell_size())
+}
+
+/// Program output: the screen gets all of it, including images; the
+/// serial port and the kernel log get it without images. Returns the
+/// terminal's answers to queries in the output.
+pub fn program_output(s: &str) -> Vec<u8> {
+    TEXT_ONLY.lock().filter(s, |text| {
+        klog::append(text);
+        let _ = SERIAL.lock().write_str(text);
+    });
+    match SCREEN.lock().as_mut() {
+        Some(c) => {
+            c.write_str(s);
+            c.take_replies()
+        }
+        None => Vec::new(),
+    }
 }
 
 struct Both;
@@ -88,6 +146,10 @@ pub fn emergency(f: impl FnOnce(&mut dyn Write)) {
         SERIAL.force_unlock();
         SCREEN.force_unlock();
         klog::force_unlock();
+    }
+    // A panic report must be seen even over a graphical program.
+    if let Some(c) = SCREEN.lock().as_mut() {
+        c.framebuffer_mut().set_hidden(false);
     }
     f(&mut Both);
 }

@@ -930,3 +930,124 @@ server without changing the DHCP settings; the `net` test uses it to reach a
 DNS server on the host and does not depend on the Internet. HTTPS is not
 supported: there is no TLS implementation of our own, and the project does not
 take third-party libraries.
+
+## D46. Изображения в терминале: Kitty graphics protocol / Images in the terminal: the Kitty graphics protocol
+
+**2026-11-27**
+
+**RU.** Консоль ядра показывает изображения по протоколу Kitty, а не Sixel.
+Причины:
+- Kitty передаёт пиксели как есть (RGB или RGBA с прозрачностью, 24 бита
+  на цвет). Sixel — палитра до 256 цветов и полосы по 6 пикселей; логотип
+  пришлось бы квантовать, а края сглаживания теряются.
+- Размер на экране задаётся в ячейках (`c`, `r`), поэтому изображение
+  естественно привязано к шрифту, а масштаб 1–4 консоли учитывается сам.
+- Разбор проще и легко проверяется на хосте: пары `ключ=значение` и base64,
+  а не отдельный язык команд с повторами и сменой палитры.
+- Есть стандартная проверка поддержки: запрос `a=q` с идентификатором и
+  следом DA1 (`CSI c`). Программа читает ответы до ответа DA1, поэтому не
+  зависает, если графики нет.
+- Протокол поддерживают kitty, WezTerm, Konsole, Ghostty, так что
+  программы Velora с той же логикой работают и в этих терминалах.
+Sixel остаётся возможным позже: изображение и масштабирование
+(`velora-gfx::image`) не зависят от протокола.
+
+Изображение рисуется прямо в текстовый экран (в буфер кадра), а не
+отдельным слоем. Так оно прокручивается вместе с текстом и не требует
+повторной отрисовки, но удалить уже показанное изображение командой `a=d`
+нельзя: оно исчезает, когда поверх пишется текст или экран прокручивается.
+Хранимые изображения (`a=t`, `a=p`) ограничены 16 МиБ, одно изображение —
+8 МиБ. Ядро не разбирает PNG (`f=100`) и сжатие (`o=z`): это лишний разбор
+сложных данных в ядре и рост кучи ядра, которая не возвращает страницы.
+Программы декодируют PNG сами (`velora-gfx::png`) и шлют RGBA ровно в
+размере ячеек, поэтому терминалу не нужно масштабировать.
+
+Последовательный порт и журнал ядра получают вывод программ без строк
+APC: base64 изображения там бесполезен и занял бы журнал. Ответы
+терминала (графика, DA1, размеры `CSI 14/16/18 t`) попадают во ввод
+программы, как в любом терминале. Размер ячейки в пикселях программа
+узнаёт вызовом `tty(3)` (`ENODEV` без экрана — графики нет).
+
+**EN.** The kernel console shows images with the Kitty protocol, not Sixel.
+Reasons:
+- Kitty carries pixels as they are (RGB or RGBA with transparency, 24-bit
+  colour). Sixel is a palette of at most 256 colours in 6-pixel bands; the
+  logo would have to be quantised and its anti-aliased edges would suffer.
+- The size on screen is given in cells (`c`, `r`), so an image is tied to
+  the font, and the console's scale 1-4 is taken into account by itself.
+- Parsing is simpler and easy to test on the host: `key=value` pairs and
+  base64, not a command language with repeats and palette changes.
+- There is a standard support check: an `a=q` query with an id followed by
+  DA1 (`CSI c`). A program reads answers up to the DA1 answer, so it does
+  not hang when there are no graphics.
+- kitty, WezTerm, Konsole and Ghostty support the protocol, so Velora
+  programs with the same logic also work in those terminals.
+Sixel stays possible later: images and scaling (`velora-gfx::image`) do not
+depend on the protocol.
+
+An image is drawn straight into the text screen (the frame buffer), not as a
+separate layer. It scrolls with the text and needs no redrawing, but an image
+already shown cannot be removed with `a=d`: it goes away when text is written
+over it or the screen scrolls. Stored images (`a=t`, `a=p`) are limited to
+16 MiB, one image to 8 MiB. The kernel does not decode PNG (`f=100`) or
+compression (`o=z`): that would be more parsing of complex data in the kernel
+and growth of the kernel heap, which does not give pages back. Programs decode
+PNG themselves (`velora-gfx::png`) and send RGBA in the exact size of the
+cells, so the terminal does not have to scale.
+
+The serial port and the kernel log get program output without APC strings:
+image base64 is useless there and would fill the log. The terminal's answers
+(graphics, DA1, sizes `CSI 14/16/18 t`) become the program's input, as in any
+terminal. A program learns the cell size in pixels with `tty(3)` (`ENODEV`
+without a screen: no graphics).
+
+## D47. Графическая основа: velora-ui, Inter и fontdue / Graphical toolkit: velora-ui, Inter and fontdue
+
+**2026-11-27**
+
+**RU.** Графический установщик и будущая оболочка Lumi рисуются в
+программе, а не в ядре. Ядро отдаёт framebuffer одному процессу
+(`display`), даёт события клавиш (`/dev/keyboard`) и мыши (`/dev/mouse`,
+теперь и PS/2). Причины: сложный разбор шрифтов и картинок остаётся вне
+ядра; ошибка программы не роняет систему; консоль сохраняет свой текст и
+возвращается, когда программа завершается, в том числе аварийно.
+
+Шрифт — Inter (OFL 1.1, есть кириллица), растеризация — fontdue (MIT). Это
+первые внешние crate проекта (D42), добавлены с согласия владельца
+репозитория. Свой растеризатор TrueType писался бы дольше и был бы хуже
+проверен. fontdue собирается без std (с hashbrown) и работает без SSE:
+программы собираются без плавающей точки в регистрах, она эмулируется.
+Поэтому загрузка трёх начертаний под TCG занимает около 2 с; глифы
+кешируются. Остальное рисование целочисленное: функции расстояния в 1/256
+пикселя дают сглаживание, тени и дуги без плавающей точки.
+
+Элементы — в немедленном режиме: программа каждый кадр рисует экран
+заново из своего состояния, а `Ui` помнит только фокус, открытый список и
+прокрутку. Так экраны установщика остаются простыми функциями от
+состояния, и их можно отрисовать на хосте и сравнить. Клавиши подаются по
+одной на кадр, чтобы их порядок не терялся между элементами. Масштаб
+дробный (пикселей на единицу дизайна), поэтому один макет работает в
+1280x720, 1920x1080 и 4K.
+
+**EN.** The graphical installer and the future Lumi shell draw in a program,
+not in the kernel. The kernel gives the frame buffer to one process
+(`display`), key events (`/dev/keyboard`) and mouse events (`/dev/mouse`, now
+from PS/2 too). Reasons: complex font and image parsing stays out of the
+kernel; a crashing program does not bring the system down; the console keeps
+its text and comes back when the program exits, also when it crashes.
+
+The font is Inter (OFL 1.1, with Cyrillic) and rasterisation is fontdue
+(MIT). They are the project's first external crates (D42), added with the
+repository owner's consent. An own TrueType rasteriser would take longer and
+be less proven. fontdue builds without std (with hashbrown) and works without
+SSE: programs are built without floating point in registers, so it is
+emulated. Loading three faces therefore takes about 2 s under TCG; glyphs are
+cached. All other drawing is integer: distance functions in 1/256 pixel give
+anti-aliasing, shadows and arcs without floating point.
+
+Widgets are immediate-mode: every frame the program draws the screen again
+from its state, and `Ui` only remembers the focus, the open list and scroll
+positions. Installer screens thus stay plain functions of the state and can
+be drawn on the host and compared. Keys are fed one per frame so their order
+is not lost between widgets. The scale is fractional (pixels per design unit),
+so one layout works at 1280x720, 1920x1080 and 4K.

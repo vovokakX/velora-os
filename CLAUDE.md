@@ -52,9 +52,27 @@ CI вместе с прошивкой, у установленной систе�
 пропустить и отметить в плане, частичное — доделать, отсутствующее —
 добавить. После каждого этапа обновлять этот файл.
 
-Что уже есть для этапов 14–16 (проверено перед этапом 11). Внешних
-crate в проекте нет (D42): новые сторонние библиотеки не добавлять без
-вопроса пользователю.
+Что уже есть для этапов 14–16 (проверено перед этапом 11). Внешние
+crate — только fontdue и его зависимости для `velora-ui` (D47, с согласия
+владельца): новые сторонние библиотеки не добавлять без вопроса
+пользователю.
+
+После v0.16.0 (ветка `term-graphics`): консоль показывает изображения по
+протоколу Kitty (D46, crate `kernel/gfx`), `velofetch` рисует логотип из
+`assets/velora-logo.png` картинкой, без графики — ASCII. Тест `boot` делает
+снимок экрана (`screendump`), ищет на нём логотип и сохраняет
+`build/logs/velofetch.png`.
+
+Графическая основа (ветка `ui-foundation`, D47): `libc/ui` (`velora-ui`) —
+рисование со сглаживанием, текст Inter через fontdue, элементы с мышью и
+клавиатурой, темы; ядро даёт экран одной программе (`display`, номер 50),
+`/dev/keyboard`, мышь PS/2, модель диска (`diskinfo`, 51). Шрифты
+скачивает `tools/fetch-fonts.sh` (в `build/fonts`, нужны и тестам на
+хосте). `/bin/uidemo` — галерея элементов, её проверяет тест `boot`.
+Внешний вид экранов можно смотреть без QEMU:
+`cargo run -p velora-ui --example render -- build/ui-preview` (PPM).
+Дальше по плану: экран выбора режима, графический установщик по
+`docs/design/installer-concept.png`.
 
 Известные ограничения, которые стоит закрыть в первую очередь (подробно —
 в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
@@ -70,7 +88,7 @@ Live-образа по умолчанию `velora`. Тесты QEMU: `ktest` (д
 ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-накопителя
 на xHCI, без HPET, `reboot`), `install` (установка, загрузка с диска, сохранение
 файлов). ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D45. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
+(`velora-fsck --cat`). Решения D1–D47. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
 Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
 приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
@@ -170,8 +188,9 @@ cp "/c/Program Files/qemu/share/edk2-i386-vars.fd" build/run-vars.fd
   входит в vlibc, тоже LGPL-3.0-or-later: `kernel/abi` (velora-abi) и
   `kernel/mm` (velora-mm). LGPL совместима с GPL, поэтому ядро, которое их
   использует, остаётся под GPL.
-- Сторонние компоненты: только Limine (BSD-2, скачивается при сборке с проверкой
-  SHA-256) и шрифт Spleen (BSD-2). Список — `docs/third-party.md`, тексты
+- Сторонние компоненты: Limine (BSD-2, скачивается при сборке с проверкой
+  SHA-256), шрифт Spleen (BSD-2), шрифт Inter (OFL 1.1, скачивается при сборке
+  с проверкой SHA-256) и crate fontdue с зависимостями (MIT/Zlib, D47). Список — `docs/third-party.md`, тексты
   лицензий — `docs/licenses/` и `/licenses` в ISO. Новый сторонний код
   добавляется только с совместимой лицензией и записью в этих местах.
 - В репозиторий не попадают ключи, пароли, собранные образы и прочие бинарные
@@ -244,7 +263,8 @@ cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -
 ```
 boot/        конфигурация Limine
 kernel/      ядро (arch, boot, console, mm, sched, syscall, drivers, exec, ...)
-kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net   библиотеки ядра с тестами на хосте
+kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net, kernel/gfx   библиотеки ядра с тестами на хосте
+assets/      логотип Velora (velofetch встраивает его при сборке), указатели мыши (assets/cursors)
 kernel/src/fs  VFS в ядре: монтирование, tarfs, devfs, каналы, дескрипторы
 drivers/     аппаратно-независимые части драйверов (input, pci, rtc, usb)
 fs/          vfs (интерфейс, монтирование, MemFs, conformance), velorafs,
@@ -254,11 +274,12 @@ libc/auth    SHA-256, PBKDF2, /etc/passwd и /etc/shadow (тесты на хос
 libc/shell   язык vsh и редактор строки (тесты на хосте)
 libc/editor  логика редактора Plume: клавиши, буфер, команды, кадры (тесты на хосте)
 libc/dns     запросы и ответы DNS (LGPL, входит в vlibc), libc/http — URL и HTTP для fetch
-userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest), свои флаги сборки
-tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen
+libc/ui      velora-ui: графика, шрифты, элементы, ввод (тесты на хосте; screen — feature velora)
+userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo), свои флаги сборки
+tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fetch-fonts.sh
 installer/   velora-setup (собирается в workspace userland)
 tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D45),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D47),
              план, сторонние компоненты, заметки к релизам
 ```
 

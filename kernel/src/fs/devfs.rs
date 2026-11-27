@@ -1,5 +1,6 @@
 //! /dev: null, zero, console, kmsg (the kernel log), mouse (4-byte
-//! packets: buttons, dx, dy, wheel; reads do not wait) and one node per
+//! packets: buttons, dx, dy, wheel; reads do not wait), keyboard (8-byte
+//! key packets, `velora_abi::key`; reads do not wait) and one node per
 //! disk.
 //!
 //! Disks are read and written at byte offsets that are multiples of the
@@ -18,6 +19,7 @@ const ZERO: Ino = 3;
 pub const CONSOLE_INO: Ino = 4;
 const KMSG: Ino = 5;
 const MOUSE: Ino = 6;
+const KEYBOARD: Ino = 7;
 const FIRST_DISK: Ino = 16;
 
 pub struct DevFs {
@@ -39,6 +41,7 @@ impl DevFs {
             (String::from("console"), CONSOLE_INO, Kind::CharDevice),
             (String::from("kmsg"), KMSG, Kind::File),
             (String::from("mouse"), MOUSE, Kind::CharDevice),
+            (String::from("keyboard"), KEYBOARD, Kind::CharDevice),
         ];
         for (i, d) in self.disks.iter().enumerate() {
             v.push((
@@ -88,7 +91,7 @@ impl FileSystem for DevFs {
             ROOT => (Kind::Dir, 0o755, 0),
             NULL | ZERO | CONSOLE_INO => (Kind::CharDevice, 0o666, 0),
             KMSG => (Kind::File, 0o444, crate::console::klog::len() as u64),
-            MOUSE => (Kind::CharDevice, 0o444, 0),
+            MOUSE | KEYBOARD => (Kind::CharDevice, 0o444, 0),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 (Kind::BlockDevice, 0o600, d.size_bytes())
@@ -156,6 +159,18 @@ impl FileSystem for DevFs {
                 }
                 Ok(n)
             }
+            KEYBOARD => {
+                const P: usize = velora_abi::key::PACKET;
+                let mut n = 0;
+                while n + P <= buf.len() {
+                    let Some(ev) = crate::input::pop() else {
+                        break;
+                    };
+                    buf[n..n + P].copy_from_slice(&crate::input::key_packet(&ev));
+                    n += P;
+                }
+                Ok(n)
+            }
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, buf.len())?;
@@ -171,7 +186,7 @@ impl FileSystem for DevFs {
         match ino {
             ROOT => Err(FsError::IsDir),
             NULL | ZERO => Ok(data.len()),
-            CONSOLE_INO | KMSG | MOUSE => Err(FsError::Unsupported),
+            CONSOLE_INO | KMSG | MOUSE | KEYBOARD => Err(FsError::Unsupported),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, data.len())?;

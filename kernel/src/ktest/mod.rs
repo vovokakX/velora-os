@@ -43,6 +43,10 @@ static TESTS: &[Test] = tests![
     text_console_scale_reverse_and_cursor,
     ansi_sgr_colours,
     ansi_cursor_position,
+    text_console_kitty_graphics,
+    text_console_answers_queries,
+    hidden_console_keeps_drawing_in_ram,
+    key_events_become_packets,
     gdt_and_tss_loaded,
     idt_loaded,
     breakpoint_resumes,
@@ -376,6 +380,138 @@ fn ansi_cursor_position() {
     assert_eq!((c.row, c.col), (0, 0));
     c.write_str("\x1b[9;9H"); // clamped to the screen
     assert_eq!((c.row, c.col), (2, 3));
+}
+
+/// Kitty graphics on the 4x3-cell test screen (cells of 8x16 pixels).
+fn text_console_kitty_graphics() {
+    use velora_gfx::kitty::transmit;
+    let mut c = test_console();
+    // 2x2 RGB (red, green / blue, white) stretched over 2x1 cells.
+    let rgb = [255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255];
+    c.write_str(&transmit("a=T,f=24,s=2,v=2,c=2,r=1,i=7", &rgb));
+    assert_eq!(c.take_replies(), b"\x1b_Gi=7;OK\x1b\\");
+    let px = |c: &TextConsole, x, y| {
+        c.framebuffer()
+            .rgb(c.framebuffer().get_native(x, y).unwrap())
+    };
+    assert_eq!(px(&c, 0, 0), 0xff0000);
+    assert_eq!(px(&c, 15, 7), 0x00ff00);
+    assert_eq!(px(&c, 0, 8), 0x0000ff);
+    assert_eq!(px(&c, 15, 15), 0xffffff);
+    // The cursor moved past the image, on its last row.
+    assert_eq!((c.row, c.col), (0, 2));
+
+    // Transparent and half-transparent pixels, cursor kept (C=1), no
+    // id: no answer.
+    c.write_str(&transmit("a=T,f=32,s=1,v=1,C=1", &[255, 255, 255, 0]));
+    assert_eq!(px(&c, 16, 0), text::DEFAULT_BG);
+    c.write_str(&transmit(
+        "a=T,f=32,s=1,v=1,c=1,r=1,C=1",
+        &[255, 255, 255, 128],
+    ));
+    let half = velora_gfx::image::blend([128, 128, 128, 128], text::DEFAULT_BG);
+    assert_eq!(px(&c, 16, 0), half);
+    assert_eq!(px(&c, 23, 13), half); // rows 14-15: the cursor
+    assert_eq!((c.row, c.col), (0, 2));
+    assert!(c.take_replies().is_empty());
+
+    // Store, then show by id; unknown ids and PNG data are refused.
+    c.write_str(&transmit("a=t,f=24,s=1,v=1,i=9", &[1, 2, 3]));
+    assert_eq!(c.take_replies(), b"\x1b_Gi=9;OK\x1b\\");
+    c.write_str("\x1b[2;1H\x1b_Ga=p,i=9,c=1,r=1\x1b\\");
+    assert_eq!(px(&c, 0, 16), 0x010203);
+    assert_eq!(px(&c, 7, 31), 0x010203);
+    assert_eq!((c.row, c.col), (1, 1));
+    assert_eq!(c.take_replies(), b"\x1b_Gi=9;OK\x1b\\");
+    c.write_str("\x1b_Ga=p,i=99\x1b\\\x1b_Ga=T,f=100,i=5;AAAA\x1b\\");
+    let r = c.take_replies();
+    assert!(r.starts_with(b"\x1b_Gi=99;ENOENT:"), "no ENOENT answer");
+    assert!(
+        r.windows(14).any(|w| w == b"\x1b_Gi=5;EINVAL:"),
+        "no EINVAL answer"
+    );
+
+    // On the last row, a two-row image scrolls the screen by one row.
+    c.write_str("\x1b[3;1H");
+    c.write_str(&transmit("a=T,f=24,s=1,v=1,c=1,r=2,C=1", &[200, 0, 0]));
+    assert_eq!((c.row, c.col), (1, 0));
+    assert_eq!(px(&c, 0, 16), 0xc80000);
+    assert_eq!(px(&c, 0, 47), 0xc80000);
+    // The old row 1 (the stored image) moved up to row 0.
+    assert_eq!(px(&c, 0, 0), 0x010203);
+
+    // An APC string cut short by another escape sequence is dropped and
+    // the sequence still works; text after an image is drawn normally.
+    c.write_str("\x1b_Gi=3,a=q;AA\x1b[31m");
+    assert_eq!(c.fg, text::PALETTE[1]);
+    assert!(c.take_replies().is_empty());
+    c.write_str("\x1b[0mAB");
+    assert_eq!((c.row, c.col), (1, 2));
+}
+
+/// Device attributes and size queries, as programs use them to detect
+/// graphics support and the cell size.
+/// While a graphical program owns the screen, console text changes only
+/// the RAM copy; showing the console again puts it on the screen.
+fn hidden_console_keeps_drawing_in_ram() {
+    let mut c = test_console();
+    c.framebuffer_mut().enable_back_buffer();
+    let screen_px = |x: usize, y: usize| {
+        // SAFETY: tests run one at a time; inside the static buffer.
+        unsafe { TEST_FB.get().cast::<u32>().add(y * TW + x).read_volatile() }
+    };
+    c.framebuffer_mut().fill_rect(0, 0, TW, TH, 0x000000);
+    assert_eq!(screen_px(5, 5), 0);
+    assert!(c.framebuffer_mut().set_hidden(true));
+    c.framebuffer_mut().fill_rect(0, 0, TW, TH, 0x123456);
+    c.write_str("\n\n\n\nscroll");
+    assert_eq!(screen_px(5, 5), 0, "hidden console wrote to the screen");
+    assert!(c.framebuffer_mut().set_hidden(false));
+    assert_ne!(screen_px(5, 5), 0, "the console did not come back");
+    assert_eq!(
+        screen_px(TW - 1, 0),
+        c.framebuffer().get_native(TW - 1, 0).unwrap()
+    );
+}
+
+fn key_events_become_packets() {
+    use velora_abi::key;
+    use velora_input::{KeyCode, KeyEvent, Layout, Modifiers};
+    let ev = |k, ch, shift| KeyEvent {
+        key: k,
+        pressed: true,
+        ch,
+        mods: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        layout: Layout::Russian,
+    };
+    let p = crate::input::key_packet(&ev(KeyCode::Tab, Some('\t'), true));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::TAB);
+    assert_eq!(p[2], key::PRESSED | key::SHIFT);
+    assert_eq!(&p[4..], &[0, 0, 0, 0]);
+    let p = crate::input::key_packet(&ev(KeyCode::Q, Some('й'), false));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::CHAR);
+    assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 'й' as u32);
+    let p = crate::input::key_packet(&ev(KeyCode::Left, None, false));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::LEFT);
+}
+
+fn text_console_answers_queries() {
+    let mut c = test_console();
+    c.write_str(velora_gfx::kitty::QUERY);
+    let r = c.take_replies();
+    assert_eq!(
+        velora_gfx::kitty::support(&r),
+        velora_gfx::kitty::Support::Yes
+    );
+    c.write_str("\x1b[16t\x1b[14t\x1b[18t");
+    assert_eq!(c.take_replies(), b"\x1b[6;16;8t\x1b[4;48;32t\x1b[8;3;4t");
+    // Secondary attributes are not answered and leave no text behind.
+    c.write_str("\x1b[>c");
+    assert!(c.take_replies().is_empty());
+    assert_eq!((c.row, c.col), (0, 0));
 }
 
 fn gdt_and_tss_loaded() {

@@ -99,6 +99,10 @@ pub mod nr {
     pub const PING: u64 = 48;
     /// shutdown(fd) -> 0: ends the sending side of a TCP connection
     pub const SHUTDOWN: u64 = 49;
+    /// display(op, arg): the screen for graphical programs (see `display`)
+    pub const DISPLAY: u64 = 50;
+    /// diskinfo(path, path_len, out: *mut DiskInfo) -> 0
+    pub const DISKINFO: u64 = 51;
 }
 
 /// Error numbers (returned negated).
@@ -124,6 +128,7 @@ pub mod errno {
     pub const EINVAL: i64 = 22;
     pub const EMFILE: i64 = 24;
     pub const EFBIG: i64 = 27;
+    pub const ENODEV: i64 = 19;
     pub const ENOSPC: i64 = 28;
     pub const ESPIPE: i64 = 29;
     pub const EROFS: i64 = 30;
@@ -244,12 +249,96 @@ pub mod tty {
     pub const SET_FOREGROUND: u64 = 1;
     /// Returns columns << 32 | rows.
     pub const SIZE: u64 = 2;
+    /// Returns the character cell size in pixels, width << 32 | height
+    /// (`ENODEV` without a screen: the console is the serial port only).
+    pub const CELL_SIZE: u64 = 3;
     /// Mode bit: deliver every key at once, without echo or line editing.
     /// Special keys arrive as ANSI sequences (arrows `ESC [ A`..`D`, Home
     /// `ESC [ H`, End `ESC [ F`, Delete `ESC [ 3 ~`), Backspace as 0x7f.
     pub const RAW: u64 = 1;
     /// Mode bit (line mode): do not echo typed characters (passwords).
     pub const NO_ECHO: u64 = 2;
+}
+
+/// `display` operations. One process at a time owns the screen; while it
+/// does, the text console stops drawing (its text is kept and shown again
+/// when the owner releases the screen or exits).
+pub mod display {
+    /// Writes `DisplayInfo` to `arg`; `ENODEV` without a frame buffer.
+    pub const INFO: u64 = 0;
+    /// Maps the frame buffer into the caller and takes the screen; returns
+    /// the address. `EBUSY` if another process owns it.
+    pub const MAP: u64 = 1;
+    /// Unmaps the frame buffer and gives the screen back to the console.
+    pub const RELEASE: u64 = 2;
+}
+
+/// The frame buffer, as `display(INFO)` writes it. Pixels are 32 bits;
+/// a colour channel is at bits `shift .. shift + 8`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DisplayInfo {
+    pub width: u32,
+    pub height: u32,
+    /// Bytes per row.
+    pub pitch: u32,
+    pub bits_per_pixel: u32,
+    pub red_shift: u8,
+    pub green_shift: u8,
+    pub blue_shift: u8,
+    pub _pad: [u8; 5],
+}
+
+/// What `diskinfo` writes about a block device.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskInfo {
+    pub size_bytes: u64,
+    pub sector_size: u32,
+    /// `disk_kind` value.
+    pub kind: u32,
+    /// Model name in UTF-8, NUL-padded.
+    pub model: [u8; 48],
+}
+
+pub mod disk_kind {
+    pub const OTHER: u32 = 0;
+    pub const VIRTIO: u32 = 1;
+    pub const SATA: u32 = 2;
+    pub const NVME: u32 = 3;
+    pub const USB: u32 = 4;
+    pub const PARTITION: u32 = 5;
+}
+
+/// `/dev/keyboard`: key presses and releases as 8-byte packets, for
+/// graphical programs. Reads do not wait: 0 bytes means no event. Only
+/// keys read there are taken from the console.
+pub mod key {
+    /// Packet: `code: u16`, `flags: u8`, reserved `u8`, `ch: u32` (the
+    /// character the press typed, 0 for none), little-endian.
+    pub const PACKET: usize = 8;
+    pub const PRESSED: u8 = 1;
+    pub const SHIFT: u8 = 2;
+    pub const CTRL: u8 = 4;
+    pub const ALT: u8 = 8;
+
+    pub const OTHER: u16 = 0;
+    pub const ESCAPE: u16 = 1;
+    pub const TAB: u16 = 2;
+    pub const ENTER: u16 = 3;
+    pub const BACKSPACE: u16 = 4;
+    pub const DELETE: u16 = 5;
+    pub const LEFT: u16 = 6;
+    pub const RIGHT: u16 = 7;
+    pub const UP: u16 = 8;
+    pub const DOWN: u16 = 9;
+    pub const HOME: u16 = 10;
+    pub const END: u16 = 11;
+    pub const PAGE_UP: u16 = 12;
+    pub const PAGE_DOWN: u16 = 13;
+    pub const SPACE: u16 = 14;
+    /// A key that types a character (see `ch`).
+    pub const CHAR: u16 = 15;
 }
 
 /// System information written by `sysinfo`.
@@ -424,6 +513,8 @@ mod tests {
         assert_eq!(core::mem::size_of::<ProcEntry>(), 72);
         assert_eq!(core::mem::size_of::<NetInfo>(), 48);
         assert_eq!(core::mem::size_of::<SockAddr>(), 8);
+        assert_eq!(core::mem::size_of::<DisplayInfo>(), 24);
+        assert_eq!(core::mem::size_of::<DiskInfo>(), 64);
     }
 
     #[test]
@@ -477,6 +568,8 @@ mod tests {
             nr::NETINFO,
             nr::PING,
             nr::SHUTDOWN,
+            nr::DISPLAY,
+            nr::DISKINFO,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "duplicate syscall number {a}");

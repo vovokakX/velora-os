@@ -13,6 +13,8 @@ fi
 PY=python3
 command -v "$PY" >/dev/null 2>&1 && "$PY" -c "" 2>/dev/null || PY=python
 
+./tools/fetch-fonts.sh
+
 echo "==> host unit tests"
 cargo test --workspace --exclude velora-kernel
 

@@ -65,6 +65,13 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::NETINFO => socket::netinfo(a0),
         nr::PING => socket::ping(a0, a1, a2),
         nr::SHUTDOWN => socket::shutdown(a0),
+        nr::DISPLAY => match a0 {
+            velora_abi::display::INFO => crate::display::info(a1),
+            velora_abi::display::MAP => crate::display::map(),
+            velora_abi::display::RELEASE => crate::display::release(),
+            _ => -errno::EINVAL,
+        },
+        nr::DISKINFO => diskinfo(a0, a1, a2),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -213,6 +220,46 @@ fn wait(pid: u64, status_ptr: u64) -> i64 {
         return -errno::EFAULT;
     }
     pid as i64
+}
+
+/// Size, kind and model of a disk or partition (`/dev/NAME`).
+fn diskinfo(path: u64, len: u64, out: u64) -> i64 {
+    let path = match files::user_path(path, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let Some(d) = path
+        .strip_prefix("/dev/")
+        .and_then(crate::drivers::block::find)
+    else {
+        return -errno::ENODEV;
+    };
+    let mut info = velora_abi::DiskInfo {
+        size_bytes: d.size_bytes(),
+        sector_size: d.sector_size() as u32,
+        kind: d.kind(),
+        model: [0; 48],
+    };
+    let model = d.model();
+    let model = model.trim();
+    // Cut at a character boundary.
+    let mut n = model.len().min(48);
+    while !model.is_char_boundary(n) {
+        n -= 1;
+    }
+    info.model[..n].copy_from_slice(&model.as_bytes()[..n]);
+    // SAFETY: DiskInfo is plain data with no padding.
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            (&info as *const velora_abi::DiskInfo).cast::<u8>(),
+            core::mem::size_of::<velora_abi::DiskInfo>(),
+        )
+    };
+    if uaccess::write(out, bytes) {
+        0
+    } else {
+        -errno::EFAULT
+    }
 }
 
 /// Anonymous memory. Pages are zero-filled; W+X and PROT_NONE are refused.

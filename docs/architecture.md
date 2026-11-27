@@ -525,3 +525,83 @@ the `usb` thread reads keyboard and mouse reports every tick. A flash drive is
 block device `usbN`; its partitions (`usbNp1`) and FAT32 are mounted like any
 disk's, and a Velora EFI partition keeps the panic log. The mouse is
 `/dev/mouse` (4-byte packets).
+
+### Изображения в терминале / Images in the terminal
+
+- `kernel/gfx` (`velora-gfx`, тесты на хосте): протокол Kitty (разбор
+  команд по байту, склейка частей `m=1`, ответы, запрос поддержки, фильтр
+  строк APC), base64, изображения RGBA с предумноженной альфой,
+  масштабирование усреднением по площади, декодер PNG и inflate для
+  программ.
+- `kernel/src/console/text.rs`: состояние APC в разборе escape-
+  последовательностей; изображение рисуется в ячейках у курсора, экран
+  прокручивается, если оно не помещается; ответы на запросы копятся и
+  через `tty::write` становятся вводом программы. COM1 и `dmesg` получают
+  текст без изображений (D46).
+- `velofetch` проверяет, что ввод и вывод — консоль, есть экран
+  (`tty(3)`) и терминал отвечает на запрос, и тогда показывает
+  `assets/velora-logo.png`: фон картинки становится прозрачным и
+  обрезается, знак занимает высоту сводки (13 строк вместе с палитрой
+  цветов). Иначе — ASCII-логотип
+  (также `velofetch --ascii` и вывод в канал).
+
+`kernel/gfx` (`velora-gfx`, host-tested) has the Kitty protocol (byte-by-byte
+command parsing, joining `m=1` chunks, answers, the support query, an APC
+filter), base64, premultiplied RGBA images, area-average scaling, and a PNG
+decoder with inflate for programs. `kernel/src/console/text.rs` has an APC
+state in its escape parser; an image is drawn in cells at the cursor, and the
+screen scrolls first if it does not fit; answers to queries are collected and
+become program input through `tty::write`. COM1 and `dmesg` get the text
+without images (D46). `velofetch` checks that input and output are the
+console, there is a screen (`tty(3)`) and the terminal answers the query, and
+then shows `assets/velora-logo.png`: the picture's background is made
+transparent and cut away, and the mark takes the height of the summary (13
+rows with the colour palette). Otherwise it prints the ASCII logo (also with
+`velofetch --ascii` and into a pipe).
+
+### Графическая основа velora-ui / Graphical toolkit velora-ui
+
+- `libc/ui` (`velora-ui`, тесты на хосте): холст с альфа-смешиванием,
+  скруглённые прямоугольники, круги, дуги, линии и мягкие тени через
+  функции расстояния в фиксированной точке (1/256 пикселя, без плавающей
+  точки), градиенты с упорядоченным дизерингом; текст Inter через fontdue с
+  кешем глифов; значки из примитивов; картинки PNG (`velora-gfx`); указатели
+  мыши из `assets/cursors`; темы (графитовая и светлая), фон с волнами и
+  окна (`decor`). Элементы в немедленном режиме (`Ui`, `Ctx`): кнопка,
+  переключатель, радиокнопки, выпадающий список, список выбора, поле ввода,
+  полоса и кольцо прогресса. Фокус — Tab/Shift+Tab по порядку рисования,
+  Enter/Пробел, стрелки, Escape. Клавиши подаются по одной на кадр.
+- Модуль `screen` (feature `velora`): `display` отображает framebuffer,
+  программа рисует в холст (двойная буферизация) и копирует изменённую
+  часть; указатель мыши рисуется только при копировании. Ввод —
+  `/dev/keyboard` и `/dev/mouse`.
+- Ядро: `display.rs` (владелец экрана, отображение с write-combining,
+  возврат экрана консоли после выхода владельца); консоль в это время
+  рисует только в копию в памяти. Мышь PS/2 на втором порту 8042 (с
+  колесом), разбор пакетов — `velora-input::ps2mouse`.
+- `/bin/uidemo` показывает все элементы; тест `boot` запускает его, снимает
+  экран (`build/logs/uidemo-*.png`), нажимает клавиши, двигает мышь и
+  проверяет, что консоль вернулась. `cargo run -p velora-ui --example render`
+  рисует ту же галерею на хосте.
+
+`libc/ui` (`velora-ui`, host-tested) has a canvas with alpha blending; rounded
+rectangles, circles, arcs, lines and soft shadows from fixed-point distance
+functions (1/256 pixel, no floating point); gradients with ordered dithering;
+Inter text through fontdue with a glyph cache; icons built from primitives;
+PNG pictures (`velora-gfx`); mouse pointers from `assets/cursors`; themes
+(graphite and light), the wavy backdrop and windows (`decor`). Widgets are
+immediate-mode (`Ui`, `Ctx`): button, switch, radio buttons, drop-down list,
+choice list, text field, progress bar and ring. Focus moves with Tab/Shift+Tab
+in drawing order; Enter/Space, arrows and Escape work; keys are fed one per
+frame. The `screen` module (feature `velora`) maps the frame buffer with
+`display`; the program draws into the canvas (double buffering) and copies the
+changed part; the mouse pointer is drawn only on the way to the screen. Input
+comes from `/dev/keyboard` and `/dev/mouse`. In the kernel, `display.rs` keeps
+the screen's owner, maps the frame buffer write-combining and gives the screen
+back to the console after the owner exits; meanwhile the console draws only
+into its RAM copy. A PS/2 mouse on the 8042's second port (with a wheel) is
+supported; packets are decoded by `velora-input::ps2mouse`. `/bin/uidemo`
+shows every widget; the `boot` test runs it, takes screenshots
+(`build/logs/uidemo-*.png`), presses keys, moves the mouse and checks that the
+console comes back. `cargo run -p velora-ui --example render` draws the same
+gallery on the host.

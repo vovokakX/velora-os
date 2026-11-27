@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod display;
 pub mod env;
 pub mod fs;
 pub mod heap;
@@ -64,6 +65,7 @@ impl Errno {
             EINVAL => "EINVAL",
             EMFILE => "EMFILE",
             EFBIG => "EFBIG",
+            ENODEV => "ENODEV",
             ENOSPC => "ENOSPC",
             ESPIPE => "ESPIPE",
             EROFS => "EROFS",

@@ -16,3 +16,4 @@ bench = false
 vlibc = { path = "../../libc/vlibc" }
 velora-auth = { path = "../../libc/auth" }
 velora-http = { path = "../../libc/http" }
+velora-gfx = { path = "../../kernel/gfx" }
