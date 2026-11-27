@@ -17,6 +17,9 @@ pub enum Icon {
     Sun,
     Refresh,
     Picture,
+    Warning,
+    User,
+    Lock,
 }
 
 /// Point (u, v) of a 24-unit icon grid, in 1/256 pixel.
@@ -172,6 +175,33 @@ pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: Color,
             let tip = crate::canvas::point_on_circle(cx, cy, r, 12000);
             line(c, tip, (tip.0 - g.len(5), tip.1 - g.len(1)));
             line(c, tip, (tip.0 + g.len(1), tip.1 - g.len(5)));
+        }
+        Icon::Warning => {
+            let pts = [g.p(12, 3), g.p(22, 20), g.p(2, 20)];
+            for i in 0..3 {
+                line(c, pts[i], pts[(i + 1) % 3]);
+            }
+            line(c, g.p(12, 9), g.p(12, 14));
+            let (dx, dy) = g.p(12, 17);
+            c.fill_circle_fx(dx, dy, w * 7 / 10, color);
+        }
+        Icon::User => {
+            let (cx, cy) = g.p(12, 8);
+            c.stroke_circle_fx(cx, cy, g.len(4), w, color);
+            let (bx, by) = g.p(12, 22);
+            c.arc_fx(bx, by, g.len(8), w, 49152, 32768, true, color);
+        }
+        Icon::Lock => {
+            let (x0, y0) = g.p(5, 11);
+            let (x1, y1) = g.p(19, 21);
+            line(c, (x0, y0), (x1, y0));
+            line(c, (x1, y0), (x1, y1));
+            line(c, (x1, y1), (x0, y1));
+            line(c, (x0, y1), (x0, y0));
+            let (cx, cy) = g.p(12, 10);
+            c.arc_fx(cx, cy, g.len(4), w, 49152, 32768, false, color);
+            line(c, g.p(8, 10), g.p(8, 11));
+            line(c, g.p(16, 10), g.p(16, 11));
         }
         Icon::Picture => {
             let pts = [
