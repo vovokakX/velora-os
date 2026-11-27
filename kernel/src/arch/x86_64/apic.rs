@@ -184,6 +184,12 @@ pub fn send_nmi_to_others() {
     send_icr(0, ICR_NMI | ICR_ASSERT | ICR_ALL_BUT_SELF);
 }
 
+/// Sets the task priority: interrupts of priority class `class` (vector
+/// / 16) and below are held back.
+pub fn set_task_priority(class: u8) {
+    write(REG_TPR, (class as u32) << 4);
+}
+
 #[inline]
 pub fn eoi() {
     write(REG_EOI, 0);

@@ -24,7 +24,15 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 pub use percpu::MAX_CPUS;
 
 /// Interrupt that makes a CPU look at its run queue again.
-pub const VECTOR_RESCHEDULE: u8 = 0xf0;
+pub const VECTOR_RESCHEDULE: u8 = 0xe0;
+/// Wakes CPUs that sleep while they wait for the big kernel lock. It is
+/// the only vector above the priority they sleep with, and it is handled
+/// without the lock.
+pub const VECTOR_BKL_WAKE: u8 = 0xf1;
+/// Priority class a waiting CPU sleeps with: 0xE0 and below are held.
+const WAIT_PRIORITY_CLASS: u8 = 0xe;
+/// Spins before a waiting CPU sleeps.
+const SPINS_BEFORE_SLEEP: u32 = 2000;
 
 // --- the big kernel lock ------------------------------------------------------
 //
@@ -153,6 +161,8 @@ pub use trace::answer_where;
 static OWNER: AtomicU64 = AtomicU64::new(NO_OWNER);
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(0);
 static SERVING: AtomicU64 = AtomicU64::new(0);
+/// CPUs sleeping in `bkl_enter` (bit per CPU index).
+static SLEEPERS: AtomicU64 = AtomicU64::new(0);
 
 /// Takes the big kernel lock (or nests deeper if this CPU holds it).
 /// Interrupts must be disabled.
@@ -172,8 +182,27 @@ pub fn bkl_enter() {
     trace::WAITING[pc.index as usize].store(ticket, Ordering::Relaxed);
     #[cfg(feature = "ktest")]
     let start = cpu::rdtsc();
+    let mut spins = 0u32;
     while SERVING.load(Ordering::Acquire) != ticket {
         core::hint::spin_loop();
+        spins += 1;
+        // A long wait (the owner polls a disk, say): sleep instead of
+        // spinning, so the CPU (and, in a virtual machine, the host's
+        // processor) is free. `unlock` wakes sleepers with an IPI.
+        if spins >= SPINS_BEFORE_SLEEP && pc.index < 64 && online() > 1 {
+            spins = 0;
+            let bit = 1u64 << pc.index;
+            SLEEPERS.fetch_or(bit, Ordering::SeqCst);
+            if SERVING.load(Ordering::SeqCst) != ticket {
+                apic::set_task_priority(WAIT_PRIORITY_CLASS);
+                // `sti; hlt` is atomic: a wake-up IPI sent after the check
+                // above still ends the halt.
+                cpu::enable_interrupts_and_halt();
+                cpu::disable_interrupts();
+                apic::set_task_priority(0);
+            }
+            SLEEPERS.fetch_and(!bit, Ordering::SeqCst);
+        }
         #[cfg(feature = "ktest")]
         if crate::time::tsc_hz() > 0 && cpu::rdtsc() - start > 30 * crate::time::tsc_hz() {
             trace::dump();
@@ -187,7 +216,17 @@ pub fn bkl_enter() {
 
 fn unlock() {
     OWNER.store(NO_OWNER, Ordering::Relaxed);
-    SERVING.fetch_add(1, Ordering::Release);
+    SERVING.fetch_add(1, Ordering::SeqCst);
+    let sleepers = SLEEPERS.load(Ordering::SeqCst);
+    if sleepers != 0 {
+        for i in 0..64 {
+            if sleepers & (1 << i) != 0
+                && let Some(id) = apic_id(i)
+            {
+                apic::send_ipi(id, VECTOR_BKL_WAKE);
+            }
+        }
+    }
 }
 
 /// Mismatched `bkl_exit` calls seen (should stay 0; checked by a test).

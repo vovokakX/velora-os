@@ -91,7 +91,8 @@
 | 0x20 | таймер локального APIC, 100 Гц |
 | 0x21 | клавиатура (ISA IRQ 1 через IOAPIC) |
 | 0x22 | SCI — события ACPI (с этапа 13) |
-| 0xf0 | перепланирование — межпроцессорное прерывание (с этапа 14) |
+| 0xe0 | перепланирование — межпроцессорное прерывание (с этапа 14) |
+| 0xf1 | пробуждение процессора, ждущего большую блокировку ядра (с этапа 14) |
 | 0x30–0x6f | прерывания устройств (с этапа 6) |
 | 0x70–0x7f | ложные прерывания от замаскированных 8259 (игнорируются) |
 | 0xfe | ошибка APIC |
@@ -267,7 +268,11 @@
 - Планировщик: общая очередь, у каждого процессора свои текущий поток,
   поток простоя и квант. Все потоки процесса работают на одном процессоре,
   выбранном при запуске (наименее загруженном); потоки ядра — на любом.
-  Пробуждение потока будит нужный процессор прерыванием 0xF0.
+  Пробуждение потока будит нужный процессор прерыванием 0xE0.
+  Процессор, который долго ждёт блокировку, не крутится в цикле, а
+  останавливается (`hlt`) с повышенным приоритетом APIC; при освобождении
+  его будит прерывание 0xF1. В виртуальной машине крутящиеся процессоры
+  отнимали время хоста у эмулируемых устройств.
 - Сброс TLB на других процессорах не нужен: память процесса бывает в TLB
   только его процессора, а страницы ядра после снятия не переиспользуются
   с другим содержимым (стеки ядра кешируются отображёнными).
@@ -489,7 +494,7 @@ interrupts enabled (a point where the kernel may be preempted anyway) the lock
 is handed to waiting CPUs (D43). The scheduler keeps one queue; every CPU has
 its own current thread, idle thread and time slice. All threads of a process
 run on one CPU chosen at start (the least loaded); kernel threads run on any.
-Waking a thread interrupts the right CPU with vector 0xF0. No cross-CPU TLB
+Waking a thread interrupts the right CPU with vector 0xE0. A CPU that waits long for the lock halts with its APIC priority raised and is woken by vector 0xF1 when the lock is released, so waiting CPUs do not spin (in a virtual machine a spinning CPU takes host time from the emulated devices). No cross-CPU TLB
 shootdown is needed: a process's memory is only in its CPU's TLB, and kernel
 pages are never remapped to other contents after use (kernel stacks are cached
 mapped). A panic or a fatal exception stops the other CPUs with an NMI.

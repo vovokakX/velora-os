@@ -247,6 +247,17 @@ extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
         super::exceptions::handle(frame);
         return;
     }
+    // Wake-up of a CPU sleeping for the big kernel lock, APIC error and
+    // spurious interrupts: handled without the lock (a sleeping waiter
+    // may get them).
+    match frame.vector as u8 {
+        crate::smp::VECTOR_BKL_WAKE | super::apic::VECTOR_ERROR => {
+            super::apic::eoi();
+            return;
+        }
+        super::apic::VECTOR_SPURIOUS => return,
+        _ => {}
+    }
     #[cfg(feature = "ktest")]
     if frame.vector == 0x20 && super::percpu::index() == 0 {
         crate::ktest::watchdog();
