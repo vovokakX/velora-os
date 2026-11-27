@@ -16,8 +16,4 @@ bench = false
 
 [dependencies]
 vlibc = { path = "../../libc/vlibc" }
-velora-auth = { path = "../../libc/auth" }
-velora-vfs = { path = "../../fs/vfs" }
-velora-gpt = { path = "../../fs/gpt" }
-velora-fat = { path = "../../fs/fat" }
-velorafs = { path = "../../fs/velorafs" }
+velora-install = { path = "../core", features = ["velora"] }
