@@ -146,11 +146,7 @@ name = "velora-http"
 version = "0.16.0"
 
 [[package]]
-name = "velora-mm"
-version = "0.16.0"
-
-[[package]]
-name = "velora-setup"
+name = "velora-install"
 version = "0.16.0"
 dependencies = [
  "velora-auth",
@@ -162,8 +158,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "velora-installer-gui"
+version = "0.16.0"
+dependencies = [
+ "velora-install",
+ "velora-ui",
+]
+
+[[package]]
+name = "velora-mm"
+version = "0.16.0"
+
+[[package]]
+name = "velora-setup"
+version = "0.16.0"
+dependencies = [
+ "velora-install",
+ "vlibc",
+]
+
+[[package]]
 name = "velora-shell"
 version = "0.16.0"
+
+[[package]]
+name = "velora-start"
+version = "0.16.0"
+dependencies = [
+ "velora-install",
+ "velora-installer-gui",
+ "velora-ui",
+ "vlibc",
+]
 
 [[package]]
 name = "velora-ui"

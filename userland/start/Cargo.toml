@@ -1,0 +1,20 @@
+[package]
+name = "velora-start"
+description = "Start menu of the Live system and the graphical installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "../build-support.rs"
+
+[[bin]]
+name = "velora-start"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vlibc = { path = "../../libc/vlibc" }
+velora-ui = { path = "../../libc/ui", features = ["velora"] }
+velora-install = { path = "../../installer/core", features = ["velora"] }
+velora-installer-gui = { path = "../../installer/gui" }
