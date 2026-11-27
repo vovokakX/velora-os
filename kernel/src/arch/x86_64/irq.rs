@@ -13,6 +13,7 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 pub type Handler = fn(&mut InterruptFrame);
 
 pub const VECTOR_KEYBOARD: u8 = 0x21;
+pub const VECTOR_PS2_MOUSE: u8 = 0x2c;
 /// First vector handed out to PCI devices (MSI-X).
 pub const VECTOR_DEVICE_BASE: u8 = 0x30;
 

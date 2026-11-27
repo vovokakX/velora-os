@@ -12,6 +12,7 @@ mod arch;
 mod boot;
 mod console;
 mod crashlog;
+mod display;
 mod drivers;
 mod exec;
 mod fs;
@@ -235,7 +236,10 @@ fn init_interrupts() {
         Err(e) => panic!("timer calibration: {}", e),
     }
     match drivers::ps2::init(madt) {
-        Ok(()) => kok!("PS/2 keyboard (layouts EN, RU; Alt+Shift switches)"),
+        Ok(mouse) => kok!(
+            "PS/2 keyboard (layouts EN, RU; Alt+Shift switches){}",
+            if mouse { ", PS/2 mouse" } else { "" }
+        ),
         Err(e) => kwarn!("PS/2 keyboard: {}", e),
     }
 }
