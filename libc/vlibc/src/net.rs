@@ -1,12 +1,12 @@
 //! Networking: IPv4 addresses, TCP and UDP sockets, interface information
 //! and ping. There is no name resolution (DNS) yet: addresses are numeric.
 
-use crate::sys::{syscall1, syscall2, syscall3, syscall4, syscall6};
+use crate::sys::{syscall1, syscall2, syscall3, syscall6};
 use crate::{Errno, check};
 use alloc::string::String;
 use alloc::vec::Vec;
 pub use velora_abi::NetInfo;
-use velora_abi::{SockAddr, nr, sock};
+use velora_abi::{SockAddr, errno, nr, sock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ipv4(pub u32);
@@ -162,15 +162,27 @@ impl UdpSocket {
 
     /// Waits for a datagram; returns its length and sender.
     pub fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, Ipv4, u16), Errno> {
+        self.recv_from_timeout(buf, 0)
+    }
+
+    /// Like `recv_from`, but gives up with `ETIMEDOUT` after `timeout_ms`
+    /// (0 waits forever).
+    pub fn recv_from_timeout(
+        &self,
+        buf: &mut [u8],
+        timeout_ms: u64,
+    ) -> Result<(usize, Ipv4, u16), Errno> {
         let mut a = SockAddr::default();
         // SAFETY: the buffer and `a` are writable.
         let n = check(unsafe {
-            syscall4(
+            syscall6(
                 nr::RECVFROM,
                 self.fd,
                 buf.as_mut_ptr() as u64,
                 buf.len() as u64,
                 &mut a as *mut SockAddr as u64,
+                timeout_ms,
+                0,
             )
         })?;
         Ok((n as usize, Ipv4(a.ip), a.port))
@@ -198,6 +210,102 @@ pub fn ping(ip: Ipv4, seq: u16, timeout_ms: u64) -> Result<u64, Errno> {
 }
 
 /// "aa:bb:cc:dd:ee:ff".
+fn now_ms() -> u64 {
+    crate::time::monotonic().map_or(0, |d| d.as_millis() as u64)
+}
+
+/// How `resolve` failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolveError {
+    /// No network or no DNS server from DHCP.
+    NoServer,
+    NoSuchName,
+    NoAddress,
+    /// No answer after the retries.
+    TimedOut,
+    /// A bad name or a broken answer.
+    Invalid,
+    Sys(Errno),
+}
+
+impl ResolveError {
+    pub fn describe(self) -> &'static str {
+        match self {
+            ResolveError::NoServer => "no DNS server (no network?)",
+            ResolveError::NoSuchName => "no such name",
+            ResolveError::NoAddress => "the name has no IPv4 address",
+            ResolveError::TimedOut => "the DNS server did not answer",
+            ResolveError::Invalid => "invalid name or answer",
+            ResolveError::Sys(e) => e.name(),
+        }
+    }
+}
+
+/// The IPv4 address of `name`: a dotted number is used as it is,
+/// anything else is asked from the DNS server in the `DNS_SERVER`
+/// environment variable (`ADDRESS[:PORT]`) or, without it, the one DHCP
+/// gave.
+pub fn resolve(name: &str) -> Result<Ipv4, ResolveError> {
+    resolve_with(name, None)
+}
+
+/// Like `resolve`, with an explicit DNS server (address, port).
+pub fn resolve_with(name: &str, server: Option<(Ipv4, u16)>) -> Result<Ipv4, ResolveError> {
+    if let Some(ip) = Ipv4::parse(name) {
+        return Ok(ip);
+    }
+    let from_env = crate::env::var("DNS_SERVER").and_then(|v| {
+        let (ip, port) = v.split_once(':').unwrap_or((v, "53"));
+        Some((Ipv4::parse(ip)?, port.parse::<u16>().ok()?))
+    });
+    let server = match server.or(from_env) {
+        Some(s) => s,
+        None => {
+            let info = netinfo().map_err(ResolveError::Sys)?;
+            if info.flags & 2 == 0 || info.dns == 0 {
+                return Err(ResolveError::NoServer);
+            }
+            (Ipv4(info.dns), velora_dns::PORT)
+        }
+    };
+    let sock = UdpSocket::bind(0).map_err(ResolveError::Sys)?;
+    let mut rnd = [0u8; 2];
+    crate::process::random(&mut rnd);
+    let id = u16::from_le_bytes(rnd);
+    let q = velora_dns::query(id, name).map_err(|_| ResolveError::Invalid)?;
+    let mut buf = [0u8; 1500];
+    for attempt in 0..3u64 {
+        sock.send_to(&q, server.0, server.1)
+            .map_err(ResolveError::Sys)?;
+        let deadline = now_ms() + 1000 * (attempt + 1);
+        loop {
+            let left = deadline.saturating_sub(now_ms());
+            if left == 0 {
+                break;
+            }
+            let (n, from, port) = match sock.recv_from_timeout(&mut buf, left) {
+                Ok(r) => r,
+                Err(e) if e.0 == errno::ETIMEDOUT => break,
+                Err(e) => return Err(ResolveError::Sys(e)),
+            };
+            if from != server.0 || port != server.1 {
+                continue;
+            }
+            return match velora_dns::parse_answer(&buf[..n], id, name) {
+                Ok(addrs) => {
+                    let a = addrs[0];
+                    Ok(Ipv4::new(a[0], a[1], a[2], a[3]))
+                }
+                Err(velora_dns::Error::NotOurs) => continue,
+                Err(velora_dns::Error::NoSuchName) => Err(ResolveError::NoSuchName),
+                Err(velora_dns::Error::NoAddress) => Err(ResolveError::NoAddress),
+                Err(_) => Err(ResolveError::Invalid),
+            };
+        }
+    }
+    Err(ResolveError::TimedOut)
+}
+
 pub fn format_mac(m: &[u8; 6]) -> String {
     alloc::format!(
         "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",

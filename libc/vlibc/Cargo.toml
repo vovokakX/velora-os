@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 velora-abi = { path = "../../kernel/abi" }
 velora-mm = { path = "../../kernel/mm" }
+velora-dns = { path = "../dns" }
 
 [features]
 # Export a small C API (exit, write, read, malloc, free, ...) for C programs.
