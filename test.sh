@@ -39,12 +39,20 @@ echo "==> USB image test in QEMU (boot from a USB drive, no HPET)"
 echo "==> installation test in QEMU (install, boot from disk, files persist)"
 "$PY" tests/qemu_run.py install --timeout 900
 
-echo "==> graphical installation in QEMU (start menu, every screen, install, boot from disk)"
-"$PY" tests/qemu_run.py gui --timeout 1500 --screens build/logs/installer-screens
+echo "==> graphical installation in QEMU (start menu, every screen, install, boot from disk, install again over the mounted disk)"
+"$PY" tests/qemu_run.py gui --reinstall --timeout 2400 --screens build/logs/installer-screens
 "$PY" tests/qemu_run.py gui --resolution 1920x1080 --screens-only --timeout 600 --screens build/logs/installer-screens --log build/logs/gui-1920x1080.log
+
+echo "==> graphical installation on a SATA (AHCI) and an NVMe disk"
+for bus in sata nvme; do
+    "$PY" tests/qemu_run.py gui --disk-type "$bus" --timeout 1500         --screens "build/logs/installer-screens-$bus" --log "build/logs/gui-$bus.log"
+done
 
 echo "==> every element of the graphical installer clicked with a USB tablet"
 ./build.sh --uitest
 "$PY" tests/qemu_run.py clicks --timeout 900
+
+echo "==> frame rate of the graphical installer at 1920x1080 (printed, not judged)"
+"$PY" tests/qemu_run.py fps --resolution 1920x1080 --memory 1G --timeout 300 --log build/logs/fps.log
 
 echo "==> all tests passed"
