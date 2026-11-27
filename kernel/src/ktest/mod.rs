@@ -45,6 +45,8 @@ static TESTS: &[Test] = tests![
     ansi_cursor_position,
     text_console_kitty_graphics,
     text_console_answers_queries,
+    hidden_console_keeps_drawing_in_ram,
+    key_events_become_packets,
     gdt_and_tss_loaded,
     idt_loaded,
     breakpoint_resumes,
@@ -449,6 +451,53 @@ fn text_console_kitty_graphics() {
 
 /// Device attributes and size queries, as programs use them to detect
 /// graphics support and the cell size.
+/// While a graphical program owns the screen, console text changes only
+/// the RAM copy; showing the console again puts it on the screen.
+fn hidden_console_keeps_drawing_in_ram() {
+    let mut c = test_console();
+    c.framebuffer_mut().enable_back_buffer();
+    let screen_px = |x: usize, y: usize| {
+        // SAFETY: tests run one at a time; inside the static buffer.
+        unsafe { TEST_FB.get().cast::<u32>().add(y * TW + x).read_volatile() }
+    };
+    c.framebuffer_mut().fill_rect(0, 0, TW, TH, 0x000000);
+    assert_eq!(screen_px(5, 5), 0);
+    assert!(c.framebuffer_mut().set_hidden(true));
+    c.framebuffer_mut().fill_rect(0, 0, TW, TH, 0x123456);
+    c.write_str("\n\n\n\nscroll");
+    assert_eq!(screen_px(5, 5), 0, "hidden console wrote to the screen");
+    assert!(c.framebuffer_mut().set_hidden(false));
+    assert_ne!(screen_px(5, 5), 0, "the console did not come back");
+    assert_eq!(
+        screen_px(TW - 1, 0),
+        c.framebuffer().get_native(TW - 1, 0).unwrap()
+    );
+}
+
+fn key_events_become_packets() {
+    use velora_abi::key;
+    use velora_input::{KeyCode, KeyEvent, Layout, Modifiers};
+    let ev = |k, ch, shift| KeyEvent {
+        key: k,
+        pressed: true,
+        ch,
+        mods: Modifiers {
+            shift,
+            ..Modifiers::default()
+        },
+        layout: Layout::Russian,
+    };
+    let p = crate::input::key_packet(&ev(KeyCode::Tab, Some('\t'), true));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::TAB);
+    assert_eq!(p[2], key::PRESSED | key::SHIFT);
+    assert_eq!(&p[4..], &[0, 0, 0, 0]);
+    let p = crate::input::key_packet(&ev(KeyCode::Q, Some('й'), false));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::CHAR);
+    assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 'й' as u32);
+    let p = crate::input::key_packet(&ev(KeyCode::Left, None, false));
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::LEFT);
+}
+
 fn text_console_answers_queries() {
     let mut c = test_console();
     c.write_str(velora_gfx::kitty::QUERY);
