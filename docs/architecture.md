@@ -498,3 +498,30 @@ Waking a thread interrupts the right CPU with vector 0xE0. A CPU that waits long
 shootdown is needed: a process's memory is only in its CPU's TLB, and kernel
 pages are never remapped to other contents after use (kernel stacks are cached
 mapped). A panic or a fatal exception stops the other CPUs with an NMI.
+
+### USB (этап 15) / USB (stage 15)
+
+- `drivers/usb` (`velora-usb`, тесты на хосте): запросы и дескрипторы,
+  отчёты клавиатуры и мыши HID boot protocol, перевод клавиш HID в
+  скан-коды PS/2 набора 1 (USB-клавиатура идёт через тот же декодер и
+  раскладки EN/RU), CBW/CSW и команды SCSI для флешек.
+- `kernel/src/drivers/xhci.rs`: передача контроллера от BIOS, сброс,
+  кольца команд и событий, сброс портов, Enable Slot / Address Device /
+  Configure Endpoint, управляющие, массовые и прерывающие передачи. Всё
+  опросом (D21, D44): команды и передачи флешки ждут своего события, поток
+  `usb` раз в тик читает отчёты клавиатуры и мыши.
+- Флешка — блочное устройство `usbN`; разделы (`usbNp1`) и FAT32
+  монтируются как у других дисков, на разделе EFI Velora хранится журнал
+  паники. Мышь — `/dev/mouse` (пакеты по 4 байта).
+
+`drivers/usb` (`velora-usb`, host-tested) has requests and descriptors, HID
+boot protocol keyboard and mouse reports, HID key to PS/2 set 1 scancode
+translation (a USB keyboard uses the same decoder and EN/RU layouts) and
+CBW/CSW plus SCSI commands for flash drives. `kernel/src/drivers/xhci.rs` does
+the BIOS handoff, reset, command and event rings, port reset, Enable Slot /
+Address Device / Configure Endpoint and control, bulk and interrupt transfers,
+all polled (D21, D44): commands and drive transfers wait for their event, and
+the `usb` thread reads keyboard and mouse reports every tick. A flash drive is
+block device `usbN`; its partitions (`usbNp1`) and FAT32 are mounted like any
+disk's, and a Velora EFI partition keeps the panic log. The mouse is
+`/dev/mouse` (4-byte packets).

@@ -874,3 +874,28 @@ kernel pages never change contents either. Drawbacks: system calls on
 different CPUs do not run in parallel; disk polling with interrupts off (D21)
 delays kernel entry on the other CPUs; threads of one program do not run in
 parallel.
+
+## D44. USB: только корневые порты, опрос, boot protocol / USB: root ports only, polling, boot protocol
+
+**2026-11-27**
+
+**RU.** Терминальной системе от USB нужны клавиатура, мышь и флешки.
+Клавиатура и мышь работают в boot protocol: отчёт фиксированного формата,
+без разбора дескрипторов отчётов HID; так их поддерживает и прошивка.
+Клавиши переводятся в скан-коды PS/2, поэтому раскладки и сочетания
+клавиш общие с PS/2. Контроллер опрашивается, без прерываний MSI, как диски
+(D21): поток `usb` раз в 10 мс читает события, этого достаточно для
+набора текста. Поддерживаются устройства на корневых портах, подключённые
+при загрузке. Хабы и горячее подключение — отдельная большая работа
+(перечисление через хаб, transaction translator для медленных устройств
+за хабом USB 2.0); это записано как NOT IMPLEMENTED.
+
+**EN.** A terminal system needs a keyboard, a mouse and flash drives from USB.
+The keyboard and mouse use the boot protocol: a fixed report format with no HID
+report descriptor parsing, which is also how firmware supports them. Keys
+become PS/2 scancodes, so layouts and key combinations are shared with PS/2.
+The controller is polled without MSI interrupts, like the disks (D21): the
+`usb` thread reads events every 10 ms, which is enough for typing. Devices on
+root ports present at boot are supported; hubs and hot plugging are separate
+large work (enumeration through a hub, transaction translators for slow
+devices behind a USB 2.0 hub) and are marked NOT IMPLEMENTED.

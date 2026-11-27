@@ -54,26 +54,25 @@
    `velora-setup` (см. [installer/README.md](../installer/README.md)).
    Установщик стирает выбранный диск целиком.
 
-### Что поддерживается (v0.14.0)
+### Что поддерживается (v0.15.0)
 
 | Устройство | Состояние |
 |---|---|
 | Экран | framebuffer UEFI GOP, 32 бита на пиксель; шрифт 8×16 с кириллицей, на экранах от 2560 точек — увеличенный вдвое |
-| Клавиатура | PS/2 (обычно так подключена встроенная клавиатура ноутбука). USB-клавиатура — с этапа 15 |
+| Клавиатура | PS/2 (обычно встроенная клавиатура ноутбука) и USB (HID boot protocol) на корневых портах контроллера xHCI |
 | Диски | SATA (AHCI), NVMe, virtio-blk |
 | Таймеры | HPET, таймер ACPI PM или PIT для калибровки; TSC и таймер APIC |
 | Сеть | только virtio-net (виртуальные машины). Сетевые карты Intel — с этапа 16 |
 | Процессоры | все ядра (до 64): программы работают параллельно, код ядра — под общей блокировкой |
 | Питание | выключение и перезагрузка через ACPI; кнопка питания на ПК, где она фиксированное событие ACPI (обычно настольные ПК). У многих ноутбуков кнопка — метод AML, она не работает: выключайте командой `shutdown` |
-| USB | нет до этапа 15. Флешка, с которой идёт загрузка, после старта ядра не видна; система работает из памяти |
+| USB | контроллеры xHCI: клавиатура, мышь (`/dev/mouse`), флешки (разделы, FAT32). Только устройства на корневых портах, подключённые при загрузке: хабы и горячее подключение не поддерживаются |
 
 ### Если что-то пошло не так
 
 - **Журнал паники.** При панике ядро записывает отчёт и последние
   сообщения ядра в файл `velora-panic.log` на разделе EFI, с которого
-  загрузилась система. Это работает для установленной системы на диске
-  SATA или NVMe. С флешки это заработает с этапа 15, когда появится
-  поддержка USB. При следующей загрузке ядро переносит журнал в
+  загрузилась система. Это работает и для установленной системы, и при
+  загрузке с флешки. При следующей загрузке ядро переносит журнал в
   `velora-panic.prev.log` и сообщает об этом. Журнал можно открыть на
   другом компьютере: это обычный текстовый файл на FAT32. Чтобы писать
   журнал на любой другой том FAT, создайте на нём пустой файл
@@ -145,25 +144,24 @@ example to edit `boot/limine.conf`.
    (see [installer/README.md](../installer/README.md)). The installer erases
    the whole chosen disk.
 
-### What is supported (v0.14.0)
+### What is supported (v0.15.0)
 
 | Device | State |
 |---|---|
 | Screen | UEFI GOP framebuffer, 32 bits per pixel; 8×16 font with Cyrillic, doubled on screens 2560 pixels wide or more |
-| Keyboard | PS/2 (laptops usually connect the built-in keyboard this way). USB keyboards from stage 15 |
+| Keyboard | PS/2 (usually a laptop's built-in keyboard) and USB (HID boot protocol) on xHCI root ports |
 | Disks | SATA (AHCI), NVMe, virtio-blk |
 | Timers | HPET, the ACPI PM timer or the PIT for calibration; the TSC and the APIC timer |
 | Network | virtio-net only (virtual machines). Intel network cards from stage 16 |
 | Processors | all cores (up to 64): programs run in parallel, kernel code under one lock |
 | Power | ACPI power off and restart; the power button on PCs where it is a fixed ACPI event (usually desktops). On many laptops the button is an AML method and does not work: use `shutdown` |
-| USB | none until stage 15. The drive the system booted from is not visible once the kernel runs; the system runs from memory |
+| USB | xHCI controllers: keyboard, mouse (`/dev/mouse`), flash drives (partitions, FAT32). Only devices on root ports present at boot: no hubs, no hot plugging |
 
 ### When something goes wrong
 
 - **Panic log.** On a panic the kernel writes the report and the latest
   kernel messages to `velora-panic.log` on the EFI partition the system booted
-  from. This works for a system installed on a SATA or NVMe disk; from a USB
-  drive it works from stage 15, when USB support arrives. At the next boot the
+  from. This works for an installed system and when booting from a USB drive. At the next boot the
   kernel moves the log to `velora-panic.prev.log` and says so. The log can be
   read on another computer: it is a plain text file on FAT32. To keep the log
   on any other FAT volume, create an empty `velora-panic.log` on it.
