@@ -341,6 +341,19 @@ pub mod key {
     pub const CHAR: u16 = 15;
 }
 
+/// `/dev/pointer`: every mouse and tablet event as an 8-byte packet;
+/// reads do not wait (0 bytes: no event). `/dev/mouse` gives only the
+/// relative movements, in its older 4-byte form.
+pub mod pointer {
+    /// Packet: `flags: u8`, `buttons: u8` (bit 0 left, 1 right, 2
+    /// middle), `wheel: i8` (positive away from the user), reserved `u8`,
+    /// then `x: i16` and `y: i16`, little-endian: a movement, or with
+    /// [`ABSOLUTE`] a position from 0 to [`ABS_MAX`] across the screen.
+    pub const PACKET: usize = 8;
+    pub const ABSOLUTE: u8 = 1;
+    pub const ABS_MAX: i32 = 32767;
+}
+
 /// System information written by `sysinfo`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

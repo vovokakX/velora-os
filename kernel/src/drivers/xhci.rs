@@ -26,7 +26,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use velora_input::{Keyboard as Decoder, Layout};
 use velora_usb::desc::{self, Endpoint, Setup};
-use velora_usb::{hid, msc};
+use velora_usb::{hid, msc, report};
 
 // Capability registers.
 const CAP_HCSPARAMS1: u64 = 0x04;
@@ -179,6 +179,15 @@ enum Function {
         dci: u8,
         ring: Ring,
         buf: DmaBuffer,
+    },
+    /// A pointer in report protocol (a tablet such as QEMU's usb-tablet,
+    /// or a mouse that is not a boot device), read with its report
+    /// descriptor.
+    Pointer {
+        dci: u8,
+        ring: Ring,
+        buf: DmaBuffer,
+        format: report::Pointer,
     },
     Storage,
 }
@@ -443,10 +452,37 @@ impl Controller {
                             dx: m.dx,
                             dy: m.dy,
                             wheel: m.wheel,
+                            abs: None,
                         });
                     }
                 }
                 Self::queue_report(ring, buf, 4);
+                ring_bell = Some(*dci);
+            }
+            Some(Function::Pointer {
+                dci,
+                ring,
+                buf,
+                format,
+            }) if *dci == ep => {
+                if ok {
+                    let len = format.bytes.min(64);
+                    let mut r = [0u8; 64];
+                    for (i, b) in r[..len].iter_mut().enumerate() {
+                        *b = buf.read::<u8>(i);
+                    }
+                    if let Some(p) = format.parse(&r[..len]) {
+                        let rel = |v: i32| v.clamp(-127, 127) as i8;
+                        input::push_mouse(input::MouseEvent {
+                            buttons: p.buttons,
+                            dx: if p.absolute { 0 } else { rel(p.x) },
+                            dy: if p.absolute { 0 } else { rel(p.y) },
+                            wheel: p.wheel,
+                            abs: p.absolute.then_some((p.x as u16, p.y as u16)),
+                        });
+                    }
+                }
+                Self::queue_report(ring, buf, format.bytes.min(64) as u32);
                 ring_bell = Some(*dci);
             }
             _ => {}
@@ -873,17 +909,38 @@ fn setup_port(
             .endpoints
             .iter()
             .find(|e| e.is_interrupt() && e.is_in());
-        if iface.class == desc::CLASS_HID && iface.subclass == hid::SUBCLASS_BOOT {
+        if iface.class == desc::CLASS_HID {
             let Some(&ep) = int_in else { continue };
-            let keyboard = iface.protocol == hid::PROTOCOL_KEYBOARD;
-            if !keyboard && iface.protocol != hid::PROTOCOL_MOUSE {
+            let boot = iface.subclass == hid::SUBCLASS_BOOT;
+            let keyboard = boot && iface.protocol == hid::PROTOCOL_KEYBOARD;
+            let boot_mouse = boot && iface.protocol == hid::PROTOCOL_MOUSE;
+            c.control(slot, Setup::set_configuration(config.value), None)?;
+            // Other pointers (tablets above all) describe their reports;
+            // a boot mouse keeps the boot protocol unless it is absolute.
+            let mut format = None;
+            if !keyboard {
+                let mut d = DmaBuffer::new(512).ok_or(UsbError::NoMemory)?;
+                let req = Setup::get_interface_descriptor(0x22, iface.number, 512);
+                if let Ok(n) = c.control(slot, req, Some(&mut d)) {
+                    let bytes: Vec<u8> = (0..n.min(512)).map(|i| d.read::<u8>(i)).collect();
+                    format = report::parse_pointer(&bytes)
+                        .filter(|p| (p.absolute() || !boot_mouse) && p.bytes <= 64);
+                }
+            }
+            if !keyboard && !boot_mouse && format.is_none() {
                 continue;
             }
-            c.control(slot, Setup::set_configuration(config.value), None)?;
-            // Boot protocol, reports only on change.
+            // Boot protocol for keyboards and boot mice, report protocol
+            // for the others; reports only on change.
             let _ = c.control(
                 slot,
-                Setup::class_interface(hid::REQ_SET_PROTOCOL, 0, iface.number, 0, false),
+                Setup::class_interface(
+                    hid::REQ_SET_PROTOCOL,
+                    format.is_some() as u16,
+                    iface.number,
+                    0,
+                    false,
+                ),
                 None,
             );
             let _ = c.control(
@@ -897,7 +954,17 @@ fn setup_port(
             let i = s.rings.iter().position(|(d, _)| *d == dci).expect("ring");
             let (_, mut ring) = s.rings.remove(i);
             let buf = DmaBuffer::new(64).ok_or(UsbError::NoMemory)?;
-            Controller::queue_report(&mut ring, &buf, if keyboard { 8 } else { 4 });
+            let len = match &format {
+                Some(f) => f.bytes as u32,
+                None if keyboard => 8,
+                None => 4,
+            };
+            Controller::queue_report(&mut ring, &buf, len);
+            let what = match &format {
+                Some(f) if f.absolute() => "tablet",
+                _ if keyboard => "keyboard",
+                _ => "mouse",
+            };
             s.function = Some(if keyboard {
                 Function::Keyboard {
                     dci,
@@ -906,16 +973,18 @@ fn setup_port(
                     report: hid::Keyboard::new(),
                     decoder: Decoder::new(Layout::Us, Layout::Russian),
                 }
+            } else if let Some(format) = format {
+                Function::Pointer {
+                    dci,
+                    ring,
+                    buf,
+                    format,
+                }
             } else {
                 Function::Mouse { dci, ring, buf }
             });
             c.ring_doorbell(slot, dci);
-            return Ok(format!(
-                "{} ({}) on port {}",
-                if keyboard { "keyboard" } else { "mouse" },
-                id,
-                port
-            ));
+            return Ok(format!("{} ({}) on port {}", what, id, port));
         }
         if iface.class == desc::CLASS_MASS_STORAGE
             && iface.subclass == msc::SUBCLASS_SCSI
@@ -1052,7 +1121,7 @@ pub fn hid_devices() -> (usize, usize) {
         for s in &ctl.lock().slots {
             match s.function {
                 Some(Function::Keyboard { .. }) => k += 1,
-                Some(Function::Mouse { .. }) => m += 1,
+                Some(Function::Mouse { .. } | Function::Pointer { .. }) => m += 1,
                 _ => {}
             }
         }

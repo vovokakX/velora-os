@@ -179,6 +179,7 @@ fn on_irq(_frame: &mut InterruptFrame) {
                     dy: m.dy,
                     // /dev/mouse follows USB: positive is away from the user.
                     wheel: -m.wheel,
+                    abs: None,
                 });
             }
             continue;
