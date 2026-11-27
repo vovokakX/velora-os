@@ -29,8 +29,8 @@ VeloraFS (права, журнал, контрольные суммы, пров�
 загрузки появляется приглашение входа; оболочка vsh поддерживает историю,
 Tab-дополнение, конвейеры и перенаправления, есть основные команды (`ls`,
 `cat`, `cp`, `mv`, `rm`, `ps`, `kill`, `velofetch` и другие). После
-загрузки занято 8,1 МиБ (вместе с initramfs, в котором есть и файлы для
-установки), приглашение входа появляется через 1,9 с после запуска QEMU с
+загрузки занято 8,6 МиБ (вместе с initramfs, в котором есть и файлы для
+установки), приглашение входа появляется через 2,1 с после запуска QEMU с
 KVM.
 
 Систему можно запустить на реальном компьютере с UEFI: сборка создаёт
@@ -159,9 +159,9 @@ VeloraFS (permissions, journal, checksums, integrity check) and FAT16/FAT32 with
 read and write. The initramfs is mounted at `/`, disks under `/mnt`. Boot ends
 at a login prompt; the vsh shell has history, Tab completion, pipes and
 redirections, and the basic commands exist (`ls`, `cat`, `cp`, `mv`, `rm`,
-`ps`, `kill`, `velofetch` and others). 8.1 MiB are in use after boot
+`ps`, `kill`, `velofetch` and others). 8.6 MiB are in use after boot
 (initramfs included, which also holds the files to install); the login prompt
-appears 1.9 s after QEMU starts with KVM.
+appears 2.1 s after QEMU starts with KVM.
 
 The system can run on a real UEFI computer: the build makes a USB drive
 image, `velora-usb.img`; see [docs/hardware.md](docs/hardware.md). A panic
