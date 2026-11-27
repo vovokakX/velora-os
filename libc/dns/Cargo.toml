@@ -1,0 +1,9 @@
+[package]
+name = "velora-dns"
+description = "DNS queries and answers (A records) without I/O, for vlibc's resolver"
+version.workspace = true
+edition.workspace = true
+# Part of vlibc, which is LGPL: see libc/vlibc/LICENSE.
+license = "LGPL-3.0-or-later"
+repository.workspace = true
+publish = false
