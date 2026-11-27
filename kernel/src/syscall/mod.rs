@@ -13,6 +13,13 @@ use velora_abi::USER_MAX;
 /// Called by the `syscall` entry code with interrupts disabled.
 #[unsafe(no_mangle)]
 extern "C" fn velora_syscall_dispatch(frame: &mut SyscallFrame) {
+    crate::smp::bkl_enter();
+    syscall(frame);
+    sched::leave_if_killed();
+    crate::smp::bkl_exit();
+}
+
+fn syscall(frame: &mut SyscallFrame) {
     let result = match sched::current_personality() {
         Personality::Native => native::dispatch(frame),
     };

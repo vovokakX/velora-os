@@ -45,7 +45,12 @@ fn main() -> i32 {
         format!("Kernel:  velora {}", field_str(&s.version)),
         format!("Uptime:  {}", duration(s.uptime_ns / 1_000_000_000)),
         format!("Shell:   {}", shell),
-        format!("CPU:     {} ({} core)", field_str(&s.cpu), s.cpus),
+        format!(
+            "CPU:     {} ({} core{})",
+            field_str(&s.cpu),
+            s.cpus,
+            if s.cpus == 1 { "" } else { "s" }
+        ),
         format!("Memory:  {} / {}", human(s.mem_used), human(s.mem_total)),
         format!("Console: {}x{}, processes: {}", cols, rows, s.processes),
         format!(

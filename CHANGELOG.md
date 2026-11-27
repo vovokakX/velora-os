@@ -6,6 +6,44 @@
 Format: for each version — what is new, fixes, known issues.
 Russian first, then English.
 
+## [0.14.0] — 2026-11-27
+
+### Что нового
+- Многопроцессорность: ядро запускает все процессоры (до 64) через запрос MP загрузчика Limine. У каждого процессора свои GDT, TSS со стеками IST, данные процессора, локальный APIC и таймер, поток простоя.
+- Программы работают на всех ядрах параллельно. Процесс получает наименее загруженный процессор при запуске; все его потоки работают на нём.
+- Большая блокировка ядра (билетная, рекурсивная для процессора): код ядра выполняется на одном процессоре за раз (решение D43). Поток ядра, занятый вычислениями, отдаёт её ждущим процессорам на каждом тике.
+- Межпроцессорные прерывания: перепланирование (вектор 0xF0) и NMI, которым паника останавливает остальные процессоры.
+- `velofetch` показывает число работающих ядер.
+- Тесты: все тесты QEMU идут с `-smp 4`. Новые тесты ядра: все процессоры в сети; четыре вычисляющие программы оказываются на четырёх разных ядрах и каждая идёт почти с той же скоростью, что одна; остановка программы, работающей на другом ядре; согласованность большой блокировки. 178 юнит-тестов на хосте, 97 тестов ядра.
+
+### Исправления
+- Процессоры, ждущие блокировку ядра, не крутятся в цикле, а останавливаются (`hlt`) до пробуждения прерыванием 0xF1. Раньше, пока один процессор опрашивал диск virtio-blk, три других непрерывно крутились; на машине с четырьмя ядрами хоста это отнимало всё время у потока ввода-вывода QEMU, запрос к диску не завершался, и тесты ядра иногда зависали (в QEMU на Windows и в CI). Найдено с помощью журнала операций блокировки и сторожа в тестовой сборке, которые остаются в ней.
+- Тест ядра времени RTC учитывает время с загрузки: на медленном эмуляторе тесты до него могли идти дольше 120 с, и он ложно падал.
+
+### Известные проблемы
+- Системные вызовы разных процессоров не выполняются параллельно (одна блокировка ядра); опрос диска с выключенными прерываниями задерживает вход в ядро остальным процессорам.
+- Потоки одной программы работают на одном ядре.
+- Ограничения прошлых версий остаются (сигналов нет, одна блокировка VFS, только UEFI, нет DNS, virtio-blk не работает с QEMU 8.2 — #19).
+
+---
+
+### What's new
+- Multiprocessing: the kernel starts every processor (up to 64) through the Limine MP request. Each one has its own GDT, TSS with IST stacks, per-CPU data, local APIC and timer, and idle thread.
+- Programs run on all cores in parallel. A process gets the least loaded processor when it starts, and all its threads run there.
+- A big kernel lock (a ticket lock, recursive per CPU): kernel code runs on one processor at a time (decision D43). A kernel thread that computes hands it to waiting processors at every tick.
+- Interprocessor interrupts: rescheduling (vector 0xF0) and the NMI with which a panic stops the other processors.
+- `velofetch` shows the number of running cores.
+- Tests: every QEMU test runs with `-smp 4`. New kernel tests: all processors online; four computing programs land on four different cores and each runs almost as fast as one alone; stopping a program that runs on another core; consistency of the big kernel lock. 178 host unit tests, 97 kernel tests.
+
+### Fixes
+- Processors waiting for the kernel lock do not spin but halt (`hlt`) until interrupt 0xF1 wakes them. Before, while one processor polled a virtio-blk disk, the other three spun nonstop; on a host with four cores this took all the time from QEMU's I/O thread, the disk request never completed and the kernel tests sometimes hung (in QEMU on Windows and in CI). Found with the lock operation log and the watchdog of the test build, which stay there.
+- The kernel RTC test accounts for the time since boot: on a slow emulator the tests before it could take longer than 120 s and it failed falsely.
+
+### Known issues
+- System calls on different processors do not run in parallel (one kernel lock); disk polling with interrupts off delays kernel entry on the other processors.
+- Threads of one program run on one core.
+- Earlier limitations remain (no signals, one VFS lock, UEFI only, no DNS, virtio-blk does not work with QEMU 8.2 — #19).
+
 ## [0.13.0] — 2026-11-26
 
 ### Что нового

@@ -203,6 +203,15 @@ pub fn init() {
             };
             *entry = IdtEntry::new(base + (v * STUB_SIZE) as u64, ist, 0);
         }
+    }
+    load();
+}
+
+/// Loads the (shared) IDT on this CPU.
+pub fn load() {
+    // SAFETY: the IDT is a static filled by `init` on the boot CPU.
+    unsafe {
+        let idt = &*IDT.get();
         let ptr = DescriptorPointer {
             limit: (size_of::<[IdtEntry; 256]>() - 1) as u16,
             base: idt.as_ptr() as u64,
@@ -224,9 +233,43 @@ pub fn current() -> (u16, u64) {
 /// Called from `isr_common` for every interrupt and exception.
 #[unsafe(no_mangle)]
 extern "C" fn interrupt_dispatch(frame: &mut InterruptFrame) {
+    // NMI, double fault and machine check never take the big kernel
+    // lock: they end the system (and an NMI from a panicking CPU stops
+    // this one).
+    if matches!(frame.vector, 2 | 8 | 18) {
+        #[cfg(feature = "ktest")]
+        if frame.vector == 2 && crate::smp::answer_where(frame.rip, frame.rbp, frame.rflags) {
+            return;
+        }
+        if crate::panic::panicking() {
+            super::cpu::halt_forever();
+        }
+        super::exceptions::handle(frame);
+        return;
+    }
+    // Wake-up of a CPU sleeping for the big kernel lock, APIC error and
+    // spurious interrupts: handled without the lock (a sleeping waiter
+    // may get them).
+    match frame.vector as u8 {
+        crate::smp::VECTOR_BKL_WAKE | super::apic::VECTOR_ERROR => {
+            super::apic::eoi();
+            return;
+        }
+        super::apic::VECTOR_SPURIOUS => return,
+        _ => {}
+    }
+    #[cfg(feature = "ktest")]
+    if frame.vector == 0x20 && super::percpu::index() == 0 {
+        crate::ktest::watchdog();
+    }
+    crate::smp::bkl_enter();
     if frame.vector < 32 {
         super::exceptions::handle(frame);
     } else {
         super::irq::dispatch(frame);
     }
+    if frame.cs & 3 == 3 {
+        crate::sched::leave_if_killed();
+    }
+    crate::smp::bkl_exit();
 }

@@ -54,7 +54,7 @@
    `velora-setup` (см. [installer/README.md](../installer/README.md)).
    Установщик стирает выбранный диск целиком.
 
-### Что поддерживается (v0.13.0)
+### Что поддерживается (v0.14.0)
 
 | Устройство | Состояние |
 |---|---|
@@ -63,7 +63,7 @@
 | Диски | SATA (AHCI), NVMe, virtio-blk |
 | Таймеры | HPET, таймер ACPI PM или PIT для калибровки; TSC и таймер APIC |
 | Сеть | только virtio-net (виртуальные машины). Сетевые карты Intel — с этапа 16 |
-| Процессоры | используется одно ядро. Все ядра — с этапа 14 |
+| Процессоры | все ядра (до 64): программы работают параллельно, код ядра — под общей блокировкой |
 | Питание | выключение и перезагрузка через ACPI; кнопка питания на ПК, где она фиксированное событие ACPI (обычно настольные ПК). У многих ноутбуков кнопка — метод AML, она не работает: выключайте командой `shutdown` |
 | USB | нет до этапа 15. Флешка, с которой идёт загрузка, после старта ядра не видна; система работает из памяти |
 
@@ -145,7 +145,7 @@ example to edit `boot/limine.conf`.
    (see [installer/README.md](../installer/README.md)). The installer erases
    the whole chosen disk.
 
-### What is supported (v0.13.0)
+### What is supported (v0.14.0)
 
 | Device | State |
 |---|---|
@@ -154,7 +154,7 @@ example to edit `boot/limine.conf`.
 | Disks | SATA (AHCI), NVMe, virtio-blk |
 | Timers | HPET, the ACPI PM timer or the PIT for calibration; the TSC and the APIC timer |
 | Network | virtio-net only (virtual machines). Intel network cards from stage 16 |
-| Processors | one core is used. All cores from stage 14 |
+| Processors | all cores (up to 64): programs run in parallel, kernel code under one lock |
 | Power | ACPI power off and restart; the power button on PCs where it is a fixed ACPI event (usually desktops). On many laptops the button is an AML method and does not work: use `shutdown` |
 | USB | none until stage 15. The drive the system booted from is not visible once the kernel runs; the system runs from memory |
 

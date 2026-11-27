@@ -24,6 +24,7 @@ mod net;
 mod panic;
 mod power;
 mod sched;
+mod smp;
 mod sync;
 mod syscall;
 mod time;
@@ -98,6 +99,8 @@ extern "C" fn kmain() -> ! {
 /// Continues boot on the kernel's own stack, so the boot stack (bootloader
 /// memory) can be released.
 extern "C" fn kmain_on_kernel_stack() -> ! {
+    // The other CPUs must leave the bootloader's memory before it is freed.
+    let parked = smp::start_aps();
     let reclaimed = boot::release_bootloader_memory();
     kok!("released {} KiB of bootloader memory", reclaimed / 1024);
 
@@ -115,6 +118,17 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     match power::init(&acpi::get().madt) {
         Ok(what) => kok!("power management: {}", what),
         Err(e) => kwarn!("power management: {}", e),
+    }
+    let online = smp::release_aps();
+    if online == parked + 1 && online == smp::reported() {
+        kok!("{} CPU(s) online", online);
+    } else {
+        kwarn!(
+            "{} of {} CPU(s) online ({} started)",
+            online,
+            smp::reported(),
+            parked + 1
+        );
     }
     fs::init();
     fs::automount();

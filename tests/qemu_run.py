@@ -157,7 +157,8 @@ def build_command(iso, workdir, memory, monitor_port, disks=None, extra=None):
         "-accel", accel,
         "-cpu", "max" if accel == "tcg" else "host",
         "-m", memory,
-        "-smp", "1",
+        # Four CPUs by default (VELORA_SMP changes it), as the SMP tests expect.
+        "-smp", os.environ.get("VELORA_SMP", "4"),
         "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=" + code,
         "-drive", "if=pflash,format=raw,unit=1,file=" + vars_copy,
         "-serial", "stdio",

@@ -21,10 +21,12 @@ pub fn scheduler_started() {
         t.iter()
             .any(|t| t.name == "kmain" && t.state == State::Running)
     );
-    assert!(
-        t.iter()
-            .any(|t| t.name == "idle" && t.priority == Priority::Idle)
-    );
+    // One idle thread per CPU.
+    let idle = t
+        .iter()
+        .filter(|t| t.name.starts_with("idle") && t.priority == Priority::Idle)
+        .count();
+    assert_eq!(idle, crate::smp::online(), "idle threads");
     assert_eq!(gdt::rsp0() % 16, 0);
     assert_ne!(percpu::gs_base(), 0, "GS base not set");
 }
@@ -43,10 +45,14 @@ extern "C" fn counting_thread(i: u64) -> u64 {
 pub fn kernel_threads_are_preempted() {
     let stacks_before = kstack::mapped_pages();
     STOP.store(false, Ordering::SeqCst);
+    // All three on one CPU, so only the timer can share it among them
+    // (on several CPUs the test would also measure the big kernel lock).
+    let cpu = crate::smp::online() - 1;
     for i in 0..3 {
-        sched::spawn_kernel("counter", counting_thread, i, Priority::Normal).expect("spawn");
+        sched::spawn_kernel_on("counter", counting_thread, i, Priority::Normal, cpu)
+            .expect("spawn");
     }
-    sched::sleep_ms(200);
+    sched::sleep_ms(300);
     STOP.store(true, Ordering::SeqCst);
     let counts: [u64; 3] = core::array::from_fn(|i| COUNTERS[i].load(Ordering::SeqCst));
     kprint!("({:?}) ", counts);
@@ -66,9 +72,11 @@ pub fn kernel_threads_are_preempted() {
         !sched::threads().iter().any(|t| t.name == "counter"),
         "threads not reaped"
     );
-    assert_eq!(
-        kstack::mapped_pages(),
-        stacks_before,
+    // Freed stacks stay mapped in a reuse cache (no TLB shootdown on
+    // SMP); at most the three new stacks were added.
+    assert!(kstack::cached() >= 3, "thread stacks not returned");
+    assert!(
+        kstack::mapped_pages() <= stacks_before + 3 * 8,
         "thread stacks leaked"
     );
 }

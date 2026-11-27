@@ -15,7 +15,7 @@ Linux и не форк: своё ядро, свои драйверы и своё
 
 ### Состояние
 
-Готовы этапы 1–13 (v0.13.0). Ядро загружается через UEFI, выводит текст на экран
+Готовы этапы 1–14 (v0.14.0). Ядро загружается через UEFI, выводит текст на экран
 и в последовательный порт, обрабатывает исключения процессора и паники с
 подробным отчётом. Ядро управляет памятью само: аллокатор физических страниц,
 свои таблицы страниц с правами W^X, куча (`alloc`), стеки с защитными
@@ -120,7 +120,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 11 | Текстовый редактор Plume | v0.11.0 (готово) |
 | 12 | Готовность к реальному ПК: консоль GOP, HPET/TSC, журнал паники на диске, образ для флешки | v0.12.0 (готово) |
 | 13 | ACPI: выключение, перезагрузка, кнопка питания | v0.13.0 (готово) |
-| 14 | Многопроцессорность (SMP) | v0.14.0 |
+| 14 | Многопроцессорность (SMP) | v0.14.0 (готово) |
 | 15 | USB: xHCI, клавиатура, мышь, флешки | v0.15.0 |
 | 16 | Сеть на реальном ПК: e1000, DNS, `fetch` | v0.16.0 |
 
@@ -146,7 +146,7 @@ are planned for later stages.
 
 ### Status
 
-Stages 1–13 are done (v0.13.0). The kernel boots via UEFI, prints to the screen
+Stages 1–14 are done (v0.14.0). The kernel boots via UEFI, prints to the screen
 and the serial port, and handles CPU exceptions and panics with a detailed
 report. It manages memory itself: a physical frame allocator, its own page
 tables with W^X permissions, a heap (`alloc`) and stacks with guard pages.
@@ -236,7 +236,7 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 11 | Plume text editor | v0.11.0 (done) |
 | 12 | Ready for a real PC: GOP console, HPET/TSC, panic log on disk, USB drive image | v0.12.0 (done) |
 | 13 | ACPI: power off, restart, power button | v0.13.0 (done) |
-| 14 | Multiprocessing (SMP) | v0.14.0 |
+| 14 | Multiprocessing (SMP) | v0.14.0 (done) |
 | 15 | USB: xHCI, keyboard, mouse, flash drives | v0.15.0 |
 | 16 | Networking on a real PC: e1000, DNS, `fetch` | v0.16.0 |
 

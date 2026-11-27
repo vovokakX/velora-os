@@ -141,11 +141,15 @@ pub fn rtc_matches_bootloader_time() {
     kprint!("({}) ", velora_rtc::DateTime::from_unix(now as i64));
     assert!(now > 1_700_000_000, "RTC time before 2023");
     if let Some(boot) = boot::info().boot_time {
-        let diff = now as i64 - boot;
+        // The bootloader read the clock just before the kernel started;
+        // the tests before this one may take minutes on a slow emulator.
+        let uptime = (time::uptime_ms() / 1000) as i64;
+        let diff = now as i64 - boot - uptime;
         assert!(
-            (-5..120).contains(&diff),
-            "RTC and bootloader differ by {} s",
-            diff
+            (-5..30).contains(&diff),
+            "RTC and bootloader differ by {} s (after {} s of uptime)",
+            diff,
+            uptime
         );
     }
     let a = time::realtime_ns().unwrap();

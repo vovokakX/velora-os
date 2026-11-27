@@ -287,6 +287,77 @@ pub struct RsdpResponse {
     pub address: *const u8,
 }
 
+/// The multiprocessor request has a flags word after the response
+/// pointer (bit 0 would ask for x2APIC; the kernel keeps the firmware's
+/// APIC mode and passes 0).
+#[repr(C, align(8))]
+pub struct MpRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: UnsafeCell<*const MpResponse>,
+    flags: u64,
+}
+
+// SAFETY: see `BaseRevision`.
+unsafe impl Sync for MpRequest {}
+
+impl MpRequest {
+    const fn new() -> Self {
+        Self {
+            id: request_id(0x95a67b819a1b857e, 0xa0b61b723b6a73e0),
+            revision: 0,
+            response: UnsafeCell::new(ptr::null()),
+            flags: 0,
+        }
+    }
+
+    pub fn response(&self) -> Option<&'static MpResponse> {
+        assert!(
+            RESPONSES_VALID.load(Ordering::SeqCst),
+            "Limine response used after bootloader memory was released"
+        );
+        // SAFETY: as in `Request::response`.
+        unsafe { ptr::read_volatile(self.response.get()).as_ref() }
+    }
+}
+
+#[repr(C)]
+pub struct MpResponse {
+    pub revision: u64,
+    pub flags: u32,
+    pub bsp_lapic_id: u32,
+    count: u64,
+    cpus: *const *const MpInfo,
+}
+
+impl MpResponse {
+    pub fn cpus(&self) -> &'static [&'static MpInfo] {
+        // SAFETY: Limine gives an array of `count` valid pointers.
+        unsafe { slice_of_refs(self.cpus, self.count) }
+    }
+}
+
+/// One processor. An application processor waits in the bootloader
+/// until `goto_address` is written, then jumps there with RDI pointing at
+/// this structure, on a small stack in bootloader-reclaimable memory.
+#[repr(C)]
+pub struct MpInfo {
+    pub processor_id: u32,
+    pub lapic_id: u32,
+    _reserved: u64,
+    goto_address: core::sync::atomic::AtomicU64,
+    pub extra_argument: core::sync::atomic::AtomicU64,
+}
+
+impl MpInfo {
+    /// Starts this processor at `entry` with `arg` in `extra_argument`.
+    pub fn start(&self, entry: unsafe extern "C" fn(*const MpInfo) -> !, arg: u64) {
+        self.extra_argument.store(arg, Ordering::SeqCst);
+        self.goto_address
+            .store(entry as usize as u64, Ordering::SeqCst);
+    }
+}
+
 unsafe fn c_str(p: *const u8) -> &'static str {
     if p.is_null() {
         return "";
@@ -370,6 +441,10 @@ pub static RSDP: Request<RsdpResponse> =
 #[unsafe(link_section = ".limine_requests")]
 pub static MODULES: Request<ModuleResponse> =
     Request::new(request_id(0x3e7e279702be32af, 0xca1c4f3bd1280cee));
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static MP: MpRequest = MpRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests_end")]

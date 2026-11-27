@@ -3,4 +3,4 @@
 
 pub mod x86_64;
 
-pub use x86_64::{cpu, fatal_exit, init};
+pub use x86_64::{cpu, fatal_exit, init, init_ap};

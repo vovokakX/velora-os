@@ -1,10 +1,13 @@
-//! Local APIC: interrupt delivery to this CPU, EOI and the APIC timer.
-//! Works in xAPIC (MMIO) and x2APIC (MSR) mode, whichever the firmware
-//! left enabled.
+//! Local APIC: interrupt delivery to this CPU, EOI, the APIC timer and
+//! interprocessor interrupts. Works in xAPIC (MMIO) and x2APIC (MSR)
+//! mode, whichever the firmware left enabled on the boot CPU; the other
+//! CPUs are put in the same mode.
 
 use super::cpu;
 use super::{hpet, pit, pmtimer};
 use crate::mm::mmio;
+use crate::sync::SpinLock;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const MSR_APIC_BASE: u32 = 0x1b;
@@ -17,6 +20,8 @@ const REG_TPR: u32 = 0x80;
 const REG_EOI: u32 = 0xb0;
 const REG_SVR: u32 = 0xf0;
 const REG_ESR: u32 = 0x280;
+const REG_ICR_LOW: u32 = 0x300;
+const REG_ICR_HIGH: u32 = 0x310;
 const REG_LVT_TIMER: u32 = 0x320;
 const REG_LVT_LINT0: u32 = 0x350;
 const REG_LVT_LINT1: u32 = 0x360;
@@ -31,6 +36,10 @@ const LVT_NMI: u32 = 0b100 << 8;
 const LVT_ACTIVE_LOW: u32 = 1 << 13;
 const LVT_LEVEL: u32 = 1 << 15;
 const SVR_ENABLE: u32 = 1 << 8;
+const ICR_NMI: u32 = 0b100 << 8;
+const ICR_ASSERT: u32 = 1 << 14;
+const ICR_PENDING: u32 = 1 << 12;
+const ICR_ALL_BUT_SELF: u32 = 0b11 << 18;
 const TIMER_DIVIDE_16: u32 = 0b0011;
 
 pub const VECTOR_TIMER: u8 = 0x20;
@@ -63,14 +72,19 @@ fn write(reg: u32, value: u32) {
 }
 
 /// NMI wiring of a LINT pin, from the MADT.
+#[derive(Clone, Copy)]
 pub struct LintNmi {
     pub lint: u8,
     pub active_low: bool,
     pub level: bool,
 }
 
-/// Enables the local APIC of this CPU.
+/// LINT NMI wiring, kept for the other CPUs.
+static NMIS: SpinLock<Vec<LintNmi>> = SpinLock::new(Vec::new());
+
+/// Enables the local APIC of this (the boot) CPU.
 pub fn init(madt_address: u64, nmis: &[LintNmi]) -> Result<(), &'static str> {
+    *NMIS.lock() = nmis.to_vec();
     // SAFETY: IA32_APIC_BASE exists on every x86_64 CPU with an APIC.
     let msr = unsafe { cpu::rdmsr(MSR_APIC_BASE) };
     if msr & APIC_BASE_X2APIC != 0 {
@@ -88,6 +102,35 @@ pub fn init(madt_address: u64, nmis: &[LintNmi]) -> Result<(), &'static str> {
         // SAFETY: setting the global enable bit of our own APIC.
         unsafe { cpu::wrmsr(MSR_APIC_BASE, msr | APIC_BASE_ENABLE) };
     }
+    program(nmis);
+    Ok(())
+}
+
+/// Enables the local APIC of an application processor in the boot
+/// CPU's mode and starts its periodic timer at `hz` (the boot CPU's
+/// calibration is reused: all APIC timers run from the same clock).
+pub fn init_ap(hz: u64) {
+    // SAFETY: IA32_APIC_BASE of this CPU.
+    unsafe {
+        let msr = cpu::rdmsr(MSR_APIC_BASE);
+        let mut want = msr | APIC_BASE_ENABLE;
+        if X2APIC.load(Ordering::Relaxed) {
+            // xAPIC must be enabled before x2APIC can be.
+            if msr & APIC_BASE_ENABLE == 0 {
+                cpu::wrmsr(MSR_APIC_BASE, want);
+            }
+            want |= APIC_BASE_X2APIC;
+        }
+        if want != msr {
+            cpu::wrmsr(MSR_APIC_BASE, want);
+        }
+    }
+    let nmis = NMIS.lock().clone();
+    program(&nmis);
+    start_periodic(hz);
+}
+
+fn program(nmis: &[LintNmi]) {
     write(REG_TPR, 0);
     write(REG_LVT_LINT0, LVT_MASKED);
     write(REG_LVT_LINT1, LVT_MASKED);
@@ -111,7 +154,40 @@ pub fn init(madt_address: u64, nmis: &[LintNmi]) -> Result<(), &'static str> {
     write(REG_LVT_TIMER, LVT_MASKED);
     write(REG_SVR, SVR_ENABLE | VECTOR_SPURIOUS as u32);
     eoi();
-    Ok(())
+}
+
+fn send_icr(dest: u32, low: u32) {
+    if X2APIC.load(Ordering::Relaxed) {
+        // SAFETY: the x2APIC ICR is one 64-bit MSR (0x830).
+        unsafe { cpu::wrmsr(0x830, ((dest as u64) << 32) | low as u64) };
+    } else {
+        write(REG_ICR_HIGH, dest << 24);
+        write(REG_ICR_LOW, low);
+        while read(REG_ICR_LOW) & ICR_PENDING != 0 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Sends interrupt `vector` to the CPU with local APIC id `apic_id`.
+pub fn send_ipi(apic_id: u32, vector: u8) {
+    send_icr(apic_id, vector as u32 | ICR_ASSERT);
+}
+
+/// Sends an NMI to the CPU with local APIC id `apic_id`.
+pub fn send_nmi(apic_id: u32) {
+    send_icr(apic_id, ICR_NMI | ICR_ASSERT);
+}
+
+/// Sends an NMI to every other CPU (used to stop them on a panic).
+pub fn send_nmi_to_others() {
+    send_icr(0, ICR_NMI | ICR_ASSERT | ICR_ALL_BUT_SELF);
+}
+
+/// Sets the task priority: interrupts of priority class `class` (vector
+/// / 16) and below are held back.
+pub fn set_task_priority(class: u8) {
+    write(REG_TPR, (class as u32) << 4);
 }
 
 #[inline]

@@ -91,6 +91,8 @@
 | 0x20 | таймер локального APIC, 100 Гц |
 | 0x21 | клавиатура (ISA IRQ 1 через IOAPIC) |
 | 0x22 | SCI — события ACPI (с этапа 13) |
+| 0xe0 | перепланирование — межпроцессорное прерывание (с этапа 14) |
+| 0xf1 | пробуждение процессора, ждущего большую блокировку ядра (с этапа 14) |
 | 0x30–0x6f | прерывания устройств (с этапа 6) |
 | 0x70–0x7f | ложные прерывания от замаскированных 8259 (игнорируются) |
 | 0xfe | ошибка APIC |
@@ -248,6 +250,34 @@
   Расширенные адреса FADT (X_PM1*, X_GPE*) используются, если это порты.
 - Перезагрузка: регистр сброса ACPI в портах, памяти или конфигурации
   PCI, затем 0xCF9, контроллер клавиатуры и тройная ошибка.
+
+### Многопроцессорность (этап 14)
+
+- `smp.rs`: остальные процессоры (AP) запускаются через запрос MP Limine.
+  AP сразу переходит на таблицы страниц ядра и свой стек (память
+  загрузчика освобождается рано), ждёт, затем настраивает свои GDT, TSS
+  со стеками IST, данные процессора (`percpu`, через GS), локальный APIC
+  и таймер и становится своим потоком простоя.
+- Большая блокировка ядра (BKL): билетная, рекурсивная для процессора.
+  Каждый вход в ядро (системный вызов, прерывание, исключение) берёт её,
+  возврат в режим пользователя отдаёт. Код ядра выполняется на одном
+  процессоре за раз, программы — на всех параллельно. Глубина вложенности
+  сохраняется в потоке при переключении. На прерывании, пришедшем с
+  включёнными прерываниями (точка, где ядро и так может быть вытеснено),
+  блокировка отдаётся ждущим процессорам (D43).
+- Планировщик: общая очередь, у каждого процессора свои текущий поток,
+  поток простоя и квант. Все потоки процесса работают на одном процессоре,
+  выбранном при запуске (наименее загруженном); потоки ядра — на любом.
+  Пробуждение потока будит нужный процессор прерыванием 0xE0.
+  Процессор, который долго ждёт блокировку, не крутится в цикле, а
+  останавливается (`hlt`) с повышенным приоритетом APIC; при освобождении
+  его будит прерывание 0xF1. В виртуальной машине крутящиеся процессоры
+  отнимали время хоста у эмулируемых устройств.
+- Сброс TLB на других процессорах не нужен: память процесса бывает в TLB
+  только его процессора, а страницы ядра после снятия не переиспользуются
+  с другим содержимым (стеки ядра кешируются отображёнными).
+- Паника и фатальное исключение останавливают остальные процессоры через
+  NMI.
 
 ## English
 
@@ -448,3 +478,23 @@ the SLEEP_CONTROL register on hardware-reduced ACPI; extended FADT addresses
 (X_PM1*, X_GPE*) are used when they are I/O ports. Restart uses the ACPI reset
 register in I/O, memory or PCI configuration space, then 0xCF9, the keyboard
 controller and a triple fault.
+
+### Multiprocessing (stage 14)
+
+`smp.rs` starts the application processors (APs) through the Limine MP
+request. An AP moves to the kernel's page tables and its own stack at once
+(bootloader memory is freed early), waits, then sets up its own GDT, TSS with
+IST stacks, per-CPU data (`percpu`, through GS), local APIC and timer, and
+becomes its own idle thread. The big kernel lock (BKL) is a ticket lock,
+recursive per CPU: every entry into the kernel (system call, interrupt,
+exception) takes it and every return to user mode releases it. Kernel code
+runs on one CPU at a time, programs on all CPUs in parallel; the nesting depth
+is saved per thread across switches. On an interrupt that arrived with
+interrupts enabled (a point where the kernel may be preempted anyway) the lock
+is handed to waiting CPUs (D43). The scheduler keeps one queue; every CPU has
+its own current thread, idle thread and time slice. All threads of a process
+run on one CPU chosen at start (the least loaded); kernel threads run on any.
+Waking a thread interrupts the right CPU with vector 0xE0. A CPU that waits long for the lock halts with its APIC priority raised and is woken by vector 0xF1 when the lock is released, so waiting CPUs do not spin (in a virtual machine a spinning CPU takes host time from the emulated devices). No cross-CPU TLB
+shootdown is needed: a process's memory is only in its CPU's TLB, and kernel
+pages are never remapped to other contents after use (kernel stacks are cached
+mapped). A panic or a fatal exception stops the other CPUs with an NMI.
