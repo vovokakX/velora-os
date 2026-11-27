@@ -152,9 +152,22 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     }
 }
 
-/// Starts `/bin/login` on the console, again each time a session ends.
+/// The Live system first shows the start menu (`/bin/velora-start`:
+/// graphical installation, installation in the terminal or the Live
+/// system); then, as on an installed system, `/bin/login` runs on the
+/// console, again each time a session ends. `velora.nomenu` skips the
+/// menu.
 #[cfg(not(feature = "ktest"))]
 fn run_sessions() -> ! {
+    if fs::is_live() && !boot::cmdline_has("velora.nomenu") {
+        tty::reset();
+        match exec::spawn("/bin/velora-start", &["/bin/velora-start"], &["PATH=/bin"]) {
+            Ok(pid) => {
+                sched::wait_pid(pid);
+            }
+            Err(e) => kwarn!("cannot start /bin/velora-start: {:?}", e),
+        }
+    }
     loop {
         tty::reset();
         match exec::spawn("/bin/login", &["/bin/login"], &["PATH=/bin"]) {

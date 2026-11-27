@@ -55,6 +55,11 @@ pub fn now() -> u64 {
 
 static ROOT_DEVICE: SpinLock<Option<String>> = SpinLock::new(None);
 
+/// True when the root is the initramfs (the Live system), not a disk.
+pub fn is_live() -> bool {
+    ROOT_DEVICE.lock().is_none()
+}
+
 /// The partition named by `velora.root=PARTUUID=<guid>`, if any.
 fn root_partition() -> Option<Arc<dyn block::BlockDevice>> {
     let arg = crate::boot::cmdline()
