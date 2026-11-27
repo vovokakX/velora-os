@@ -103,3 +103,35 @@ gateway 10.0.2.2 answers ping); `python tests/qemu_run.py net` (login, `ip`,
 the host to `nc -l` in the guest through `hostfwd`, and a closed port, which
 QEMU's slirp network lets time out instead of answering RST; RST handling is
 covered by the unit tests).
+
+## Сетевые карты, DNS и HTTP (этап 16) / Network cards, DNS and HTTP (stage 16)
+
+- Сетевая карта — интерфейс `NetDevice` (`kernel/src/drivers/mod.rs`):
+  virtio-net или Intel e1000 (`drivers/e1000.rs`: 82540EM, 82545EM,
+  82574L проверены в QEMU; I217/I218/I219 по идентификаторам, на железе не
+  проверены). e1000 работает опросом: поток `net` смотрит кольцо приёма
+  каждый тик.
+- `recvfrom` получил таймаут (пятый аргумент, 0 — ждать бесконечно).
+- DNS: `libc/dns` (`velora-dns`, LGPL, тесты на хосте) строит запрос и
+  разбирает ответ (записи A, цепочки CNAME, сжатие имён). `vlibc::net::resolve`
+  спрашивает сервер из переменной `DNS_SERVER=АДРЕС[:ПОРТ]` или из DHCP,
+  3 попытки с таймаутами 1, 2 и 3 с.
+- HTTP: `libc/http` (`velora-http`, тесты на хосте): URL, запрос
+  HTTP/1.1 с `Connection: close`, заголовок ответа, тело по
+  Content-Length или chunked. Только `http://`: TLS нет.
+- Команды: `host NAME [SERVER[:PORT]]`, `fetch [-o FILE] [-q] URL`
+  (до 5 редиректов), `ping` принимает имена.
+
+The network card is the `NetDevice` interface (`kernel/src/drivers/mod.rs`):
+virtio-net or Intel e1000 (`drivers/e1000.rs`: the 82540EM, 82545EM and 82574L
+are tested in QEMU; I217/I218/I219 are accepted by id but untested on hardware).
+The e1000 is polled: the `net` thread checks the receive ring every tick.
+`recvfrom` has a timeout (fifth argument, 0 waits forever). DNS: `libc/dns`
+(`velora-dns`, LGPL, host-tested) builds queries and reads answers (A records,
+CNAME chains, name compression); `vlibc::net::resolve` asks the server in
+`DNS_SERVER=ADDRESS[:PORT]` or the one from DHCP, 3 tries with 1, 2 and 3 s
+timeouts. HTTP: `libc/http` (`velora-http`, host-tested): URLs, an HTTP/1.1
+request with `Connection: close`, the response head and the body by
+Content-Length or chunked; `http://` only, there is no TLS. Commands:
+`host NAME [SERVER[:PORT]]`, `fetch [-o FILE] [-q] URL` (up to 5 redirects),
+`ping` takes names.

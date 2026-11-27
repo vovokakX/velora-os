@@ -908,3 +908,25 @@ The controller is polled without MSI interrupts, like the disks (D21): the
 root ports present at boot are supported; hubs and hot plugging are separate
 large work (enumeration through a hub, transaction translators for slow
 devices behind a USB 2.0 hub) and are marked NOT IMPLEMENTED.
+
+## D45. DNS и HTTP в пространстве пользователя / DNS and HTTP in user space
+
+**2026-11-27**
+
+**RU.** Ядро даёт только сокеты UDP и TCP. Разрешение имён и HTTP —
+обычный код программ: DNS в vlibc (его используют все программы), HTTP —
+в библиотеке для `fetch`. Обе части без ввода-вывода и проверяются на
+хосте. Код DNS входит в vlibc, поэтому крейт `velora-dns` под LGPL.
+Переменная `DNS_SERVER` позволяет выбрать сервер без изменения настроек
+DHCP; через неё же тест `net` использует DNS-сервер на хосте и не зависит
+от интернета. HTTPS не поддерживается: своей реализации TLS нет, а
+сторонние библиотеки проект не берёт.
+
+**EN.** The kernel only provides UDP and TCP sockets. Name resolution and HTTP
+are ordinary program code: DNS in vlibc (every program uses it), HTTP in a
+library for `fetch`. Both have no I/O of their own and are tested on the host.
+The DNS code is part of vlibc, so `velora-dns` is LGPL. `DNS_SERVER` picks a
+server without changing the DHCP settings; the `net` test uses it to reach a
+DNS server on the host and does not depend on the Internet. HTTPS is not
+supported: there is no TLS implementation of our own, and the project does not
+take third-party libraries.
