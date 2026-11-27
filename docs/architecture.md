@@ -540,7 +540,9 @@ disk's, and a Velora EFI partition keeps the panic log. The mouse is
   текст без изображений (D46).
 - `velofetch` проверяет, что ввод и вывод — консоль, есть экран
   (`tty(3)`) и терминал отвечает на запрос, и тогда показывает
-  `assets/velora-logo.png` высотой в 10 строк текста. Иначе — ASCII-логотип
+  `assets/velora-logo.png`: фон картинки становится прозрачным и
+  обрезается, знак занимает высоту сводки (13 строк вместе с палитрой
+  цветов). Иначе — ASCII-логотип
   (также `velofetch --ascii` и вывод в канал).
 
 `kernel/gfx` (`velora-gfx`, host-tested) has the Kitty protocol (byte-by-byte
@@ -552,5 +554,7 @@ screen scrolls first if it does not fit; answers to queries are collected and
 become program input through `tty::write`. COM1 and `dmesg` get the text
 without images (D46). `velofetch` checks that input and output are the
 console, there is a screen (`tty(3)`) and the terminal answers the query, and
-then shows `assets/velora-logo.png` 10 text rows high. Otherwise it prints the
-ASCII logo (also with `velofetch --ascii` and into a pipe).
+then shows `assets/velora-logo.png`: the picture's background is made
+transparent and cut away, and the mark takes the height of the summary (13
+rows with the colour palette). Otherwise it prints the ASCII logo (also with
+`velofetch --ascii` and into a pipe).

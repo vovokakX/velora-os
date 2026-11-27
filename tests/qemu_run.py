@@ -1055,46 +1055,56 @@ def write_png(path, w, h, rgb):
         f.write(chunk(b"IEND", b""))
 
 
-# Colours of assets/velora-logo.png and of the console text.
-LOGO_BACKGROUND = (14, 19, 22)
+# Console colours (kernel/src/console/text.rs). The logo's own dark
+# background is made transparent by velofetch, so the console background
+# shows through it.
+CONSOLE_BG = (0x0b, 0x0e, 0x14)
 CONSOLE_FG = (0xc0, 0xca, 0xf5)
+# The mark of assets/velora-logo.png is 656x583 pixels (aspect 1.125).
+# Points inside it, as fractions of its size, at least 15 source pixels
+# away from any edge: on a stroke, and in the gaps.
+LOGO_ASPECT = 656 / 583
+LOGO_STROKES = [(0.498, 0.238), (0.498, 0.3), (0.2, 0.2), (0.8, 0.2), (0.46, 0.8), (0.42, 0.7)]
+LOGO_GAPS = [(0.498, 0.64), (0.223, 0.787), (0.75, 0.8), (0.65, 0.1), (0.35, 0.05)]
 
 
 def check_logo(w, h, rgb):
-    """Finds the velofetch logo on a screenshot: a square of the logo's
-    background colour at the left edge, white in the places where the
-    logo has its strokes, and the summary text to the right of it."""
+    """Finds the velofetch logo on a screenshot: white strokes near the
+    left edge with the shape of the mark, the console background in its
+    gaps (no box around it), and the summary text to the right."""
     def px(x, y):
         i = (y * w + x) * 3
         return rgb[i], rgb[i + 1], rgb[i + 2]
 
-    def near(c, ref):
-        return all(abs(a - b) <= 3 for a, b in zip(c, ref))
+    def near(c, ref, tol=3):
+        return all(abs(a - b) <= tol for a, b in zip(c, ref))
 
     xs, ys = [], []
-    for y in range(0, h, 2):
-        for x in range(0, w // 2, 2):
-            if near(px(x, y), LOGO_BACKGROUND):
+    for y in range(h):
+        for x in range(w // 3):
+            if min(px(x, y)) >= 240:
                 xs.append(x)
                 ys.append(y)
     if len(xs) < 1000:
         return "no logo on the screen"
     x0, x1, y0, y1 = min(xs), max(xs) + 1, min(ys), max(ys) + 1
-    size = y1 - y0
-    print("qemu_run: velofetch logo at (%d, %d), %dx%d pixels" % (x0, y0, x1 - x0, size))
-    if x0 > 16 or size < 96 or abs((x1 - x0) - size) > 4:
-        return "the logo area is not a square at the left edge: (%d,%d)-(%d,%d)" % (x0, y0, x1, y1)
+    print("qemu_run: velofetch logo at (%d, %d), %dx%d pixels" % (x0, y0, x1 - x0, y1 - y0))
+    if x0 > 40 or y1 - y0 < 96 or abs((x1 - x0) / (y1 - y0) - LOGO_ASPECT) > 0.06:
+        return "the logo does not have the shape of the mark: (%d,%d)-(%d,%d)" % (x0, y0, x1, y1)
 
     def at(fx, fy):
-        return px(x0 + int(fx * (x1 - x0)), y0 + int(fy * size))
-    white = [(0.5, 0.37), (0.25, 0.3), (0.75, 0.3), (0.475, 0.78)]
-    dark = [(0.5, 0.15), (0.5, 0.6), (0.1, 0.9)]
-    for f in white:
+        return px(x0 + int(fx * (x1 - x0)), y0 + int(fy * (y1 - y0)))
+    for f in LOGO_STROKES:
         if min(at(*f)) < 230:
             return "logo stroke missing at %s: %s" % (f, at(*f))
-    for f in dark:
-        if not near(at(*f), LOGO_BACKGROUND):
-            return "logo background wrong at %s: %s" % (f, at(*f))
+    for f in LOGO_GAPS:
+        if not near(at(*f), CONSOLE_BG):
+            return "not the console background inside the logo at %s: %s" % (f, at(*f))
+    # Around the mark: only the console background (no box).
+    for x in range(max(0, x0 - 4), min(w, x1 + 4)):
+        for y in (y0 - 4, y1 + 3):
+            if 0 <= y < h and not near(px(x, y), CONSOLE_BG):
+                return "something around the logo at (%d, %d): %s" % (x, y, px(x, y))
     text = sum(1 for y in range(y0, y1, 2) for x in range(x1, w, 2) if near(px(x, y), CONSOLE_FG))
     if text < 200:
         return "no summary text next to the logo"
