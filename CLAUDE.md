@@ -71,8 +71,15 @@ crate — только fontdue и его зависимости для `velora-u
 хосте). `/bin/uidemo` — галерея элементов, её проверяет тест `boot`.
 Внешний вид экранов можно смотреть без QEMU:
 `cargo run -p velora-ui --example render -- build/ui-preview` (PPM).
-Дальше по плану: экран выбора режима, графический установщик по
-`docs/design/installer-concept.png`.
+Стартовое меню и графический установщик (ветка `gui-installer`, D48):
+Live-образ сначала запускает `/bin/velora-start` (графическая установка по
+умолчанию через 10 с, установка в терминале, Live-режим); логика установки —
+`installer/core` (`velora-install`), экраны — `installer/gui`. Тест `gui`
+проходит все экраны и ставит систему; снимки экранов —
+`docs/design/installer-screens/` (4K — отрисовка на хосте: OVMF в QEMU не
+даёт режимов больше 2560x1440). Все тесты Live-образа выбирают в меню «3»
+(`choose_live`). Выбор оформления пока только сохраняется в
+`/etc/velora/*.conf` (NOT IMPLEMENTED: система их не читает).
 
 Известные ограничения, которые стоит закрыть в первую очередь (подробно —
 в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
@@ -87,8 +94,10 @@ Live-образа по умолчанию `velora`. Тесты QEMU: `ktest` (д
 `boot` (вход, команды, редактор Plume, кнопка питания через `system_powerdown`; `--timeout 300`), `net` (DHCP,
 ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-накопителя
 на xHCI, без HPET, `reboot`), `install` (установка, загрузка с диска, сохранение
-файлов). ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D47. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
+файлов), `gui` (стартовое меню, все экраны графического установщика со
+снимками, установка, загрузка с диска; `--resolution`, `--screens-only`).
+ktest после каждой загрузки читает на хосте журнал паники
+(`velora-fsck --cat`). Решения D1–D48. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
 Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
 приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
@@ -275,11 +284,11 @@ libc/shell   язык vsh и редактор строки (тесты на хо
 libc/editor  логика редактора Plume: клавиши, буфер, команды, кадры (тесты на хосте)
 libc/dns     запросы и ответы DNS (LGPL, входит в vlibc), libc/http — URL и HTTP для fetch
 libc/ui      velora-ui: графика, шрифты, элементы, ввод (тесты на хосте; screen — feature velora)
-userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo), свои флаги сборки
+userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo, start), свои флаги сборки
 tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fetch-fonts.sh
-installer/   velora-setup (собирается в workspace userland)
+installer/   core (velora-install: логика установки), gui (экраны и меню), velora-setup (терминал)
 tests/       qemu_run.py
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D47),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D48),
              план, сторонние компоненты, заметки к релизам
 ```
 

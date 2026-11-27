@@ -1051,3 +1051,81 @@ positions. Installer screens thus stay plain functions of the state and can
 be drawn on the host and compared. Keys are fed one per frame so their order
 is not lost between widgets. The scale is fractional (pixels per design unit),
 so one layout works at 1280x720, 1920x1080 and 4K.
+
+## D48. Стартовое меню и графический установщик / Start menu and graphical installer
+
+**2026-11-27**
+
+**RU.** Live-образ сначала показывает меню (`/bin/velora-start`, его
+запускает ядро, если корень — initramfs): графическая установка (по
+умолчанию, через 10 с), установка в терминале (`velora-setup`) и
+Live-режим (дальше обычный вход). Меню — программа, а не пункты Limine:
+оно нарисовано в стиле установщика, выбирается мышью и клавиатурой и без
+экрана показывает текстовый вариант. Меню и установщик — одна программа,
+поэтому шрифты загружаются один раз. `velora.nomenu` в командной строке
+отключает меню.
+
+Логика установки одна: crate `velora-install` (разметка, файловые
+системы, загрузчик, пользователи, настройки) с прогрессом по четырём
+этапам. `velora-setup` и графический установщик только собирают план.
+Источник файлов — интерфейс `Source`, поэтому вся установка проверяется
+тестом на хосте на диске в памяти.
+
+Отличия от концепта (`docs/design/installer-concept.png`):
+- Шаг «Пользователь» (имя, пароль, пароль root) и отдельный экран
+  подтверждения: без них установить систему нельзя, в концепте их нет.
+- Ручная разметка и «Эксперт» открывают экран разделов с настоящими
+  параметрами (размер EFI, размер корня, метка, таблица GPT), а не
+  заглушку.
+- Три стиля курсора, а не четыре: в `assets/cursors` три картинки.
+- Список языков без японского: в Inter нет иероглифов.
+- Язык установщика — русский или английский (переводов больше нет).
+- Выбор оформления, языка, региона и раскладки пишется в
+  `/etc/velora/*.conf`. NOT IMPLEMENTED: система их пока не читает
+  (оболочки Lumi нет, раскладки по-прежнему EN/RU с Alt+Shift).
+
+Неизменные части экрана (фон, окно, волны, панель) рисуются один раз и
+копируются в каждый кадр: программы собраны без SSE, и большие мягкие
+фигуры — самое медленное. Под TCG это ускорило кадр примерно в 10 раз.
+
+QEMU с OVMF не даёт режимов больше 2560x1440, поэтому тест в QEMU снимает
+1280x720, 1920x1080 и 2560x1440, а 3840x2160 проверяется отрисовкой тех
+же экранов на хосте (`cargo run -p velora-installer-gui --example
+screens`).
+
+**EN.** The Live image first shows a menu (`/bin/velora-start`, run by the
+kernel when the root is the initramfs): graphical installation (the default,
+after 10 s), installation in the terminal (`velora-setup`) and the Live
+system (the usual login follows). The menu is a program, not Limine entries:
+it has the installer's look, works with the mouse and the keyboard and falls
+back to text without a screen. Menu and installer are one program, so the
+fonts load once. `velora.nomenu` on the command line turns the menu off.
+
+There is one installation logic: the `velora-install` crate (partitions,
+file systems, bootloader, users, settings) with progress in four phases.
+`velora-setup` and the graphical installer only build the plan. Files come
+through the `Source` interface, so the whole installation is tested on the
+host on a disk in memory.
+
+Differences from the concept (`docs/design/installer-concept.png`):
+- A "User" step (name, password, root password) and a separate
+  confirmation screen: the system cannot be installed without them, and the
+  concept has neither.
+- Manual partitioning and Expert mode open a partitions screen with real
+  settings (EFI size, root size, label, the GPT table), not a placeholder.
+- Three pointer styles, not four: `assets/cursors` has three pictures.
+- No Japanese in the language list: Inter has no CJK glyphs.
+- The installer speaks Russian or English (no other translations yet).
+- Appearance, language, region and layout choices are written to
+  `/etc/velora/*.conf`. NOT IMPLEMENTED: the system does not read them yet
+  (there is no Lumi shell; layouts are still EN/RU with Alt+Shift).
+
+The parts of a screen that do not change (backdrop, window, waves, panel)
+are drawn once and copied into each frame: programs are built without SSE and
+large soft shapes are the slowest thing to draw. Under TCG this made a frame
+about 10 times faster.
+
+QEMU with OVMF offers no modes above 2560x1440, so the QEMU test captures
+1280x720, 1920x1080 and 2560x1440, and 3840x2160 is checked by drawing the
+same screens on the host (`cargo run -p velora-installer-gui --example
+screens`).
