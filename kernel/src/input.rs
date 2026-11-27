@@ -55,6 +55,47 @@ pub fn pop() -> Option<KeyEvent> {
     ev
 }
 
+/// A key event as a `/dev/keyboard` packet (see `velora_abi::key`).
+pub fn key_packet(ev: &KeyEvent) -> [u8; velora_abi::key::PACKET] {
+    use velora_abi::key;
+    use velora_input::KeyCode as K;
+    let code = match ev.key {
+        K::Escape => key::ESCAPE,
+        K::Tab => key::TAB,
+        K::Enter | K::KeypadEnter => key::ENTER,
+        K::Backspace => key::BACKSPACE,
+        K::Delete => key::DELETE,
+        K::Left => key::LEFT,
+        K::Right => key::RIGHT,
+        K::Up => key::UP,
+        K::Down => key::DOWN,
+        K::Home => key::HOME,
+        K::End => key::END,
+        K::PageUp => key::PAGE_UP,
+        K::PageDown => key::PAGE_DOWN,
+        K::Space => key::SPACE,
+        _ if ev.ch.is_some_and(|c| !c.is_control()) => key::CHAR,
+        _ => key::OTHER,
+    };
+    let mut flags = 0;
+    if ev.pressed {
+        flags |= key::PRESSED;
+    }
+    if ev.mods.shift {
+        flags |= key::SHIFT;
+    }
+    if ev.mods.ctrl {
+        flags |= key::CTRL;
+    }
+    if ev.mods.alt {
+        flags |= key::ALT;
+    }
+    let ch = ev.ch.filter(|c| !c.is_control()).map_or(0, |c| c as u32);
+    let c = code.to_le_bytes();
+    let ch = ch.to_le_bytes();
+    [c[0], c[1], flags, 0, ch[0], ch[1], ch[2], ch[3]]
+}
+
 pub fn dropped() -> u64 {
     DROPPED.load(Ordering::Relaxed)
 }
