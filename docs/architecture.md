@@ -605,3 +605,40 @@ shows every widget; the `boot` test runs it, takes screenshots
 (`build/logs/uidemo-*.png`), presses keys, moves the mouse and checks that the
 console comes back. `cargo run -p velora-ui --example render` draws the same
 gallery on the host.
+
+### Стартовое меню и установщик / Start menu and installer
+
+- `installer/core` (`velora-install`, тесты на хосте): план установки,
+  проверки, разметка GPT (автоматическая и с заданными размерами), FAT32 с
+  Limine и ядром, VeloraFS с программами и шрифтами, пользователи,
+  `/etc/velora/*.conf`. Прогресс — этапы «Копирование файлов», «Установка
+  загрузчика», «Настройка системы», «Завершение». Модуль `live` (feature
+  `velora`): диски `/dev` с моделью (`diskinfo`) и файлы Live-системы.
+- `installer/gui` (`velora-installer-gui`, тесты на хосте): экраны
+  установщика и меню как функции состояния (`App`, `Chooser`).
+- `userland/start` (`/bin/velora-start`): ядро запускает его в
+  Live-режиме перед `login`; меню, графический установщик (`--install`
+  открывает его сразу), запуск `velora-setup`, текстовое меню без экрана.
+  Строки `velora-start: ...` на последовательном порту отмечают экраны.
+- Тест `gui` в `tests/qemu_run.py`: меню, все экраны клавиатурой, режим
+  «Эксперт» с EFI 128 МиБ, установка на образ, загрузка с диска и проверка
+  настроек; снимки каждого экрана (`--screens`, `--resolution`,
+  `--screens-only`). Остальные тесты Live-образа выбирают в меню «3».
+
+`installer/core` (`velora-install`, host-tested) holds the plan, its checks,
+GPT partitioning (automatic or with given sizes), FAT32 with Limine and the
+kernel, VeloraFS with the programs and fonts, users and `/etc/velora/*.conf`;
+progress comes in the phases "copying files", "installing the bootloader",
+"setting up the system", "finishing". Its `live` module (feature `velora`)
+lists `/dev` disks with their model (`diskinfo`) and reads the Live system's
+files. `installer/gui` (`velora-installer-gui`, host-tested) has the
+installer and menu screens as functions of their state (`App`, `Chooser`).
+`userland/start` (`/bin/velora-start`) is run by the kernel in the Live
+system before `login`: the menu, the graphical installer (`--install` opens
+it directly), `velora-setup`, and a text menu without a screen; lines
+`velora-start: ...` on the serial port mark the screens. The `gui` test in
+`tests/qemu_run.py` goes through the menu and every screen with the keyboard,
+picks Expert mode with a 128 MiB EFI partition, installs onto an image, boots
+from it and checks the settings, saving a screenshot of every screen
+(`--screens`, `--resolution`, `--screens-only`). The other tests of the Live
+image choose "3" in the menu.

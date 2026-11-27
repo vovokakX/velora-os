@@ -352,6 +352,8 @@ pub enum ButtonKind {
     Primary,
     /// A dark pill with a thin border.
     Secondary,
+    /// A lighter grey pill without a border (a calm main action).
+    Tonal,
 }
 
 /// The frame's drawing context: the widget state, the canvas and fonts.
@@ -438,6 +440,14 @@ impl Ctx<'_> {
                 )
             }
             ButtonKind::Secondary => (if resp.hovered { t.field_hover } else { t.field }, t.text),
+            ButtonKind::Tonal => (
+                if resp.hovered {
+                    crate::canvas::lerp(t.selected, t.text, 30)
+                } else {
+                    t.selected
+                },
+                t.text,
+            ),
         };
         self.c.fill_rrect(r, radius, bg);
         if kind == ButtonKind::Secondary {
@@ -661,25 +671,90 @@ impl Ctx<'_> {
         );
         self.focus_ring(r, radius, resp.focused);
         if resp.activated && !items.is_empty() {
-            let row_h = self.ui.s(26);
-            let n = items.len() as i32;
-            let h = row_h * n.min(8);
-            let below = r.bottom() + self.ui.s(4);
-            let y = if below + h <= self.c.height as i32 {
-                below
-            } else {
-                r.y - self.ui.s(4) - h
-            };
-            self.ui.popup = Some(Popup {
-                id,
-                rect: Rect::new(r.x, y, r.w, h),
-                row_h,
-                items: items.iter().map(|s| String::from(*s)).collect(),
-                hover: *sel,
-                radius: radius.min(self.ui.s(10)),
-            });
+            self.open_popup(id, r, items, *sel, radius, r.w);
         }
         changed
+    }
+
+    fn open_popup(&mut self, id: Id, r: Rect, items: &[&str], sel: usize, radius: i32, w: i32) {
+        let row_h = self.ui.s(26);
+        let n = items.len() as i32;
+        let h = row_h * n.min(8);
+        let below = r.bottom() + self.ui.s(4);
+        let y = if below + h <= self.c.height as i32 {
+            below
+        } else {
+            r.y - self.ui.s(4) - h
+        };
+        self.ui.popup = Some(Popup {
+            id,
+            rect: Rect::new(r.x, y, w, h),
+            row_h,
+            items: items.iter().map(|s| String::from(*s)).collect(),
+            hover: sel,
+            radius: radius.min(self.ui.s(10)),
+        });
+    }
+
+    /// A button that opens a list of `items` ("Choose..."). Returns true
+    /// if the choice changed.
+    pub fn menu_button(
+        &mut self,
+        id: Id,
+        r: Rect,
+        label: &str,
+        items: &[&str],
+        sel: &mut usize,
+    ) -> bool {
+        let mut changed = false;
+        if let Some((pid, i)) = self.ui.picked
+            && pid == id
+        {
+            self.ui.picked = None;
+            if i != *sel {
+                *sel = i;
+                changed = true;
+            }
+        }
+        let resp = self.ui.interact(id, r);
+        let t = self.ui.theme;
+        let radius = self.ui.s(10);
+        self.c.fill_rrect(
+            r,
+            radius,
+            if resp.hovered { t.field_hover } else { t.field },
+        );
+        self.c
+            .stroke_rrect_fx(r, radius, self.ui.sfx(256).max(FX), t.field_border);
+        self.label_center(r, Weight::Medium, 11, label, t.text);
+        self.focus_ring(r, radius, resp.focused);
+        if resp.activated && !items.is_empty() {
+            let px = self.ui.px(11);
+            let widest = items
+                .iter()
+                .map(|s| self.f.measure(Weight::Regular, px, s))
+                .max()
+                .unwrap_or(0);
+            let w = r.w.max(widest + self.ui.s(36));
+            self.open_popup(id, r, items, *sel, radius, w);
+        }
+        changed
+    }
+
+    /// Any focusable area drawn by the program itself (a card, a swatch).
+    /// The arrows Left/Right report as -1/+1 when it has the focus.
+    pub fn selectable(&mut self, id: Id, r: Rect, radius: i32) -> (Response, i32) {
+        let resp = self.ui.interact(id, r);
+        let mut step = 0;
+        if resp.focused {
+            if self.ui.take_key(Key::Left) || self.ui.take_key(Key::Up) {
+                step = -1;
+            } else if self.ui.take_key(Key::Right) || self.ui.take_key(Key::Down) {
+                step = 1;
+            }
+        }
+        self.focus_ring(r, radius, resp.focused);
+        (resp, step)
     }
 
     /// A list in the concept's style: the chosen item on top (highlighted,

@@ -8,6 +8,23 @@
 устанавливает систему на диск. Программа: `/bin/velora-setup`, код:
 `installer/velora-setup` (собирается вместе с программами из `userland/`).
 
+### Стартовое меню и графический установщик
+
+При загрузке с ISO или флешки сначала открывается меню (`/bin/velora-start`):
+1. Графическая установка (по умолчанию, начинается через 10 с).
+2. Установка в терминале — `velora-setup` (ниже).
+3. Live-режим — вход в систему (пароль `velora`) и терминал vsh.
+
+Графический установщик: приветствие и язык установщика, язык и регион,
+клавиатура и курсор, оформление, разметка диска (автоматическая, ручная,
+«Эксперт»), пользователь, подтверждение, установка, готово. Управление
+мышью и клавиатурой (Tab, стрелки, Enter, Esc — назад). Из Live-системы его
+можно открыть командой `velora-start --install` (от root). Обе программы
+используют одно ядро установщика (`installer/core`, crate `velora-install`);
+экраны — `installer/gui`. Выбор оформления, языка и раскладки записывается в
+`/etc/velora/desktop.conf`, `locale.conf` и `keyboard.conf` для будущей
+оболочки; система эти файлы пока не читает.
+
 ### Запуск
 
 ```
@@ -55,6 +72,20 @@ SETUP_ROOT_PASSWORD=... SETUP_USER_PASSWORD=... \
 The Velora OS installer. It runs as root in the Live system (booted from the
 ISO) and installs the system onto a disk. Program: `/bin/velora-setup`; code:
 `installer/velora-setup` (built with the programs in `userland/`).
+
+Booting the ISO or a USB drive first opens a menu (`/bin/velora-start`):
+1) graphical installation (the default, starts after 10 s), 2) installation in
+the terminal (`velora-setup`, below), 3) the Live system (log in with the
+password `velora`, the vsh terminal). The graphical installer has the steps
+welcome and installer language, language and region, keyboard and pointer,
+appearance, disk (automatic, manual, expert), user, confirmation,
+installation and done; it works with the mouse and the keyboard (Tab, arrows,
+Enter, Escape goes back) and can be opened from the Live system with
+`velora-start --install` (as root). Both installers use one core
+(`installer/core`, crate `velora-install`); the screens are in
+`installer/gui`. Appearance, language and layout choices are written to
+`/etc/velora/desktop.conf`, `locale.conf` and `keyboard.conf` for the future
+shell; the system does not read them yet.
 
 Run `velora-setup`: it lists the disks and asks for the target disk, the name
 of the new user (lowercase letters, digits, `_`, `-`), the user's and root's

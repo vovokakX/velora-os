@@ -30,11 +30,19 @@ pub fn window(c: &mut Canvas, r: Rect, radius: i32, t: &Theme, scale: i64) {
 /// shape. Their edges sweep from the bottom middle to the top right, as
 /// in the design.
 pub fn waves(c: &mut Canvas, r: Rect, radius: i32, t: &Theme) {
+    waves_side(c, r, radius, t, false);
+}
+
+/// Waves from the bottom right (`mirror` false) or the bottom left.
+pub fn waves_side(c: &mut Canvas, r: Rect, radius: i32, t: &Theme, mirror: bool) {
     let w = r.w as i64;
     let h = r.h as i64;
     let x = r.x as i64;
     let y = r.y as i64;
-    let at = |fx: i64, fy: i64| (x * FX + w * FX * fx / 1000, y * FX + h * FX * fy / 1000);
+    let at = |fx: i64, fy: i64| {
+        let fx = if mirror { 1000 - fx } else { fx };
+        (x * FX + w * FX * fx / 1000, y * FX + h * FX * fy / 1000)
+    };
     let soft = (w * FX / 300).max(FX);
     let shade = if t.dark { 0xff000000 } else { 0xffffffff };
     // A broad lighter sweep.
@@ -83,6 +91,36 @@ pub fn waves(c: &mut Canvas, r: Rect, radius: i32, t: &Theme) {
         radius,
         fade(t.wave, 140),
     );
+}
+
+/// The parts of a screen that do not change between frames (backdrop,
+/// window, waves, panels), drawn once and copied into each frame. Large
+/// soft shapes are the slowest thing to draw, and programs are built
+/// without SSE.
+#[derive(Default)]
+pub struct Cache {
+    key: u64,
+    canvas: Option<Canvas>,
+}
+
+impl Cache {
+    /// Copies the cached picture for `key` into `c`, drawing it with
+    /// `draw` first if the key or the canvas size changed.
+    pub fn paint(&mut self, c: &mut Canvas, key: u64, draw: impl FnOnce(&mut Canvas)) {
+        let fresh = self.key == key
+            && self
+                .canvas
+                .as_ref()
+                .is_some_and(|b| b.width == c.width && b.height == c.height);
+        if !fresh {
+            let mut b = Canvas::new(c.width, c.height);
+            draw(&mut b);
+            self.canvas = Some(b);
+            self.key = key;
+        }
+        let b = self.canvas.as_ref().unwrap();
+        c.pixels.copy_from_slice(&b.pixels);
+    }
 }
 
 /// A side panel at the left of a window, its own rounded shape.

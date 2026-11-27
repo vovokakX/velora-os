@@ -159,6 +159,26 @@ name = "velora-input"
 version = "0.16.0"
 
 [[package]]
+name = "velora-install"
+version = "0.16.0"
+dependencies = [
+ "velora-auth",
+ "velora-fat",
+ "velora-gpt",
+ "velora-vfs",
+ "velorafs",
+ "vlibc",
+]
+
+[[package]]
+name = "velora-installer-gui"
+version = "0.16.0"
+dependencies = [
+ "velora-install",
+ "velora-ui",
+]
+
+[[package]]
 name = "velora-kernel"
 version = "0.16.0"
 dependencies = [
