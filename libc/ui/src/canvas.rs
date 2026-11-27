@@ -772,7 +772,12 @@ mod tests {
             let (x, y) = point_on_circle(0, 0, 100 * FX, t);
             let back = angle(x, y) as i64;
             let diff = (back - t as i64).rem_euclid(65536);
-            assert!(!(100..=65536 - 100).contains(&diff), "t {} back {}", t, back);
+            assert!(
+                !(100..=65536 - 100).contains(&diff),
+                "t {} back {}",
+                t,
+                back
+            );
         }
     }
 
