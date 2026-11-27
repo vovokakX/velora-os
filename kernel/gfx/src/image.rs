@@ -134,6 +134,62 @@ impl Image {
             }
         }
     }
+
+    /// Makes the background colour `bg` (0xRRGGBB) transparent, the way
+    /// "colour to alpha" in image editors does: every opaque pixel becomes
+    /// the least opaque colour that gives the same pixel over `bg`. Soft
+    /// edges become partly transparent, so the image fits any background.
+    pub fn color_to_alpha(&mut self, bg: u32) {
+        let b = [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8];
+        for p in self.data.as_chunks_mut::<4>().0 {
+            if p[3] != 255 {
+                continue;
+            }
+            let mut alpha = 0u32;
+            for k in 0..3 {
+                let (c, bk) = (p[k] as u32, b[k] as u32);
+                let r = match c.cmp(&bk) {
+                    core::cmp::Ordering::Greater => ((c - bk) * 255).div_ceil(255 - bk),
+                    core::cmp::Ordering::Less => ((bk - c) * 255).div_ceil(bk),
+                    core::cmp::Ordering::Equal => 0,
+                };
+                alpha = alpha.max(r);
+            }
+            // Premultiplied: alpha * colour = pixel - bg * (1 - alpha).
+            for k in 0..3 {
+                let v = p[k] as i32 - b[k] as i32 + (b[k] as u32 * alpha / 255) as i32;
+                p[k] = v.clamp(0, alpha as i32) as u8;
+            }
+            p[3] = alpha as u8;
+        }
+    }
+
+    /// The smallest part of the image that holds all its visible pixels
+    /// (the whole image if none is visible).
+    pub fn trim(&self) -> Image {
+        let (mut x0, mut y0, mut x1, mut y1) = (self.width, self.height, 0, 0);
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.pixel(x, y)[3] != 0 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        if x0 >= x1 {
+            return self.clone();
+        }
+        let mut out = Image::new(x1 - x0, y1 - y0);
+        for y in y0..y1 {
+            let from = (y * self.width + x0) * 4;
+            let to = (y - y0) * out.width * 4;
+            out.data[to..to + out.width * 4]
+                .copy_from_slice(&self.data[from..from + out.width * 4]);
+        }
+        out
+    }
 }
 
 /// One pass of the area-average filter along x (`horizontal`) or y.
@@ -242,6 +298,42 @@ mod tests {
         let two = row.resize(2, 1);
         assert_eq!(two.pixel(0, 0)[0], 85);
         assert_eq!(two.pixel(1, 0)[0], 105);
+    }
+
+    #[test]
+    fn color_to_alpha_and_trim() {
+        // Background, white, a half-way grey, and a colour darker than
+        // the background, on a 0x0e1316 background.
+        let bg = 0x0e1316;
+        let rgb = [14, 19, 22, 255, 255, 255, 134, 137, 138, 0, 0, 0];
+        let mut img = Image::from_rgb(4, 1, &rgb).unwrap();
+        img.color_to_alpha(bg);
+        assert_eq!(img.pixel(0, 0), [0, 0, 0, 0]);
+        assert_eq!(img.pixel(1, 0), [255, 255, 255, 255]);
+        let half = img.pixel(2, 0);
+        assert!((126..=129).contains(&half[3]), "{:?}", half);
+        // Every pixel over the background gives back the original.
+        for (x, want) in rgb.chunks(3).enumerate() {
+            let got = blend(img.pixel(x, 0), bg);
+            let got = [(got >> 16) as u8, (got >> 8) as u8, got as u8];
+            for k in 0..3 {
+                assert!(
+                    (got[k] as i32 - want[k] as i32).abs() <= 2,
+                    "{} {:?} {:?}",
+                    x,
+                    got,
+                    want
+                );
+            }
+        }
+        // Trimming keeps the visible part.
+        let mut sprite = Image::new(5, 4);
+        let dot = Image::from_rgb(2, 1, &[1, 2, 3, 4, 5, 6]).unwrap();
+        sprite.draw(&dot, 2, 1);
+        let t = sprite.trim();
+        assert_eq!((t.width, t.height), (2, 1));
+        assert_eq!(t.pixel(1, 0), [4, 5, 6, 255]);
+        assert_eq!(Image::new(3, 3).trim().width, 3);
     }
 
     #[test]
