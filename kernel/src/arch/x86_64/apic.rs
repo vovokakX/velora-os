@@ -8,6 +8,7 @@ use super::{hpet, pit, pmtimer};
 use crate::mm::mmio;
 use crate::sync::SpinLock;
 use alloc::vec::Vec;
+use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const MSR_APIC_BASE: u32 = 0x1b;
@@ -186,8 +187,22 @@ pub fn send_nmi_to_others() {
 
 /// Sets the task priority: interrupts of priority class `class` (vector
 /// / 16) and below are held back.
+///
+/// Written through CR8, the architectural form of the TPR in 64-bit
+/// mode. Some hypervisors (WHPX with QEMU's own APIC) keep the guest's
+/// CR8 and overwrite a TPR written through the APIC registers, so that
+/// write would not hold anything back.
 pub fn set_task_priority(class: u8) {
-    write(REG_TPR, (class as u32) << 4);
+    // SAFETY: CR8 only sets which interrupt classes are delivered.
+    unsafe { asm!("mov cr8, {}", in(reg) (class & 0xf) as u64, options(nomem, nostack)) }
+}
+
+/// The current task priority class (CR8).
+pub fn task_priority() -> u8 {
+    let v: u64;
+    // SAFETY: reading CR8 has no side effects.
+    unsafe { asm!("mov {}, cr8", out(reg) v, options(nomem, nostack)) }
+    v as u8
 }
 
 #[inline]
