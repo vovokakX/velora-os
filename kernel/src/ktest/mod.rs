@@ -154,7 +154,7 @@ static WATCHDOG_FIRED: AtomicBool = AtomicBool::new(false);
 /// Called by the boot CPU on every timer interrupt, before it takes the
 /// big kernel lock: a test that runs for more than 60 s is stuck, so the
 /// scheduler state is printed and the run ends.
-pub fn watchdog() {
+pub fn watchdog(frame: &crate::arch::x86_64::idt::InterruptFrame) {
     let start = TEST_STARTED.load(Ordering::Relaxed);
     let hz = crate::time::tsc_hz();
     if start == 0 || hz == 0 || crate::arch::cpu::rdtsc() - start < 60 * hz {
@@ -165,6 +165,12 @@ pub fn watchdog() {
     }
     crate::console::emergency(|w| {
         let _ = writeln!(w, "\nktest: watchdog: the test runs for more than 60 s");
+        let _ = writeln!(
+            w,
+            "CPU 0 was at RIP {:#x} RFLAGS {:#x}",
+            frame.rip, frame.rflags
+        );
+        let _ = crate::panic::write_backtrace(w, frame.rip, frame.rbp);
         crate::sched::debug_dump(w);
         crate::smp::debug_dump(w);
     });
