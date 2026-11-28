@@ -1,5 +1,9 @@
 //! The program heap: the same allocator as the kernel heap
 //! (`velora_mm::heap`), growing with fixed `mmap` calls from `HEAP_BASE`.
+//!
+//! Large blocks (from [`LARGE`] bytes: pictures, screen buffers) get
+//! their own mapping above the heap and are unmapped when freed, so their
+//! memory goes back to the system. The heap itself never shrinks.
 
 use crate::mem::{map, mmap, prot};
 use core::alloc::{GlobalAlloc, Layout};
@@ -11,6 +15,19 @@ use velora_mm::heap::{Heap, HeapStats, PageSource};
 /// Start of the heap window in every program.
 pub const HEAP_BASE: u64 = 0x0000_1000_0000_0000;
 const HEAP_END: u64 = 0x0000_1800_0000_0000;
+/// Blocks this large or larger are mapped on their own.
+pub const LARGE: usize = 256 * 1024;
+const LARGE_END: u64 = 0x0000_2000_0000_0000;
+
+/// Address space for large blocks (never reused: there is plenty).
+struct LargeArea(UnsafeCell<u64>);
+// SAFETY: programs are single-threaded until threads exist in user space.
+unsafe impl Sync for LargeArea {}
+static LARGE_NEXT: LargeArea = LargeArea(UnsafeCell::new(HEAP_END));
+
+fn pages(len: usize) -> usize {
+    len.div_ceil(PAGE_SIZE) * PAGE_SIZE
+}
 
 struct MmapPages {
     next: u64,
@@ -38,11 +55,31 @@ static ALLOCATOR: Allocator = Allocator(UnsafeCell::new(Heap::new(MmapPages { ne
 
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if layout.size() >= LARGE && layout.align() <= PAGE_SIZE {
+            let len = pages(layout.size());
+            // SAFETY: single-threaded access.
+            let next = unsafe { &mut *LARGE_NEXT.0.get() };
+            if *next + len as u64 > LARGE_END {
+                return core::ptr::null_mut();
+            }
+            return match mmap(*next, len, prot::READ | prot::WRITE, map::FIXED) {
+                Ok(p) => {
+                    *next += len as u64;
+                    p
+                }
+                Err(_) => core::ptr::null_mut(),
+            };
+        }
         // SAFETY: single-threaded access.
         unsafe { (*self.0.get()).alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if layout.size() >= LARGE && layout.align() <= PAGE_SIZE {
+            // SAFETY: the block was mapped on its own by `alloc`.
+            let _ = unsafe { crate::mem::munmap(ptr, pages(layout.size())) };
+            return;
+        }
         // SAFETY: single-threaded access; `ptr` came from `alloc`.
         unsafe { (*self.0.get()).dealloc(ptr, layout) }
     }
