@@ -139,6 +139,10 @@ usb-tablet — мышь без захвата; диск `build/run-disk.img`, с
 30 мс (около 33 кадров в секунду). Оба окна в Windows не растягиваются при
 масштабе экрана больше 100% (GTK сам, SDL через
 `SDL_WINDOWS_DPI_AWARENESS=permonitorv2` для процесса QEMU).
+Под WHPX перезапуск машины вешает QEMU (и `system_reset` из монитора, и с
+одним процессором; под TCG работает). Поэтому скрипт запускает QEMU с
+`-no-reboot` и после перезагрузки системы запускает его снова; после
+установки — уже без ISO.
 Тесты QEMU под WHPX: `VELORA_ACCEL="whpx,kernel-irqchip=off"
 VELORA_QEMU_EXTRA="-cpu qemu64"`.
 

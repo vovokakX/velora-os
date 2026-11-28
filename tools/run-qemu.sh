@@ -20,6 +20,11 @@
 #
 # Acceleration: WHPX on Windows, KVM on Linux. The script checks first
 # that it starts; if not, it warns and uses TCG (much slower).
+#
+# A machine reset hangs QEMU under WHPX (QEMU's own system_reset too, with
+# one CPU as well; TCG resets fine). So QEMU runs with -no-reboot, and when
+# the guest restarts the script starts QEMU again. After an installation
+# it starts without the ISO, as if the install drive had been removed.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -48,7 +53,7 @@ for arg in "$@"; do
         --full-screen) FULL=1 ;;
         --disk-only) ISO=0 ;;
         --fresh-disk) FRESH=1 ;;
-        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
         *) echo "run-qemu.sh: unknown argument '$arg'" >&2; exit 2 ;;
     esac
 done
@@ -152,9 +157,22 @@ ARGS=(-machine q35 -m 1G -smp 4 "${ACCEL[@]}"
     -netdev user,id=n0 -device e1000,netdev=n0
     -device qemu-xhci -device usb-kbd -device usb-tablet
     -vga none -device "VGA,xres=$W,yres=$H,vgamem_mb=64"
-    -display "$DISP" -serial file:build/run-serial.log)
-[ "$ISO" = 1 ] && ARGS+=(-cdrom velora.iso)
+    -display "$DISP" -serial file:build/run-serial.log -no-reboot)
 [ "$FULL" = 1 ] && ARGS+=(-full-screen)
 
 echo "run-qemu.sh: ${W}x${H}, $ACCEL_NAME, $DISK disk, $DISPLAY_KIND window; serial output in build/run-serial.log"
-exec "$QEMU" "${ARGS[@]}"
+while :; do
+    MEDIA=()
+    [ "$ISO" = 1 ] && MEDIA=(-cdrom velora.iso)
+    "$QEMU" "${ARGS[@]}" "${MEDIA[@]}"
+    # The window was closed, or the system was shut down.
+    tail -n 3 build/run-serial.log | grep -q "Velora OS: restarting" || break
+    if grep -q "velora-start: installed" build/run-serial.log; then
+        ISO=0
+    fi
+    if [ "$ISO" = 1 ]; then
+        echo "run-qemu.sh: the system restarted; starting QEMU again"
+    else
+        echo "run-qemu.sh: the system restarted; starting QEMU again from the disk"
+    fi
+done
