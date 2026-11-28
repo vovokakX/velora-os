@@ -507,9 +507,11 @@ mapped). A panic or a fatal exception stops the other CPUs with an NMI.
   раскладки EN/RU), CBW/CSW и команды SCSI для флешек.
 - `kernel/src/drivers/xhci.rs`: передача контроллера от BIOS, сброс,
   кольца команд и событий, сброс портов, Enable Slot / Address Device /
-  Configure Endpoint, управляющие, массовые и прерывающие передачи. Всё
-  опросом (D21, D44): команды и передачи флешки ждут своего события, поток
-  `usb` раз в тик читает отчёты клавиатуры и мыши.
+  Configure Endpoint, управляющие, массовые и прерывающие передачи.
+  Команды и передачи флешки ждут своего события опросом (D21, D44).
+  Отчёты клавиатуры и мыши читает обработчик прерывания MSI-X или MSI
+  (D51); без них поток `usb` читает их раз в тик. На каждой конечной
+  точке стоят восемь передач.
 - Флешка — блочное устройство `usbN`; разделы (`usbNp1`) и FAT32
   монтируются как у других дисков, на разделе EFI Velora хранится журнал
   паники. Мышь — `/dev/mouse` (пакеты по 4 байта).
@@ -519,9 +521,11 @@ boot protocol keyboard and mouse reports, HID key to PS/2 set 1 scancode
 translation (a USB keyboard uses the same decoder and EN/RU layouts) and
 CBW/CSW plus SCSI commands for flash drives. `kernel/src/drivers/xhci.rs` does
 the BIOS handoff, reset, command and event rings, port reset, Enable Slot /
-Address Device / Configure Endpoint and control, bulk and interrupt transfers,
-all polled (D21, D44): commands and drive transfers wait for their event, and
-the `usb` thread reads keyboard and mouse reports every tick. A flash drive is
+Address Device / Configure Endpoint and control, bulk and interrupt transfers.
+Commands and drive transfers wait for their event by polling (D21, D44).
+Keyboard and mouse reports are read by the MSI-X or MSI interrupt handler
+(D51); without those, the `usb` thread reads them every tick. Each endpoint
+has eight transfers queued. A flash drive is
 block device `usbN`; its partitions (`usbNp1`) and FAT32 are mounted like any
 disk's, and a Velora EFI partition keeps the panic log. The mouse is
 `/dev/mouse` (4-byte packets).

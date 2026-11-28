@@ -87,6 +87,7 @@
 |---|---|
 | `velora.fontscale=1` (`2`, `3`) | размер шрифта консоли; без параметра выбирается сам |
 | `velora.root=PARTUUID=<GUID>` | корневой раздел VeloraFS (ставит установщик) |
+| `velora.xhci_poll` | не использовать прерывания xHCI (MSI-X, MSI): клавиатура и мышь USB читаются раз в тик |
 
 Сообщения о проблемах — в issues репозитория. Приложите `velora-panic.log`
 или вывод `dmesg` и укажите модель компьютера.
@@ -175,6 +176,7 @@ example to edit `boot/limine.conf`.
 |---|---|
 | `velora.fontscale=1` (`2`, `3`) | console font size; chosen automatically when absent |
 | `velora.root=PARTUUID=<GUID>` | VeloraFS root partition (set by the installer) |
+| `velora.xhci_poll` | no xHCI interrupts (MSI-X, MSI): USB keyboards and mice are read every tick |
 
 Report problems in the repository's issues; attach `velora-panic.log` or the
 `dmesg` output and name the computer model.

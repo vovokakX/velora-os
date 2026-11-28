@@ -1336,3 +1336,86 @@ theme has an accent of its own: when the accent was not changed, choosing the
 theme switches to it. The detail colour (`Theme::detail`) is used for the text
 cursor and the mark of the running installation step; in the dark and light
 themes it is the accent.
+
+## D51. Прерывания xHCI (MSI-X, MSI) и указатель по кадрам / xHCI interrupts (MSI-X, MSI) and the pointer by frames
+
+**2026-11-28**
+
+**RU.** Раньше поток `usb` читал кольцо событий xHCI раз в тик (100 Гц):
+мышь читалась 100 раз в секунду, а движения рывками ложились на кадры
+60 Гц (в один кадр то одно движение, то два). Теперь контроллер получает
+прерывание: сначала MSI-X, если его нет — MSI, если нет и его (или в
+командной строке `velora.xhci_poll`) — прежний опрос по тику. Вектор
+0x48 + номер контроллера (до четырёх), прерывание идёт на процессор,
+который настраивал контроллер (процессор 0). Модерация прерываний —
+не чаще раза в миллисекунду.
+
+Обработчик сам читает кольцо событий (как PS/2 — свои байты): если бы он
+только будил поток `usb`, каждый отчёт мыши переключал бы потоки и
+адресные пространства, сбрасывая TLB программы, которая рисует.
+Блокировка контроллера выключает прерывания, пока занята, поэтому на
+своём процессоре обработчик всегда её получает; если её держит другой
+процессор (ввод-вывод флешки, который сам разбирает пришедшие отчёты),
+поток `usb` смотрит кольцо на следующем тике. Поток закреплён за
+процессором 0 и проверяет флаг с выключенными прерываниями, поэтому
+пробуждение не теряется.
+
+На каждой конечной точке клавиатуры и мыши стоят восемь передач вместо
+одной: контроллер может отдать несколько отчётов, пока драйвер не
+посмотрел кольцо. При опросе раньше доходил один отчёт за тик, очередь
+планшета QEMU переполнялась, и терялись нажатия кнопок.
+
+Очередь мыши в ядре складывает движение с последним событием, если
+ничего не теряется (те же кнопки, нет колеса, сумма помещается; у
+планшета — последняя позиция), поэтому программа, которая читает раз в
+кадр, получает всё движение.
+
+Программа рисует указатель один раз за кадр, там, куда его поставил
+последний отчёт: чтение ввода только двигает позицию, все движения между
+кадрами складываются. Перед выводом кадра ввод читается ещё раз; кадр,
+в котором ничего не меняется, только показывает указатель. Указатель
+двигается не чаще 60 раз в секунду, без рывков от лишних отчётов.
+
+Проверка: тест ядра требует MSI-X у xHCI в QEMU и прерываний во время
+движения мыши; `qemu_run.py fps` требует больше 150 чтений указателя в
+секунду с прерываниями (QMP шлёт 250 позиций), не больше 62 показов
+указателя в секунду, а с `--xhci-polled` (у xHCI в QEMU выключены MSI и
+MSI-X) — опрос и работающий указатель.
+
+**EN.** The `usb` thread used to read the xHCI event ring every tick
+(100 Hz): the mouse was read 100 times a second, and its movements fell
+unevenly on 60 Hz frames (one movement in a frame, then two). The controller
+now gets an interrupt: MSI-X, else MSI, else (or with `velora.xhci_poll` on
+the command line) the old polling every tick. The vector is 0x48 plus the
+controller's number (up to four); the interrupt goes to the CPU that set the
+controller up (CPU 0). Interrupt moderation allows at most one a millisecond.
+
+The handler reads the event ring itself (as the PS/2 handler reads its
+bytes): if it only woke the `usb` thread, every mouse report would switch
+threads and address spaces and flush the TLB of the program that draws. The
+controller lock turns interrupts off while held, so on its own CPU the
+handler always gets it; if another CPU holds it (flash drive I/O, which
+handles the reports that arrive meanwhile), the `usb` thread looks at the
+ring on the next tick. That thread runs on CPU 0 and checks its flag with
+interrupts off, so no wake-up is lost.
+
+Each keyboard and mouse endpoint has eight transfers queued instead of one:
+the controller can deliver several reports before the driver looks at the
+ring. With polling only one report a tick got through, QEMU's tablet queue
+overflowed, and button presses were lost.
+
+The kernel's mouse queue joins a movement to the last event when nothing is
+lost (the same buttons, no wheel, the sum fits; for a tablet, the last
+position), so a program that reads once a frame gets the whole movement.
+
+The program draws the pointer once a frame, where the last report put it:
+reading input only moves the position, and all movements between frames add
+up. Input is read once more before a frame is shown; a frame in which nothing
+changes only shows the pointer. The pointer moves at most 60 times a second,
+without jumps from extra reports.
+
+Tests: the kernel test requires MSI-X on QEMU's xHCI and interrupts while
+the mouse moves; `qemu_run.py fps` requires more than 150 pointer reads a
+second with interrupts (QMP sends 250 positions), at most 62 pointer moves
+shown a second, and with `--xhci-polled` (MSI and MSI-X off on QEMU's xHCI)
+polling and a working pointer.

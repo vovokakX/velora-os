@@ -61,9 +61,10 @@ struct Fps {
     /// Start of the current second (us).
     since: u64,
     frames: u32,
-    pointer: u32,
-    /// The screen's pointer move count at the start of the second.
-    pointer_base: u32,
+    /// Pointer moves shown and pointer reports read in the last second.
+    pointer: (u32, u32),
+    /// The screen's counts of both at the start of the second.
+    pointer_base: (u32, u32),
     total_us: u64,
     max_us: u64,
     /// Start of the last frame (us) and whether it was animating: the
@@ -78,7 +79,7 @@ struct Fps {
 }
 
 impl Fps {
-    fn toggle(&mut self, pointer_moves: u32) {
+    fn toggle(&mut self, pointer_moves: (u32, u32)) {
         self.on = !self.on;
         *self = Fps {
             on: self.on,
@@ -110,13 +111,17 @@ impl Fps {
     }
 
     /// Closes the second if it is over; true when the text changed.
-    /// `pointer_moves` is the screen's count of pointer moves.
-    fn tick(&mut self, pointer_moves: u32) -> bool {
+    /// `pointer_moves`: the screen's counts of pointer moves shown and
+    /// reports read.
+    fn tick(&mut self, pointer_moves: (u32, u32)) -> bool {
         let now = us();
         if !self.on || now < self.since + 1_000_000 {
             return false;
         }
-        self.pointer = pointer_moves.wrapping_sub(self.pointer_base);
+        self.pointer = (
+            pointer_moves.0.wrapping_sub(self.pointer_base.0),
+            pointer_moves.1.wrapping_sub(self.pointer_base.1),
+        );
         self.pointer_base = pointer_moves;
         let secs = (now - self.since) as f32 / 1e6;
         let avg = if self.frames > 0 {
@@ -134,11 +139,12 @@ impl Fps {
             String::from("anim --")
         };
         self.text = alloc::format!(
-            "{:.0} fps  {:.1} ms  max {:.1} ms  pointer {:.0}/s  {}",
+            "{:.0} fps  {:.1} ms  max {:.1} ms  pointer {:.0}/s  input {:.0}/s  {}",
             self.frames as f32 / secs,
             avg,
             self.max_us as f32 / 1000.0,
-            self.pointer as f32 / secs,
+            self.pointer.0 as f32 / secs,
+            self.pointer.1 as f32 / secs,
             anim,
         );
         println!("velora-start: fps {}", self.text);
@@ -172,7 +178,7 @@ impl Fps {
     }
 
     fn area() -> Rect {
-        Rect::new(8, 8, 600, 30)
+        Rect::new(8, 8, 720, 30)
     }
 }
 
@@ -259,7 +265,7 @@ impl Gui {
     /// change. None when nothing changes: the frame is skipped (the
     /// pointer already moved).
     fn plan(&mut self, events: &[Event], full: bool) -> Option<Rect> {
-        let counter = self.fps.tick(self.screen.pointer_moves);
+        let counter = self.fps.tick(self.pointer_counts());
         let toggles = events.iter().any(|e| {
             matches!(
                 e,
@@ -307,7 +313,7 @@ impl Gui {
                 key: Key::F(12), ..
             } = e
             {
-                self.fps.toggle(self.screen.pointer_moves);
+                self.fps.toggle(self.pointer_counts());
                 toggled = true;
             }
         }
@@ -321,9 +327,33 @@ impl Gui {
         }
     }
 
+    fn pointer_counts(&self) -> (u32, u32) {
+        (self.screen.pointer_moves, self.screen.pointer_reports)
+    }
+
+    /// Reads the input that came while the frame was drawn: the pointer
+    /// is then shown where the last report put it (its events wait for
+    /// the next frame).
+    fn catch_up(&mut self) {
+        let polled = self.screen.poll();
+        if !polled.is_empty() {
+            self.queue_events(polled);
+        }
+    }
+
+    /// For a frame that draws nothing: shows the pointer at its latest
+    /// position. Returns when the next frame may start (us).
+    fn skip(&mut self) -> u64 {
+        let now = us();
+        self.catch_up();
+        self.screen.show_pointer();
+        now + FRAME_US
+    }
+
     /// Shows the frame (with the frame counter, if it is on).
     fn present(&mut self, f: &Frame) {
         self.fps.draw(&mut self.screen.canvas, &mut self.fonts);
+        self.catch_up();
         self.screen.present(f.area);
         let b = self.bounds();
         self.screen.canvas.set_frame(b);
@@ -349,7 +379,8 @@ impl Gui {
     /// when input is waiting and the frame is due (`due`, us since boot),
     /// or empty at `due` while something moves. Otherwise it sleeps until
     /// input comes; the kernel wakes it at once (`input_wait`). The
-    /// pointer moves on the screen as soon as its events are read.
+    /// pointer is drawn by the frames (or [`Gui::skip`]), so it moves at
+    /// most 60 times a second, to the position of the last report.
     fn next_frame(&mut self, animating: bool, due: u64) -> Vec<Event> {
         loop {
             let polled = self.screen.poll();
@@ -537,7 +568,8 @@ fn menu(gui: &mut Gui) -> Mode {
             events = gui.next_frame_until(gui.ui.animating(), f.start + FRAME_US, second);
         } else {
             full = false;
-            events = gui.next_frame_until(false, 0, second);
+            let due = gui.skip();
+            events = gui.next_frame_until(false, due, second);
         }
         if events.is_empty() && us() >= second {
             second += 1_000_000;
@@ -584,7 +616,8 @@ fn installer(gui: &mut Gui) {
         let (p, large) = app.pointer();
         gui.set_pointer(p, large);
         let Some(area) = gui.plan(&events, full) else {
-            events = gui.next_frame(false, 0);
+            let due = gui.skip();
+            events = gui.next_frame(false, due);
             continue;
         };
         let before = app.screen;

@@ -85,6 +85,27 @@ mod trace {
     }
     pub static WAITING: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(u64::MAX) }; MAX_CPUS];
 
+    /// Asks CPU `index` through an NMI where it is: RIP, RBP and RFLAGS.
+    pub fn where_is(index: usize) -> Option<(u64, u64, u64)> {
+        let id = apic_id(index)?;
+        WHERE_RIP.store(0, Ordering::SeqCst);
+        WHERE_REQUEST.store(true, Ordering::SeqCst);
+        apic::send_nmi(id);
+        let end = cpu::rdtsc() + crate::time::tsc_hz() / 10;
+        while WHERE_RIP.load(Ordering::SeqCst) == 0 && cpu::rdtsc() < end {
+            core::hint::spin_loop();
+        }
+        WHERE_REQUEST.store(false, Ordering::SeqCst);
+        let rip = WHERE_RIP.load(Ordering::SeqCst);
+        (rip != 0).then(|| {
+            (
+                rip,
+                WHERE_RBP.load(Ordering::SeqCst),
+                WHERE_FLAGS.load(Ordering::SeqCst),
+            )
+        })
+    }
+
     pub fn dump() -> ! {
         if DUMPING.swap(true, Ordering::SeqCst) {
             cpu::halt_forever();
@@ -157,12 +178,17 @@ fn trace(op: u64, depth: u64) {
 fn trace(_op: u64, _depth: u64) {}
 
 #[cfg(feature = "ktest")]
-pub use trace::answer_where;
+pub use trace::{answer_where, where_is};
 static OWNER: AtomicU64 = AtomicU64::new(NO_OWNER);
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(0);
 static SERVING: AtomicU64 = AtomicU64::new(0);
 /// CPUs sleeping in `bkl_enter` (bit per CPU index).
 static SLEEPERS: AtomicU64 = AtomicU64::new(0);
+/// How long a CPU keeps the lock it just took before it yields it at an
+/// interrupt (see [`bkl_yield_if_contended`]).
+const MIN_HOLD_US: u64 = 1000;
+/// TSC when each CPU last took the lock (not counting nested entries).
+static ACQUIRED_AT: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 
 /// Takes the big kernel lock (or nests deeper if this CPU holds it).
 /// Interrupts must be disabled.
@@ -209,6 +235,9 @@ pub fn bkl_enter() {
         }
     }
     OWNER.store(pc.index, Ordering::Relaxed);
+    if let Some(a) = ACQUIRED_AT.get(pc.index as usize) {
+        a.store(cpu::rdtsc(), Ordering::Relaxed);
+    }
     #[cfg(feature = "ktest")]
     trace::WAITING[pc.index as usize].store(u64::MAX, Ordering::Relaxed);
     pc.bkl_depth = 1;
@@ -289,8 +318,27 @@ pub fn bkl_reacquire(depth: u64) {
 /// kernel may be preempted anyway (an interrupt that arrived with
 /// interrupts enabled), so other kernel code may run before this CPU
 /// continues — as it could on one CPU after a thread switch.
+///
+/// A CPU that took the lock less than [`MIN_HOLD_US`] ago keeps it. While
+/// it waited, its next timer interrupt became due and arrives as soon as
+/// it returns; yielding again there would send it to the back of the
+/// queue before its thread ran at all. With two CPUs holding the lock
+/// between ticks (a busy kernel thread on each), every CPU then only
+/// passed the lock on, and no thread made progress.
 pub fn bkl_yield_if_contended() {
-    if bkl_held() && NEXT_TICKET.load(Ordering::Relaxed) > SERVING.load(Ordering::Relaxed) + 1 {
+    let recent = percpu::ready()
+        && ACQUIRED_AT
+            .get(percpu::this().index as usize)
+            .is_some_and(|a| {
+                let hz = crate::time::tsc_hz();
+                hz > 0
+                    && cpu::rdtsc().saturating_sub(a.load(Ordering::Relaxed))
+                        < hz / 1_000_000 * MIN_HOLD_US
+            });
+    if !recent
+        && bkl_held()
+        && NEXT_TICKET.load(Ordering::Relaxed) > SERVING.load(Ordering::Relaxed) + 1
+    {
         let d = bkl_release_all();
         bkl_reacquire(d);
     }

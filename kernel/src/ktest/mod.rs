@@ -178,6 +178,18 @@ pub fn watchdog(frame: &crate::arch::x86_64::idt::InterruptFrame) {
             frame.rip, frame.rflags
         );
         let _ = crate::panic::write_backtrace(w, frame.rip, frame.rbp);
+        for c in 1..crate::smp::online() {
+            match crate::smp::where_is(c) {
+                Some((rip, rbp, flags)) => {
+                    let _ = writeln!(w, "CPU {} was at RIP {:#x} RFLAGS {:#x}", c, rip, flags);
+                    let _ = crate::panic::write_backtrace(w, rip, rbp);
+                }
+                None => {
+                    let _ = writeln!(w, "CPU {} did not answer", c);
+                }
+            }
+        }
+        crate::arch::x86_64::irq::debug_dump(w);
         crate::sched::debug_dump(w);
         crate::smp::debug_dump(w);
     });
@@ -509,7 +521,7 @@ fn pointer_events_become_packets() {
         wheel: 1,
         abs: None,
     };
-    let p = rel.packet();
+    let p = crate::input::packet(&rel);
     assert_eq!(p.len(), pointer::PACKET);
     assert_eq!((p[0], p[1], p[2] as i8), (0, 1, 1));
     assert_eq!(i16::from_le_bytes([p[4], p[5]]), -3);
@@ -518,7 +530,7 @@ fn pointer_events_become_packets() {
         abs: Some((32767, 100)),
         ..MouseEvent::default()
     };
-    let p = abs.packet();
+    let p = crate::input::packet(&abs);
     assert_eq!(p[0], pointer::ABSOLUTE);
     assert_eq!(i16::from_le_bytes([p[4], p[5]]) as i32, pointer::ABS_MAX);
     assert_eq!(i16::from_le_bytes([p[6], p[7]]), 100);

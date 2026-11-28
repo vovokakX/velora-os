@@ -16,6 +16,8 @@ pub const VECTOR_KEYBOARD: u8 = 0x21;
 pub const VECTOR_PS2_MOUSE: u8 = 0x2c;
 /// First vector handed out to PCI devices (MSI-X).
 pub const VECTOR_DEVICE_BASE: u8 = 0x30;
+/// xHCI controllers (MSI-X or MSI), one vector each, up to four.
+pub const VECTOR_XHCI: u8 = 0x48;
 
 static HANDLERS: [AtomicUsize; 256] = [const { AtomicUsize::new(0) }; 256];
 static SPURIOUS: AtomicU64 = AtomicU64::new(0);
@@ -51,6 +53,8 @@ pub fn dispatch(frame: &mut InterruptFrame) {
         apic::eoi();
         return;
     }
+    #[cfg(feature = "ktest")]
+    BY_VECTOR[vector as usize].fetch_add(1, Ordering::Relaxed);
     let h = HANDLERS[vector as usize].load(Ordering::Acquire);
     if h == 0 {
         if UNHANDLED.fetch_add(1, Ordering::Relaxed) < 8 {
@@ -69,6 +73,23 @@ pub fn dispatch(frame: &mut InterruptFrame) {
     }
     // After EOI, so the next timer interrupt can arrive on the new thread.
     crate::sched::preempt_if_needed();
+}
+
+/// Interrupts taken per vector (test builds, for the watchdog's report).
+#[cfg(feature = "ktest")]
+static BY_VECTOR: [AtomicU64; 256] = [const { AtomicU64::new(0) }; 256];
+
+/// Writes the vectors that were taken, with their counts.
+#[cfg(feature = "ktest")]
+pub fn debug_dump(w: &mut dyn core::fmt::Write) {
+    let _ = write!(w, "interrupts by vector:");
+    for (v, n) in BY_VECTOR.iter().enumerate() {
+        let n = n.load(Ordering::Relaxed);
+        if n > 0 {
+            let _ = write!(w, " {:#x}:{}", v, n);
+        }
+    }
+    let _ = writeln!(w);
 }
 
 pub struct IrqStats {

@@ -147,36 +147,17 @@ pub fn wait(timeout_ms: Option<u64>) -> Option<KeyEvent> {
 
 /// One mouse movement or button change. Read from `/dev/mouse` as 4-byte
 /// packets (buttons, dx, dy, wheel; relative events only) and from
-/// `/dev/pointer` as 8-byte packets (`velora_abi::pointer`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MouseEvent {
-    pub buttons: u8,
-    pub dx: i8,
-    pub dy: i8,
-    pub wheel: i8,
-    /// A tablet's position, 0..=32767 on each axis (dx and dy are 0).
-    pub abs: Option<(u16, u16)>,
-}
+/// `/dev/pointer` as 8-byte packets ([`packet`]).
+pub use velora_input::mouse::MouseEvent;
 
-impl MouseEvent {
-    /// The `/dev/pointer` packet.
-    pub fn packet(&self) -> [u8; velora_abi::pointer::PACKET] {
-        let (flags, x, y) = match self.abs {
-            Some((x, y)) => (velora_abi::pointer::ABSOLUTE, x as i16, y as i16),
-            None => (0, self.dx as i16, self.dy as i16),
-        };
-        let (x, y) = (x.to_le_bytes(), y.to_le_bytes());
-        [
-            flags,
-            self.buttons,
-            self.wheel as u8,
-            0,
-            x[0],
-            x[1],
-            y[0],
-            y[1],
-        ]
-    }
+/// The `/dev/pointer` packet of `ev` (`velora_abi::pointer`).
+pub fn packet(ev: &MouseEvent) -> [u8; velora_abi::pointer::PACKET] {
+    let (flags, x, y) = match ev.abs {
+        Some((x, y)) => (velora_abi::pointer::ABSOLUTE, x as i16, y as i16),
+        None => (0, ev.dx as i16, ev.dy as i16),
+    };
+    let (x, y) = (x.to_le_bytes(), y.to_le_bytes());
+    [flags, ev.buttons, ev.wheel as u8, 0, x[0], x[1], y[0], y[1]]
 }
 
 const MOUSE_CAPACITY: usize = 64;
@@ -200,10 +181,23 @@ static MOUSE: SpinLock<MouseQueue> = SpinLock::new(MouseQueue {
 });
 static MOUSE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
-/// Adds a mouse event; the oldest one is dropped when the queue is full.
+/// Adds a mouse event. A movement joins the last queued event when no
+/// information is lost (see [`MouseEvent::merge`]), so a program that
+/// reads late still gets the whole movement; the oldest event is dropped
+/// only when the queue is full of events that cannot be joined.
 pub fn push_mouse(ev: MouseEvent) {
     MOUSE_TOTAL.fetch_add(1, Ordering::Relaxed);
     let mut q = MOUSE.lock();
+    if q.len > 0 {
+        let last = (q.head + q.len - 1) % MOUSE_CAPACITY;
+        if q.buf[last].merge(&ev) {
+            drop(q);
+            if sched::is_running() {
+                ANY.wake_all();
+            }
+            return;
+        }
+    }
     if q.len == MOUSE_CAPACITY {
         q.head = (q.head + 1) % MOUSE_CAPACITY;
         q.len -= 1;
