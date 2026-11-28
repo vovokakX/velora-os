@@ -135,6 +135,16 @@ pub(crate) struct Win {
     pub(crate) closing: bool,
     /// Input for this frame, in window coordinates.
     events: Vec<Event>,
+    /// Where the last frame showed it (with its shadow) and whether it
+    /// had the focus (the shadow is darker): drawn again when it changes.
+    drawn: Option<(Rect, bool)>,
+}
+
+impl Win {
+    /// Minimized, closing, or on the way to either.
+    fn hidden(&self) -> bool {
+        self.minimized || self.closing || self.anim.is_some_and(|a| a.kind == AnimKind::Minimize)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +237,12 @@ pub struct Desktop {
     pub(crate) host_log_pending: Option<&'static str>,
     /// Tweens moved in the last frame: draw their areas again.
     pub(crate) anim_prev: bool,
+    /// Ctrl+Alt+D: every area drawn again is tinted, each frame in the
+    /// next colour; areas not drawn keep theirs.
+    pub debug_damage: bool,
+    /// Frames drawn (the tint colour), and areas drawn since start.
+    pub frames: u64,
+    pub painted: u64,
 }
 
 impl Desktop {
@@ -289,6 +305,9 @@ impl Desktop {
             frame_us: 0,
             host_log_pending: None,
             anim_prev: false,
+            debug_damage: false,
+            frames: 0,
+            painted: 0,
             cfg,
         };
         d.tw.enabled = d.cfg.animations;
@@ -440,13 +459,41 @@ impl Desktop {
         if let Some(a) = w.anim {
             let p = a.progress(self.now);
             let r = gfx::lerp_rect(a.from, a.to, p);
-            let alpha = a.a0 + ((a.a1 as i64 - a.a0 as i64) * p as i64 / 1000) as u32;
+            let alpha = (a.a0 as i64 + (a.a1 as i64 - a.a0 as i64) * p as i64 / 1000) as u32;
             return Some((r, alpha));
         }
         if w.minimized {
             None
         } else {
             Some((w.rect, 255))
+        }
+    }
+
+    /// The screen area a window shown at `r` covers with its shadow.
+    pub(crate) fn extent(&self, r: Rect) -> Rect {
+        r.union(r.offset(0, self.s(10)).inset(-self.shadow.pad))
+    }
+
+    /// Damages the old and the new place of every window that moved,
+    /// changed size, opacity or focus since the last frame, and the place
+    /// of windows that are gone. Every frame of an animation is erased
+    /// this way, whatever changed the window.
+    fn sync_windows(&mut self) {
+        for i in 0..self.windows.len() {
+            let w = &self.windows[i];
+            let now = self
+                .shown(w)
+                .map(|(r, _)| (self.extent(r), self.focus == Some(w.id)));
+            let (old, animating) = (w.drawn, w.anim.is_some());
+            if now != old || animating {
+                if let Some((r, _)) = old {
+                    self.add_damage(r);
+                }
+                if let Some((r, _)) = now {
+                    self.add_damage(r);
+                }
+                self.windows[i].drawn = now;
+            }
         }
     }
 
@@ -495,6 +542,7 @@ impl Desktop {
             anim: None,
             closing: false,
             events: Vec::new(),
+            drawn: None,
         };
         self.resize_buffer(&mut win, host, fonts);
         let d = self.dur(220);
@@ -511,7 +559,7 @@ impl Desktop {
         host.log(&name);
         self.windows.push(win);
         self.set_focus(Some(id));
-        self.add_damage(rect.inset(-self.shadow.pad));
+        self.add_damage(self.extent(rect));
         id
     }
 
@@ -548,7 +596,7 @@ impl Desktop {
             let w = self.windows.remove(i);
             let r = w.rect;
             self.windows.push(w);
-            self.add_damage(r.inset(-self.shadow.pad));
+            self.add_damage(self.extent(r));
         }
         self.set_focus(Some(id));
     }
@@ -557,7 +605,7 @@ impl Desktop {
         self.windows
             .iter()
             .rev()
-            .find(|w| !w.minimized && !w.closing)
+            .find(|w| !w.hidden())
             .map(|w| w.id)
     }
 
@@ -620,13 +668,13 @@ impl Desktop {
             t0: now,
             dur: d,
         });
-        self.add_damage(from.inset(-self.shadow.pad));
+        self.add_damage(self.extent(from));
         if self.focus == Some(id) {
             let next = self
                 .windows
                 .iter()
                 .rev()
-                .find(|w| w.id != id && !w.minimized && !w.closing)
+                .find(|w| w.id != id && !w.hidden())
                 .map(|w| w.id);
             self.set_focus(next);
         }
@@ -676,7 +724,6 @@ impl Desktop {
     ) {
         let d = self.dur(220);
         let now = self.now;
-        let pad = self.shadow.pad;
         let Some(i) = self.win_index(id) else {
             return;
         };
@@ -698,8 +745,8 @@ impl Desktop {
             dur: d,
         });
         self.windows.insert(i, w);
-        self.add_damage(from.inset(-pad));
-        self.add_damage(to.inset(-pad));
+        self.add_damage(self.extent(from));
+        self.add_damage(self.extent(to));
     }
 
     fn toggle_maximize(&mut self, id: u32, host: &mut dyn Host, fonts: &mut Fonts) {
@@ -1127,6 +1174,16 @@ impl Desktop {
                         }
                         true
                     }
+                    Key::Char('d') if ctrl && alt => {
+                        self.debug_damage = !self.debug_damage;
+                        host.log(if self.debug_damage {
+                            "lumi: damage debug on"
+                        } else {
+                            "lumi: damage debug off"
+                        });
+                        self.damage_all();
+                        true
+                    }
                     Key::Char('t') if ctrl && alt => {
                         self.launch(AppId::Terminal, host, fonts);
                         true
@@ -1246,8 +1303,8 @@ impl Desktop {
                             rect: nr,
                             moved: true,
                         });
-                        self.add_damage(old.inset(-self.shadow.pad));
-                        self.add_damage(nr.inset(-self.shadow.pad));
+                        self.add_damage(self.extent(old));
+                        self.add_damage(self.extent(nr));
                         return;
                     }
                     r.x += dx;
@@ -1300,9 +1357,8 @@ impl Desktop {
                     self.resize_buffer(&mut w, host, fonts);
                     self.windows.insert(i, w);
                 }
-                let pad = self.shadow.pad;
-                self.add_damage(old.inset(-pad));
-                self.add_damage(r.inset(-pad));
+                self.add_damage(self.extent(old));
+                self.add_damage(self.extent(r));
             }
             return;
         }
@@ -1577,29 +1633,23 @@ impl Desktop {
         let mut actions: Vec<(u32, Action)> = Vec::new();
         let mut i = 0;
         while i < self.windows.len() {
-            let shown_before = self.shown(&self.windows[i]);
-            if let Some(a) = self.windows[i].anim {
-                if a.progress(now) >= 1000 {
-                    self.windows[i].anim = None;
-                    match a.kind {
-                        AnimKind::Close => {
-                            let r = a.from.inset(-self.shadow.pad);
-                            self.windows.remove(i);
+            if let Some(a) = self.windows[i].anim
+                && a.progress(now) >= 1000
+            {
+                self.windows[i].anim = None;
+                match a.kind {
+                    AnimKind::Close => {
+                        // Erase it from wherever the last frame showed it.
+                        let w = self.windows.remove(i);
+                        if let Some((r, _)) = w.drawn {
                             self.add_damage(r);
-                            self.panel_changed();
-                            continue;
                         }
-                        AnimKind::Minimize => self.windows[i].minimized = true,
-                        _ => {}
+                        self.add_damage(self.extent(a.from));
+                        self.panel_changed();
+                        continue;
                     }
-                }
-                if let Some((r, _)) = shown_before {
-                    let pad = self.shadow.pad;
-                    self.add_damage(r.inset(-pad));
-                }
-                if let Some((r, _)) = self.shown(&self.windows[i]) {
-                    let pad = self.shadow.pad;
-                    self.add_damage(r.inset(-pad));
+                    AnimKind::Minimize => self.windows[i].minimized = true,
+                    _ => {}
                 }
             }
             if !self.windows[i].closing && !self.windows[i].app.alive() {
@@ -1624,6 +1674,7 @@ impl Desktop {
         for (from, a) in actions {
             self.run_action(from, a, host, fonts);
         }
+        self.sync_windows();
         if self.mode == Mode::Session {
             self.tick_overlays(now);
         } else {
@@ -1726,8 +1777,22 @@ impl Desktop {
                 Mode::Login => self.draw_login(c, fonts, host),
                 Mode::Session => self.draw_session(c, fonts),
             }
+            self.painted += r.w as u64 * r.h as u64;
         }
         c.set_frame(c.bounds());
+        if !rects.is_empty() {
+            self.frames += 1;
+            if self.debug_damage {
+                const TINTS: [u32; 6] = [
+                    0x50ff3040, 0x5030d050, 0x503060ff, 0x50ffc020, 0x50d040e0, 0x5020d0d0,
+                ];
+                let tint = TINTS[(self.frames % 6) as usize];
+                for &r in &rects {
+                    c.fill_rect(r, tint);
+                    c.stroke_rrect_fx(r, 0, FX * 2, tint | 0xff00_0000);
+                }
+            }
+        }
         if let Some(t) = self.transition.as_mut()
             && !t.apply(c, self.now)
         {
@@ -1755,12 +1820,11 @@ impl Desktop {
 
     fn draw_windows(&self, c: &mut Canvas) {
         let area = c.frame();
-        let pad = self.shadow.pad;
         for w in &self.windows {
             let Some((r, alpha)) = self.shown(w) else {
                 continue;
             };
-            if r.inset(-pad).intersect(area).is_empty() {
+            if self.extent(r).intersect(area).is_empty() {
                 continue;
             }
             let focused = self.focus == Some(w.id);

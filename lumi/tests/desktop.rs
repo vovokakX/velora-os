@@ -199,3 +199,88 @@ fn changed_areas_match_a_full_redraw() {
         .count();
     assert_eq!(diff, 0, "{} pixels differ from a full redraw", diff);
 }
+
+/// Two desktops get the same input; one draws only the changed areas,
+/// the other everything. They must be equal after every frame, also in
+/// the middle of animations (frames of a closing window left behind
+/// were "ghosts" on the desktop).
+struct Pair {
+    a: Run,
+    b: Run,
+    frame: u32,
+}
+
+impl Pair {
+    fn step(&mut self, ev: &[Event]) {
+        self.a.step(ev);
+        self.b.d.damage_all();
+        self.b.step(ev);
+        self.frame += 1;
+        let diff = self
+            .a
+            .c
+            .pixels
+            .iter()
+            .zip(&self.b.c.pixels)
+            .filter(|(x, y)| x != y)
+            .count();
+        assert_eq!(diff, 0, "frame {}: {} pixels differ", self.frame, diff);
+    }
+
+    fn wait(&mut self, ms: u64) {
+        for _ in 0..ms / 16 {
+            self.step(&[]);
+        }
+    }
+
+    fn launch(&mut self, app: AppId) {
+        self.a.d.launch(app, &mut self.a.h, &mut self.a.f);
+        self.b.d.launch(app, &mut self.b.h, &mut self.b.f);
+    }
+}
+
+#[test]
+fn every_frame_of_window_animations_matches_a_full_redraw() {
+    let mut p = Pair {
+        a: Run::new(1024, 640),
+        b: Run::new(1024, 640),
+        frame: 0,
+    };
+    p.a.login();
+    p.b.login();
+    let chord = |key: Key, m: u8| Event::Chord { key, mods: m };
+    for app in [AppId::Terminal, AppId::Settings, AppId::Files] {
+        p.launch(app);
+        p.wait(100);
+    }
+    p.wait(300);
+    for (key, m) in [
+        (Key::Left, mods::SUPER),
+        (Key::Up, mods::SUPER),
+        (Key::Down, mods::SUPER),
+        (Key::Right, mods::SUPER),
+        (Key::Down, mods::SUPER),
+        (Key::Down, mods::SUPER),
+        (Key::F(4), mods::ALT),
+    ] {
+        p.step(&[chord(key, m)]);
+        p.wait(120);
+    }
+    p.wait(300);
+    // Drag the top window, then close it with Alt+F4.
+    let top = p.a.d.focused_title().unwrap();
+    let r = p.a.d.window_rect_of(&top).unwrap();
+    let (x, y) = (r.x + r.w / 3, r.y + 12);
+    p.step(&[Event::MouseMove { x, y }]);
+    p.step(&[Event::MouseButton { down: true }]);
+    for i in 1..12 {
+        p.step(&[Event::MouseMove {
+            x: x + i * 23,
+            y: y + i * 11,
+        }]);
+    }
+    p.step(&[Event::MouseButton { down: false }]);
+    p.step(&[chord(Key::F(4), mods::ALT)]);
+    p.wait(400);
+    assert_eq!(p.a.titles().len(), 1);
+}
