@@ -16,6 +16,8 @@ use core::cell::RefCell;
 pub struct TermLog {
     pub written: Vec<u8>,
     pub killed: bool,
+    /// Set by a test: the program ends by itself with this status.
+    pub exit: Option<i64>,
 }
 
 pub struct FakeHost {
@@ -27,6 +29,8 @@ pub struct FakeHost {
     pub term_output: Vec<u8>,
     pub terms: Vec<Rc<RefCell<TermLog>>>,
     pub logged_in: Option<String>,
+    /// The password of `user` and `root`.
+    pub password: String,
 }
 
 impl Default for FakeHost {
@@ -47,6 +51,7 @@ impl FakeHost {
             term_output: Vec::new(),
             terms: Vec::new(),
             logged_in: None,
+            password: String::from("velora"),
         };
         for d in [
             "/",
@@ -104,7 +109,7 @@ struct FakeTerm {
 
 impl Term for FakeTerm {
     fn read(&mut self, buf: &mut [u8]) -> TermRead {
-        if self.log.borrow().killed {
+        if self.log.borrow().killed || self.log.borrow().exit.is_some() {
             return TermRead::Closed;
         }
         if self.pending.is_empty() {
@@ -126,6 +131,10 @@ impl Term for FakeTerm {
 
     fn kill(&mut self) {
         self.log.borrow_mut().killed = true;
+    }
+
+    fn status(&self) -> Option<i64> {
+        self.log.borrow().exit
     }
 }
 
@@ -238,7 +247,7 @@ impl Host for FakeHost {
     }
 
     fn login(&mut self, name: &str, password: &str) -> Result<UserInfo, String> {
-        if password != "velora" {
+        if password != self.password {
             return Err(String::from("wrong password"));
         }
         let u = self
@@ -252,5 +261,20 @@ impl Host for FakeHost {
 
     fn log(&mut self, line: &str) {
         self.log.push(String::from(line));
+    }
+
+    fn change_password(&mut self, old: &str, new: &str) -> Result<(), String> {
+        if self.logged_in.is_none() {
+            return Err(String::from("nobody logged in"));
+        }
+        if old != self.password {
+            return Err(String::from("wrong password"));
+        }
+        self.password = String::from(new);
+        Ok(())
+    }
+
+    fn display_mode(&self) -> (u32, u32, u32) {
+        (1920, 1080, 32)
     }
 }

@@ -842,6 +842,70 @@ impl Ctx<'_> {
         changed
     }
 
+    /// A slider over `r` for `value` in `min..=max` (multiples of `step`
+    /// from `min`): it follows the pointer while pressed; Left and Right
+    /// step when focused. Returns true when the value changed.
+    pub fn slider(
+        &mut self,
+        id: Id,
+        r: Rect,
+        value: &mut i32,
+        min: i32,
+        max: i32,
+        step: i32,
+    ) -> bool {
+        let resp = self.ui.interact(id, r);
+        let step = step.max(1);
+        let d = r.h;
+        let (x0, w) = (r.x + d / 2, (r.w - d).max(1));
+        let mut v = *value;
+        if resp.pressed {
+            let x = (self.ui.mouse.0 - x0).clamp(0, w);
+            let raw = min + ((x as i64 * (max - min) as i64 + w as i64 / 2) / w as i64) as i32;
+            v = min + (raw - min + step / 2) / step * step;
+        }
+        if resp.focused {
+            if self.ui.take_key(Key::Left) {
+                v -= step;
+            }
+            if self.ui.take_key(Key::Right) {
+                v += step;
+            }
+        }
+        let v = v.clamp(min, max);
+        let changed = v != *value;
+        *value = v;
+        if changed {
+            self.ui.last_hit = Some(id);
+        }
+        let (h, p) = self.states(id, &resp);
+        let t = self.ui.theme;
+        let span = (max - min).max(1) as i64;
+        let pos = (w as i64 * (v - min) as i64 / span) as i32;
+        let th = (d / 4).max(2);
+        let track = Rect::new(x0, r.center_y() - th / 2, w, th);
+        let off = lerp(t.track_off, t.text_faint, h / 3);
+        self.c.fill_rrect(track, th / 2, self.tone(off, &resp));
+        self.c.fill_rrect(
+            Rect::new(x0, track.y, pos, th),
+            th / 2,
+            self.tone(t.accent, &resp),
+        );
+        let k = d * 3 / 4 + (d / 8) * p as i32 / 255;
+        let knob = Rect::new(x0 + pos - k / 2, r.center_y() - k / 2, k, k);
+        if !resp.disabled {
+            self.c.shadow(
+                knob.offset(0, d / 16),
+                k / 2,
+                (d / 10).max(1),
+                fade(t.shadow, 90),
+            );
+        }
+        self.c.fill_rrect(knob, k / 2, self.tone(t.knob, &resp));
+        self.focus_ring(id, knob, k / 2, resp.focused);
+        changed
+    }
+
     /// A radio button row: the circle at the left of `r`, a title and an
     /// optional second line. Returns true when chosen.
     pub fn radio(&mut self, id: Id, r: Rect, selected: bool, title: &str, sub: &str) -> bool {

@@ -6,7 +6,8 @@
 //!   `velora.root=PARTUUID=<guid>` on the command line, the VeloraFS
 //!   partition with that GUID instead (an installed system)
 //! - `/dev`  devices ([`devfs`]): null, zero, console and the disks
-//! - `/tmp`  a file system in memory (`MemFs`)
+//! - `/tmp`  a file system in memory (`MemFs`); in the Live system also
+//!   `/home`, `/root` and `/var` (logs)
 //! - `/mnt/<disk>` every disk that holds VeloraFS or FAT16/FAT32
 //!
 //! Locking: the VFS is behind one spinlock, which also disables
@@ -38,6 +39,8 @@ use velorafs::VeloraFs;
 
 /// Most bytes /tmp may hold.
 const TMP_CAPACITY: u64 = 64 * 1024 * 1024;
+/// Most bytes /var may hold in the Live system (logs).
+const VAR_CAPACITY: u64 = 8 * 1024 * 1024;
 
 static VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
 static DEVFS_MOUNT: AtomicU32 = AtomicU32::new(0);
@@ -79,8 +82,8 @@ fn root_partition() -> Option<Arc<dyn block::BlockDevice>> {
 }
 
 /// Mounts the root (initramfs or a VeloraFS partition), devfs at `/dev`
-/// and memory file systems at `/tmp` (and, in the Live system, at `/home`
-/// and `/root`). Other disks are mounted later by [`automount`].
+/// and memory file systems at `/tmp` (and, in the Live system, at `/home`,
+/// `/root` and `/var`). Other disks are mounted later by [`automount`].
 pub fn init() {
     let mut v = Vfs::new();
     let mut on_disk = false;
@@ -124,9 +127,11 @@ pub fn init() {
         .expect("mount /home");
     v.mount("/root", "memory", Box::new(MemFs::new(0o700, TMP_CAPACITY)))
         .expect("mount /root");
+    v.mount("/var", "memory", Box::new(MemFs::new(0o755, VAR_CAPACITY)))
+        .expect("mount /var");
     *VFS.lock() = Some(v);
     kok!(
-        "VFS: initramfs at / ({} files, read-only), devfs at /dev, memory at /tmp, /home, /root",
+        "VFS: initramfs at / ({} files, read-only), devfs at /dev, memory at /tmp, /home, /root, /var",
         files
     );
 }

@@ -64,6 +64,48 @@ pub trait Term {
     fn resize(&mut self, cols: u32, rows: u32);
     /// Ends the program (its window was closed).
     fn kill(&mut self);
+    /// The exit status once [`TermRead::Closed`] was read, if known.
+    fn status(&self) -> Option<i64> {
+        None
+    }
+}
+
+/// Why a program ended, from its exit status: `None` for an ordinary
+/// end, else a short reason (a panic or a processor exception; 128 + 2
+/// and 128 + 15 are what Lumi and `kill` use to end programs).
+pub fn crash_reason(status: i64) -> Option<String> {
+    const NAMES: [&str; 22] = [
+        "divide error",
+        "debug",
+        "",
+        "breakpoint",
+        "overflow",
+        "bound range",
+        "invalid opcode",
+        "no FPU",
+        "double fault",
+        "",
+        "invalid TSS",
+        "segment not present",
+        "stack fault",
+        "general protection",
+        "page fault",
+        "",
+        "x87 error",
+        "alignment check",
+        "machine check",
+        "SIMD error",
+        "virtualization",
+        "control protection",
+    ];
+    match status {
+        101 => Some(String::from("panic")),
+        128..=149 if status != 130 && status != 143 => {
+            let v = (status - 128) as usize;
+            Some(alloc::format!("exception {}: {}", v, NAMES[v]))
+        }
+        _ => None,
+    }
 }
 
 pub trait Host {
@@ -90,6 +132,12 @@ pub trait Host {
     fn login(&mut self, name: &str, password: &str) -> Result<UserInfo, String>;
     /// A progress line for the console (the QEMU tests follow them).
     fn log(&mut self, line: &str);
+    /// Changes the logged-in user's password (`old` must be right).
+    fn change_password(&mut self, old: &str, new: &str) -> Result<(), String>;
+    /// The screen's size in pixels and the bits per pixel.
+    fn display_mode(&self) -> (u32, u32, u32) {
+        (0, 0, 32)
+    }
 }
 
 /// `a/b` without doubled slashes.

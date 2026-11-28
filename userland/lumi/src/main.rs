@@ -6,7 +6,9 @@
 //!
 //! Progress lines ("lumi: ready", "lumi: session user", ...) go to the
 //! console, which also reaches the serial port; the QEMU tests follow
-//! them.
+//! them. They also go to /var/log/lumi.log with the time, as do panics.
+//! If Lumi crashes, the kernel starts it again with `--crashed STATUS`
+//! (three crashes in a minute: the console login).
 
 #![no_std]
 #![no_main]
@@ -17,19 +19,111 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use velora_auth::{parse_passwd, shadow_hash, verify_password};
 use velora_lumi::apps::Assets;
 use velora_lumi::config::{self, Config};
 use velora_lumi::host::{DirEntry, Host, NetState, Power, SysInfo, Term, TermRead, UserInfo};
 use velora_lumi::{Desktop, Exit, Pointer as Shape};
+use velora_ui::Event;
 use velora_ui::image::{Picture, Pointer};
 use velora_ui::screen::Screen;
 use velora_ui::text::Fonts;
+use velora_ui::ui::{Key, mods};
 use vlibc::{Errno, display, fs, io, println, process, term, time};
 
 vlibc::main!(main);
 
 const FONT_DIR: &str = "/usr/share/fonts";
+const LOG_FILE: &str = "/var/log/lumi.log";
+const LOG_OLD: &str = "/var/log/lumi.log.1";
+/// The log starts again (the old one kept as lumi.log.1) past this size.
+const LOG_MAX: u64 = 256 * 1024;
+/// Descriptor of the log, `u64::MAX` if it could not be opened.
+static LOG_FD: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Opens the log for appending while Lumi still runs as root. The
+/// descriptor stays open after login; programs Lumi starts get only
+/// descriptors 0, 1 and 2.
+fn open_log() {
+    let _ = fs::mkdir("/var", 0o755);
+    let _ = fs::mkdir("/var/log", 0o755);
+    if fs::stat(LOG_FILE).is_ok_and(|s| s.size > LOG_MAX) {
+        let _ = fs::remove(LOG_OLD);
+        let _ = fs::rename(LOG_FILE, LOG_OLD);
+    }
+    let fl = fs::flags::WRITE | fs::flags::CREATE | fs::flags::APPEND;
+    if let Ok(f) = fs::File::open_with(LOG_FILE, fl, 0o644) {
+        LOG_FD.store(f.fd(), Ordering::Relaxed);
+        core::mem::forget(f);
+    }
+}
+
+/// A line of the log: "2026-11-28 12:42:01 UTC <text>".
+fn log_file(text: &str) {
+    let fd = LOG_FD.load(Ordering::Relaxed);
+    if fd == u64::MAX {
+        return;
+    }
+    let mut buf = Line::default();
+    if let Ok(t) = time::realtime() {
+        let l = velora_lumi::tz::local("UTC", t.as_secs() as i64);
+        let _ = core::fmt::Write::write_fmt(
+            &mut buf,
+            format_args!(
+                "{}-{:02}-{:02} {:02}:{:02}:{:02} UTC ",
+                l.year, l.month, l.day, l.hour, l.minute, l.second
+            ),
+        );
+    }
+    let _ = core::fmt::Write::write_str(&mut buf, text);
+    let _ = core::fmt::Write::write_str(&mut buf, "\n");
+    let _ = io::write_all(fd, buf.bytes());
+}
+
+/// A line built without the heap (also for panics).
+struct Line {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl Default for Line {
+    fn default() -> Self {
+        Line {
+            buf: [0; 512],
+            len: 0,
+        }
+    }
+}
+
+impl Line {
+    fn bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl core::fmt::Write for Line {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        // Keep room for the newline; cut long text at a char boundary.
+        let room = self.buf.len() - 1 - self.len;
+        let mut n = s.len().min(room);
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        Ok(())
+    }
+}
+
+/// Writes a panic to the log before Lumi ends (the kernel starts it
+/// again).
+fn panic_to_log(info: &core::panic::PanicInfo) {
+    let mut msg = Line::default();
+    let _ = core::fmt::Write::write_fmt(&mut msg, format_args!("lumi: panic: {}", info));
+    let text = core::str::from_utf8(msg.bytes()).unwrap_or("lumi: panic");
+    log_file(text);
+}
 /// Time between frames while something moves (60 per second), in us.
 const FRAME_US: u64 = 16_667;
 
@@ -46,6 +140,7 @@ struct PtyTerm {
     master: u64,
     pid: u64,
     done: bool,
+    status: Option<i64>,
 }
 
 impl Term for PtyTerm {
@@ -56,7 +151,7 @@ impl Term for PtyTerm {
         match io::read(self.master, buf) {
             Ok(0) => {
                 self.done = true;
-                let _ = process::wait(self.pid);
+                self.status = process::wait(self.pid).ok();
                 TermRead::Closed
             }
             Ok(n) => TermRead::Data(n),
@@ -76,8 +171,12 @@ impl Term for PtyTerm {
         if !self.done {
             let _ = process::kill(self.pid, 130);
             self.done = true;
-            let _ = process::wait(self.pid);
+            self.status = process::wait(self.pid).ok();
         }
+    }
+
+    fn status(&self) -> Option<i64> {
+        self.status
     }
 }
 
@@ -89,6 +188,42 @@ impl Drop for PtyTerm {
 
 struct System {
     env: Vec<String>,
+    /// The password helper's input and output (see `passwd_helper`).
+    passwd: Option<(u64, u64)>,
+    /// Screen width, height and bits per pixel.
+    mode: (u32, u32, u32),
+}
+
+/// Starts `passwd --serve USER` while Lumi is still root: after login
+/// Lumi cannot write /etc/shadow, the helper changes only this user's
+/// password and only with the old one. Returns its input and output.
+fn passwd_helper(user: &str) -> Option<(u64, u64)> {
+    let (in_r, in_w) = io::pipe().ok()?;
+    let (out_r, out_w) = io::pipe().ok()?;
+    let saved: Vec<Option<u64>> = (0..2).map(|fd| io::dup(fd).ok()).collect();
+    let _ = io::dup2(in_r, 0);
+    let _ = io::dup2(out_w, 1);
+    let pid = process::spawn(
+        "/bin/passwd",
+        &["/bin/passwd", "--serve", user],
+        &["PATH=/bin"],
+    );
+    for (fd, s) in saved.iter().enumerate() {
+        if let Some(s) = s {
+            let _ = io::dup2(*s, fd as u64);
+            let _ = fs::close(*s);
+        }
+    }
+    let _ = fs::close(in_r);
+    let _ = fs::close(out_w);
+    match pid {
+        Ok(_) => Some((in_w, out_r)),
+        Err(_) => {
+            let _ = fs::close(in_w);
+            let _ = fs::close(out_r);
+            None
+        }
+    }
 }
 
 impl Host for System {
@@ -161,6 +296,7 @@ impl Host for System {
                 master,
                 pid,
                 done: false,
+                status: None,
             })),
             Err(e) => {
                 let _ = fs::close(master);
@@ -241,6 +377,9 @@ impl Host for System {
         if !fs::exists(&u.home) {
             let _ = fs::mkdir(&u.home, 0o700).and_then(|_| fs::chown(&u.home, u.uid, u.gid));
         }
+        if self.passwd.is_none() {
+            self.passwd = passwd_helper(&u.name);
+        }
         process::setuid(u.uid, u.gid).map_err(err)?;
         if fs::chdir(&u.home).is_err() {
             let _ = fs::chdir("/");
@@ -262,6 +401,34 @@ impl Host for System {
 
     fn log(&mut self, line: &str) {
         println!("{}", line);
+        log_file(line);
+    }
+
+    fn change_password(&mut self, old: &str, new: &str) -> Result<(), String> {
+        if [old, new].iter().any(|s| s.contains(['\t', '\n'])) {
+            return Err(String::from("tab or newline in the password"));
+        }
+        let Some((to, from)) = self.passwd else {
+            return Err(String::from("no password helper"));
+        };
+        io::write_all(to, format!("{}\t{}\n", old, new).as_bytes()).map_err(err)?;
+        let mut reply = Vec::new();
+        let mut buf = [0u8; 128];
+        while !reply.contains(&b'\n') {
+            match io::read(from, &mut buf) {
+                Ok(0) | Err(_) => return Err(String::from("the password helper ended")),
+                Ok(n) => reply.extend_from_slice(&buf[..n]),
+            }
+        }
+        let text = String::from_utf8_lossy(&reply);
+        match text.trim_end() {
+            "ok" => Ok(()),
+            e => Err(String::from(e.strip_prefix("error: ").unwrap_or(e))),
+        }
+    }
+
+    fn display_mode(&self) -> (u32, u32, u32) {
+        self.mode
     }
 }
 
@@ -291,18 +458,22 @@ fn load_config() -> Config {
 }
 
 /// Shows the pointer the desktop asks for, in the chosen style.
-fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Option<(Shape, usize, bool)>) {
-    let want = (d.pointer, d.cfg.pointer, d.cfg.large_pointer);
+type Shown = Option<(Shape, usize, usize, usize, i64)>;
+
+fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Shown) {
+    let want = (
+        d.pointer,
+        d.cfg.pointer,
+        d.cfg.pointer_size,
+        d.cfg.pointer_speed,
+        d.scale,
+    );
     if *shown == Some(want) {
         return;
     }
     *shown = Some(want);
     let base = (24 * d.scale / 256) as usize;
-    let size = if d.cfg.large_pointer {
-        base * 3 / 2
-    } else {
-        base
-    };
+    let size = base * config::POINTER_SIZES[d.cfg.pointer_size.min(3)] as usize / 100;
     match d.pointer {
         Shape::Arrow => {
             let (img, hx, hy) = d.assets.pointers[d.cfg.pointer.min(2)].at(size.max(12));
@@ -313,11 +484,96 @@ fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Option<(Shape, 
             screen.set_pointer(Some((&img, hx, hy)));
         }
     }
-    screen.speed = (d.scale as i32).max(256);
+    // Relative mice move faster on large screens and at the chosen speed.
+    let pct = config::POINTER_SPEEDS[d.cfg.pointer_speed.min(4)] as i32;
+    screen.speed = ((d.scale as i32).max(256) * pct / 100).max(64);
+}
+
+/// Counters for measurements: Ctrl+Alt+F12 prints them; the end of a
+/// window drag prints its frames.
+#[derive(Default)]
+struct Stats {
+    wakeups: u64,
+    frames: u64,
+    busy_us: u64,
+    /// While a window is dragged: start, frames, busy time, longest frame.
+    drag: Option<(u64, u64, u64, u64)>,
+}
+
+impl Stats {
+    fn frame(&mut self, d: &Desktop, start: u64, end: u64, drew: bool) {
+        let t = end - start;
+        self.wakeups += 1;
+        self.busy_us += t;
+        if drew {
+            self.frames += 1;
+        }
+        match (&mut self.drag, d.dragging()) {
+            (None, true) => self.drag = Some((start, 0, 0, 0)),
+            (Some(g), true) => {
+                if drew {
+                    g.1 += 1;
+                    g.2 += t;
+                    g.3 = g.3.max(t);
+                }
+            }
+            (Some(g), false) => {
+                let (t0, n, busy, max) = *g;
+                self.drag = None;
+                let ms = (end - t0) / 1000;
+                println!(
+                    "lumi: drag {} frames in {} ms ({} fps), frame avg {}.{} ms max {}.{} ms",
+                    n,
+                    ms,
+                    n * 1000 / ms.max(1),
+                    busy / n.max(1) / 1000,
+                    busy / n.max(1) / 100 % 10,
+                    max / 1000,
+                    max / 100 % 10
+                );
+            }
+            (None, false) => {}
+        }
+    }
+
+    /// Takes Ctrl+Alt+F12 out of the input and prints the counters.
+    fn key(&self, events: &mut Vec<Event>) {
+        let before = events.len();
+        events.retain(|e| {
+            !matches!(e, Event::Chord { key: Key::F(12), mods: m }
+                if m & mods::CTRL != 0 && m & mods::ALT != 0)
+        });
+        if events.len() != before {
+            println!(
+                "lumi: stats wakeups {} frames {} busy {} ms",
+                self.wakeups,
+                self.frames,
+                self.busy_us / 1000
+            );
+        }
+    }
 }
 
 fn main() -> i32 {
     let t0 = us();
+    open_log();
+    vlibc::set_panic_hook(panic_to_log);
+    let args = vlibc::env::args();
+    let crashed = args
+        .iter()
+        .position(|a| a == "--crashed")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<i64>().ok());
+    match crashed {
+        Some(st) => {
+            let why =
+                velora_lumi::host::crash_reason(st).unwrap_or_else(|| format!("status {}", st));
+            let line = format!("lumi: started again after a crash (status {}: {})", st, why);
+            println!("{}", line);
+            log_file(&line);
+        }
+        None => log_file("lumi: started"),
+    }
     let cfg = load_config();
     if cfg.session == "console" {
         println!("lumi: session=console in {}", config::SYSTEM_FILE);
@@ -347,19 +603,49 @@ fn main() -> i32 {
     };
     let mut host = System {
         env: alloc::vec![String::from("PATH=/bin")],
+        passwd: None,
+        mode: (
+            screen.info.width,
+            screen.info.height,
+            screen.info.bits_per_pixel,
+        ),
     };
     let (w, h) = (screen.width(), screen.height());
     let mut d = Desktop::new(w, h, cfg, assets, &mut host);
     println!("lumi: ready {}x{} in {} ms", w, h, (us() - t0) / 1000);
     let mut shown = None;
     let mut reported_login = false;
+    let mut stats = Stats::default();
+    // Input for the next frame, and when that frame may start.
+    let mut pending: Vec<Event> = Vec::new();
+    let mut next_at = 0;
     loop {
+        // At most 60 frames a second: input that comes sooner moves the
+        // pointer at once and waits for the next frame, which takes it
+        // all (a drag draws once per frame, not once per pointer report).
+        // The timer ticks every 10 ms: sleep while that fits, then yield.
+        loop {
+            let more = screen.poll();
+            if !more.is_empty() {
+                pending.extend(more);
+                screen.show_pointer();
+            }
+            let now = us();
+            if now >= next_at {
+                break;
+            }
+            if next_at - now > 10_500 {
+                time::sleep_ms(1);
+            } else {
+                process::yield_now();
+            }
+        }
         let start = us();
-        let events = screen.poll();
+        stats.key(&mut pending);
+        let events = core::mem::take(&mut pending);
         let rects = d.frame(&events, &mut screen.canvas, &mut fonts, &mut host);
         set_pointer(&mut screen, &mut d, &mut shown);
-        // Input that came while drawing moves the pointer now.
-        let more = screen.poll();
+        let drew = !rects.is_empty();
         if rects.is_empty() {
             screen.show_pointer();
         }
@@ -370,13 +656,9 @@ fn main() -> i32 {
             reported_login = true;
             println!("lumi: login screen");
         }
-        if !more.is_empty() {
-            let rects = d.frame(&more, &mut screen.canvas, &mut fonts, &mut host);
-            for r in &rects {
-                screen.present(*r);
-            }
-        }
+        next_at = if drew { start + FRAME_US } else { 0 };
         d.frame_us = us() - start;
+        stats.frame(&d, start, us(), drew);
         match d.exit.take() {
             Some(Exit::Logout) => {
                 println!("lumi: logged out");
@@ -405,20 +687,16 @@ fn main() -> i32 {
             }
             None => {}
         }
-        // Wait for the next frame: soon while something moves, else
-        // until input, terminal output or the next timer.
+        // Something moves: the next frame (the wait is at the top).
+        // Else sleep until input, terminal output or the next timer.
         let now = us();
         if d.animating() {
-            let due = start + FRAME_US;
-            while us() + 10_500 < due {
-                display::input_wait(1);
-            }
-            while us() < due {
-                process::yield_now();
-            }
+            next_at = start + FRAME_US;
         } else {
+            // Nothing moves: sleep until input, terminal output or the
+            // next timer (the clock's minute at the latest).
             let wake = d.wake_at() * 1000;
-            let ms = (wake.saturating_sub(now) / 1000).clamp(1, 1000);
+            let ms = (wake.saturating_sub(now) / 1000).clamp(1, 60_000);
             display::input_wait(ms);
         }
     }

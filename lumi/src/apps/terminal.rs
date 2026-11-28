@@ -19,6 +19,9 @@ use velora_ui::{Event, Rect, Ui};
 
 /// Cursor blink half-period.
 const BLINK_MS: u64 = 530;
+/// The cursor stops blinking (and Lumi waking up for it) this long
+/// after the last input or output, as in GNOME.
+const BLINK_FOR_MS: u64 = 10_000;
 
 pub struct TerminalApp {
     app: AppId,
@@ -26,6 +29,7 @@ pub struct TerminalApp {
     pub term: Terminal,
     proc: Option<Box<dyn Term>>,
     ended: bool,
+    status: Option<i64>,
     error: Option<String>,
     /// Font size, cell size and baseline in pixels.
     px: u32,
@@ -43,6 +47,9 @@ pub struct TerminalApp {
     damage: Option<Rect>,
     blink_on: bool,
     blink_next: u64,
+    /// Last input or output; `poke` asks the next poll to set it.
+    active_at: u64,
+    poke: bool,
     was_focused: bool,
     mouse: (i32, i32),
     /// Row the cursor was drawn on.
@@ -57,6 +64,7 @@ impl TerminalApp {
             term: Terminal::new(80, 24),
             proc: None,
             ended: false,
+            status: None,
             error: None,
             px: 14,
             cw: 8,
@@ -70,6 +78,8 @@ impl TerminalApp {
             damage: None,
             blink_on: true,
             blink_next: 0,
+            active_at: 0,
+            poke: true,
             was_focused: false,
             mouse: (0, 0),
             cursor_row: 0,
@@ -112,6 +122,13 @@ impl TerminalApp {
             self.damage_all();
         }
         self.blink_on = true;
+        self.poke = true;
+    }
+
+    /// The cursor blinks: a focused window with a program, shortly
+    /// after input or output.
+    fn blinking(&self, now: u64) -> bool {
+        self.proc.is_some() && self.was_focused && now < self.active_at + BLINK_FOR_MS
     }
 
     /// The history row and column under a point (clamped to the view).
@@ -363,6 +380,7 @@ impl App for TerminalApp {
                     TermRead::Empty => break,
                     TermRead::Closed => {
                         self.ended = true;
+                        self.status = p.status();
                         break;
                     }
                 }
@@ -398,24 +416,44 @@ impl App for TerminalApp {
             }
             self.blink_on = true;
             self.blink_next = now + BLINK_MS;
+            self.active_at = now;
         }
-        if now >= self.blink_next && self.proc.is_some() {
-            self.blink_on = !self.blink_on;
+        if self.poke {
+            self.poke = false;
+            self.active_at = now;
             self.blink_next = now + BLINK_MS;
-            if self.scroll == 0 {
-                let r = self.row_rect(self.term.row);
-                self.add_damage(r);
+        }
+        if now >= self.blink_next {
+            // Blinking, or it stopped with the cursor hidden: show it.
+            let blink = self.blinking(now);
+            if blink || !self.blink_on {
+                self.blink_on = !self.blink_on || !blink;
+                if self.scroll == 0 {
+                    let r = self.row_rect(self.term.row);
+                    self.add_damage(r);
+                }
             }
+            self.blink_next = now + BLINK_MS;
         }
         self.damage.is_some()
     }
 
-    fn wake_at(&self, _now: u64) -> Option<u64> {
-        self.proc.as_ref().map(|_| self.blink_next)
+    fn wake_at(&self, now: u64) -> Option<u64> {
+        if self.poke {
+            Some(now)
+        } else if self.blinking(now) || !self.blink_on {
+            Some(self.blink_next)
+        } else {
+            None
+        }
     }
 
     fn alive(&self) -> bool {
         !self.ended
+    }
+
+    fn exit_status(&self) -> Option<i64> {
+        self.status
     }
 
     fn close(&mut self, _host: &mut dyn Host) {
@@ -427,6 +465,8 @@ impl App for TerminalApp {
     fn input(&mut self, events: &[Event], cx: &mut Cx, _r: Rect) {
         if cx.focused != self.was_focused {
             self.was_focused = cx.focused;
+            self.blink_on = true;
+            self.poke = true;
             let r = self.row_rect(self.term.row);
             self.add_damage(r);
         }

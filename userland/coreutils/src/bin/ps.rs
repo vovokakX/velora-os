@@ -16,15 +16,19 @@ fn main() -> i32 {
         Ok(l) => l,
         Err(e) => return fail("process list", e),
     };
-    println!("  PID  PPID USER     THR      MEM STATE   NAME");
+    println!("  PID  PPID USER     THR      MEM     TIME STATE   NAME");
     for p in list {
+        // Processor time in seconds (timer ticks, 100 a second).
+        let t = p.cpu_ticks;
         println!(
-            "{:>5} {:>5} {:<8} {:>3} {:>8} {:<7} {}",
+            "{:>5} {:>5} {:<8} {:>3} {:>8} {:>5}.{:02} {:<7} {}",
             p.pid,
             p.parent,
             user_name(p.uid),
             p.threads,
             human(p.memory),
+            t / 100,
+            t % 100,
             if p.state == 0 { "running" } else { "exited" },
             field_str(&p.name)
         );

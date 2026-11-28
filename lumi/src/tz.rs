@@ -153,6 +153,18 @@ impl Local {
         format!("{:02}:{:02}", self.hour, self.minute)
     }
 
+    /// "28 ноя" / "28 Nov".
+    pub fn short_date(&self, ru: bool) -> String {
+        const RU: [&str; 12] = [
+            "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+        ];
+        const EN: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let m = (self.month as usize).clamp(1, 12) - 1;
+        format!("{} {}", self.day, if ru { RU[m] } else { EN[m] })
+    }
+
     /// "суббота, 28 ноября" / "Saturday, 28 November".
     pub fn date(&self, ru: bool) -> String {
         const WD_RU: [&str; 7] = [

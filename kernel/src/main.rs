@@ -186,18 +186,45 @@ fn run_sessions() -> ! {
     if boot::cmdline_has("velora.text") {
         desktop = false;
     }
+    // Lumi's recent crashes (uptime in ms) and the last status, which the
+    // next Lumi writes to its log.
+    let mut crashes: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+    let mut crashed: Option<alloc::string::String> = None;
     loop {
         tty::reset();
         if desktop {
-            match exec::spawn("/bin/lumi", &["/bin/lumi"], &["PATH=/bin"]) {
-                Ok(pid) => {
-                    let status = sched::wait_pid(pid);
-                    if status == Some(0) {
-                        // Logged out: the login screen again.
+            let mut argv = alloc::vec!["/bin/lumi"];
+            if let Some(s) = crashed.as_deref() {
+                argv.push("--crashed");
+                argv.push(s);
+            }
+            match exec::spawn("/bin/lumi", &argv, &["PATH=/bin"]) {
+                Ok(pid) => match sched::wait_pid(pid) {
+                    // Logged out: the login screen again.
+                    Some(0) => {
+                        crashed = None;
                         continue;
                     }
-                    kinfo!("lumi ended with {:?}; console login", status);
-                }
+                    // No screen or fonts, or session=console.
+                    Some(2) => kinfo!("lumi ended with status 2; console login"),
+                    status => {
+                        // A crash: start Lumi again, unless it keeps
+                        // crashing (three times in a minute).
+                        let now = time::uptime_ms();
+                        crashes.retain(|&t| now - t < 60_000);
+                        crashes.push(now);
+                        let code = status.unwrap_or(-1);
+                        crashed = Some(alloc::format!("{}", code));
+                        if crashes.len() < 3 {
+                            kwarn!("lumi crashed (status {}); starting it again", code);
+                            continue;
+                        }
+                        kwarn!(
+                            "lumi crashed 3 times in a minute (status {}); console login",
+                            code
+                        );
+                    }
+                },
                 Err(e) => kwarn!("cannot start /bin/lumi: {:?}", e),
             }
             desktop = false;

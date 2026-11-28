@@ -93,7 +93,13 @@ pub fn getuid() -> i64 {
 pub fn proclist(buf: u64, len: u64) -> i64 {
     let size = size_of::<ProcEntry>();
     let mut out = alloc::vec::Vec::new();
+    let threads = sched::threads();
     for p in sched::processes() {
+        let ticks: u64 = threads
+            .iter()
+            .filter(|t| t.pid == p.pid)
+            .map(|t| t.ticks)
+            .sum();
         if out.len() + size > len as usize {
             break;
         }
@@ -104,6 +110,7 @@ pub fn proclist(buf: u64, len: u64) -> i64 {
             state: p.exited.is_some() as u32,
             threads: p.threads as u32,
             memory: p.user_pages * mm::PAGE_SIZE,
+            cpu_ticks: ticks.min(u32::MAX as u64) as u32,
             ..Default::default()
         };
         copy_str(&mut e.name, &p.name);

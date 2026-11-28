@@ -437,7 +437,8 @@ pub struct ProcEntry {
     /// 0 = running, 1 = exited (not yet collected).
     pub state: u32,
     pub threads: u32,
-    pub _pad: u32,
+    /// Processor time of its threads, in timer ticks (100 a second).
+    pub cpu_ticks: u32,
     /// User memory in bytes.
     pub memory: u64,
     /// NUL-padded program name.
