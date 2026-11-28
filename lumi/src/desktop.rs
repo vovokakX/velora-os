@@ -179,6 +179,16 @@ pub(crate) struct Switcher {
     pub(crate) sel: usize,
 }
 
+/// What the desktop's wallpaper was made for.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct WallKey {
+    id: String,
+    size: (i32, i32),
+    dark: bool,
+    dim: u32,
+    blur: u32,
+}
+
 pub struct Desktop {
     pub w: i32,
     pub h: i32,
@@ -188,10 +198,17 @@ pub struct Desktop {
     pub assets: Assets,
     pub(crate) wall: Canvas,
     pub(crate) frost: wallpaper::Frost,
-    /// The wallpaper, dark theme, dimming and blur it was made for.
-    wall_key: (String, bool, u32, u32),
+    /// What `wall` and `frost` were made for (never remade per frame).
+    wall_key: WallKey,
     /// The wallpaper before dimming and blur (only while they are on).
     wall_base: Option<Canvas>,
+    /// The blur level and the small blurred picture `wall` is scaled up
+    /// from (only while blur is on).
+    wall_grid: Option<(u32, wallpaper::Grid)>,
+    /// The blurred eighth of the picture the frosted copy comes from.
+    frost_grid: wallpaper::Grid,
+    /// Times the wallpaper picture, its blur and its frost were made (tests).
+    pub wall_builds: [u32; 3],
     pub mode: Mode,
     pub(crate) windows: Vec<Win>,
     next_id: u32,
@@ -272,8 +289,11 @@ impl Desktop {
             assets,
             wall: Canvas::new(1, 1),
             frost: wallpaper::frost(&Canvas::new(8, 8), 0),
-            wall_key: (String::new(), false, 0, 0),
+            wall_key: WallKey::default(),
             wall_base: None,
+            wall_grid: None,
+            frost_grid: wallpaper::frost_grid(&Canvas::new(8, 8)),
+            wall_builds: [0; 3],
             mode: Mode::Login,
             windows: Vec::new(),
             next_id: 1,
@@ -380,22 +400,29 @@ impl Desktop {
 
     // --- wallpaper --------------------------------------------------------
 
+    /// Makes the wallpaper and its frosted copy again if the picture, the
+    /// screen size, the theme, dimming or blur changed. Each step is done
+    /// only when what it depends on changed: the picture at the screen's
+    /// size and its frost grid for a new picture or size, the blur grid for
+    /// a new blur, and dimming in one pass at the end (D61).
     fn load_wallpaper(&mut self, host: &mut dyn Host) {
-        let key = (
-            self.cfg.wallpaper.clone(),
-            self.theme.dark,
-            self.cfg.wallpaper_dim,
-            self.cfg.wallpaper_blur,
-        );
+        let key = WallKey {
+            id: self.cfg.wallpaper.clone(),
+            size: (self.w, self.h),
+            dark: self.theme.dark,
+            dim: self.cfg.wallpaper_dim,
+            blur: self.cfg.wallpaper_blur,
+        };
         if key == self.wall_key {
             return;
         }
         let (w, h) = (self.w as usize, self.h as usize);
         let t0 = host.now_ms();
-        if key.0 != self.wall_key.0 || self.wall.width != w {
+        let new_picture = key.id != self.wall_key.id || key.size != self.wall_key.size;
+        if new_picture {
             let mut c = Canvas::new(w, h);
             let mut ok = false;
-            if let Some(path) = key.0.strip_prefix("file:")
+            if let Some(path) = key.id.strip_prefix("file:")
                 && let Some(img) = host
                     .read(path)
                     .and_then(|d| velora_gfx::png::decode(&d, 40 << 20).ok())
@@ -404,33 +431,45 @@ impl Desktop {
                 ok = true;
             }
             if !ok {
-                let id = if wallpaper::is_builtin(&key.0) {
-                    key.0.as_str()
+                let id = if wallpaper::is_builtin(&key.id) {
+                    key.id.as_str()
                 } else {
                     "waves"
                 };
                 wallpaper::draw_builtin(&mut c, id);
             }
+            self.frost_grid = wallpaper::frost_grid(&c);
             self.wall = c;
             self.wall_base = None;
+            self.wall_grid = None;
+            self.wall_builds[0] += 1;
         }
         // Dimming and blur work on the original picture, kept aside.
-        if key.2 > 0 || key.3 > 0 {
+        if key.dim > 0 || key.blur > 0 {
             let base = self
                 .wall_base
                 .take()
                 .unwrap_or_else(|| core::mem::replace(&mut self.wall, Canvas::new(1, 1)));
-            self.wall = wallpaper::soften(&base, key.3, key.2);
+            if key.blur == 0 {
+                self.wall_grid = None;
+            } else if self.wall_grid.as_ref().is_none_or(|g| g.0 != key.blur) {
+                self.wall_grid = Some((key.blur, wallpaper::blur_grid(&base, key.blur)));
+                self.wall_builds[1] += 1;
+            }
+            let grid = self.wall_grid.as_ref().map(|g| &g.1);
+            self.wall = wallpaper::soften(&base, grid, key.dim);
             self.wall_base = Some(base);
         } else if let Some(base) = self.wall_base.take() {
             self.wall = base;
+            self.wall_grid = None;
         }
         let tint = if self.theme.dark {
             0x58000000
         } else {
             0x38ffffff
         };
-        self.frost = wallpaper::frost(&self.wall, tint);
+        self.frost = wallpaper::Frost::new(w, h, &self.frost_grid, key.dim, tint);
+        self.wall_builds[2] += 1;
         self.wall_key = key;
         let line = alloc::format!(
             "lumi: wallpaper {} in {} ms",
@@ -459,11 +498,20 @@ impl Desktop {
             self.corner = Corner::new(rad);
         }
         self.load_wallpaper(host);
+        // Dimming and blur only change the wallpaper: the windows keep
+        // their pictures and the screen is drawn once, without the
+        // cross-fade (each step of a dragged slider would start one).
+        let mut same = old.clone();
+        same.wallpaper_dim = self.cfg.wallpaper_dim;
+        same.wallpaper_blur = self.cfg.wallpaper_blur;
+        let wallpaper_only = same == self.cfg;
         for w in self.windows.iter_mut() {
-            w.full = true;
+            if !wallpaper_only {
+                w.full = true;
+            }
             w.app.settings_changed();
         }
-        if old.animations_on() || self.cfg.animations_on() {
+        if !wallpaper_only && (old.animations_on() || self.cfg.animations_on()) {
             self.pending_transition = true;
         }
         if old.panel_mode != self.cfg.panel_mode {
