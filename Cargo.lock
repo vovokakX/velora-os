@@ -202,6 +202,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "velora-lumi"
+version = "0.16.0"
+dependencies = [
+ "velora-gfx",
+ "velora-ui",
+]
+
+[[package]]
 name = "velora-mm"
 version = "0.16.0"
 
