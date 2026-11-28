@@ -25,6 +25,11 @@ static OWNER: SpinLock<Option<Owner>> = SpinLock::new(None);
 /// The owner exited: show the console at the next chance.
 static SHOW_PENDING: AtomicBool = AtomicBool::new(false);
 
+/// True if process `pid` owns the screen.
+pub fn is_owner(pid: u64) -> bool {
+    OWNER.lock().as_ref().is_some_and(|o| o.pid == pid)
+}
+
 pub fn info(out: u64) -> i64 {
     let Some((info, _, _)) = console::display() else {
         return -errno::ENODEV;

@@ -56,8 +56,10 @@ pub fn sysinfo(out: u64) -> i64 {
     }
 }
 
+/// Restart or power off: root, or the program that owns the screen (the
+/// person in front of it, as with the power button; D52).
 pub fn reboot(what: u64) -> i64 {
-    if sched::current_cred().uid != 0 {
+    if sched::current_cred().uid != 0 && !crate::display::is_owner(sched::current_pid()) {
         return -errno::EPERM;
     }
     match what {
@@ -160,8 +162,8 @@ pub fn tty(what: u64, arg: u64) -> i64 {
 
 /// Pseudo-terminal operations (see `velora_abi::pty`).
 pub fn pty(what: u64, a: u64, b: u64) -> i64 {
-    use alloc::sync::Arc;
     use crate::sync::SpinLock;
+    use alloc::sync::Arc;
     let (cols, rows) = ((b >> 32) as u32, b as u32);
     match what {
         velora_abi::pty::OPEN => {
@@ -179,7 +181,11 @@ pub fn pty(what: u64, a: u64, b: u64) -> i64 {
             let mut out = [0u8; 16];
             out[..8].copy_from_slice(&mfd.to_le_bytes());
             out[8..].copy_from_slice(&sfd.to_le_bytes());
-            if uaccess::write(a, &out) { 0 } else { -errno::EFAULT }
+            if uaccess::write(a, &out) {
+                0
+            } else {
+                -errno::EFAULT
+            }
         }
         velora_abi::pty::RESIZE => {
             let Some(f) = sched::fd_get(a) else {

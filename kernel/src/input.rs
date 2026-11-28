@@ -128,9 +128,7 @@ pub fn key_packet(ev: &KeyEvent) -> [u8; velora_abi::key::PACKET] {
 /// the console), for graphical programs: Ctrl+C is 'c'.
 fn ctrl_letter(ev: &KeyEvent) -> Option<char> {
     match ev.ch {
-        Some(c @ ''..='') if ev.mods.ctrl => {
-            char::from_u32(c as u32 - 1 + 'a' as u32)
-        }
+        Some(c @ ''..='') if ev.mods.ctrl => char::from_u32(c as u32 - 1 + 'a' as u32),
         _ => None,
     }
 }

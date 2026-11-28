@@ -230,10 +230,7 @@ mod tests {
         l.from_master("ab\x7fcя\x7fд\x1b[Dx".as_bytes());
         assert_eq!(l.slave_read(64), None, "no line yet");
         // Echo: a, b, erase, c, я, erase, д, x (the arrow is ignored).
-        assert_eq!(
-            l.master_read(256),
-            "ab\x08 \x08cя\x08 \x08дx".as_bytes()
-        );
+        assert_eq!(l.master_read(256), "ab\x08 \x08cя\x08 \x08дx".as_bytes());
         l.from_master(b"\n");
         assert_eq!(l.slave_read(64).unwrap(), "acдx\n".as_bytes());
         assert_eq!(l.master_read(256), b"\n");
