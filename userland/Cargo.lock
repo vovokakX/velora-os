@@ -82,6 +82,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumi"
+version = "0.16.0"
+dependencies = [
+ "velora-auth",
+ "velora-gfx",
+ "velora-lumi",
+ "velora-ui",
+ "vlibc",
+]
+
+[[package]]
 name = "plume"
 version = "0.16.0"
 dependencies = [
@@ -162,6 +173,14 @@ name = "velora-installer-gui"
 version = "0.16.0"
 dependencies = [
  "velora-install",
+ "velora-ui",
+]
+
+[[package]]
+name = "velora-lumi"
+version = "0.16.0"
+dependencies = [
+ "velora-gfx",
  "velora-ui",
 ]
 

@@ -728,7 +728,9 @@ fn pipe_to_child() -> Result<(), String> {
 
 fn pseudo_terminal() -> Result<(), String> {
     let (master, slave) = vlibc::term::pty_open(100, 30).map_err(e)?;
-    let saved: Vec<u64> = (0..3).map(|fd| io::dup(fd).map_err(e)).collect::<Result<_, _>>()?;
+    let saved: Vec<u64> = (0..3)
+        .map(|fd| io::dup(fd).map_err(e))
+        .collect::<Result<_, _>>()?;
     for fd in 0..3 {
         io::dup2(slave, fd).map_err(e)?;
     }
@@ -739,8 +741,11 @@ fn pseudo_terminal() -> Result<(), String> {
     }
     fs::close(slave).map_err(e)?;
     let pid = pid.map_err(e)?;
-    io::write_all(master, b"abc
-").map_err(e)?;
+    io::write_all(
+        master, b"abc
+",
+    )
+    .map_err(e)?;
     let mut out = Vec::new();
     let mut buf = [0u8; 256];
     let end = vlibc::time::monotonic().map_err(e)?.as_millis() + 5000;

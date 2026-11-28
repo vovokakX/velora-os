@@ -1,0 +1,21 @@
+[package]
+name = "lumi"
+description = "Lumi, the graphical shell of Velora OS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+build = "../build-support.rs"
+
+[[bin]]
+name = "lumi"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+vlibc = { path = "../../libc/vlibc" }
+velora-ui = { path = "../../libc/ui", features = ["velora"] }
+velora-gfx = { path = "../../kernel/gfx" }
+velora-auth = { path = "../../libc/auth" }
+velora-lumi = { path = "../../lumi" }
