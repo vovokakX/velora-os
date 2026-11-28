@@ -538,15 +538,35 @@ fn main() -> i32 {
     let mut shown = None;
     let mut reported_login = false;
     let mut stats = Stats::default();
+    // Input for the next frame, and when that frame may start.
+    let mut pending: Vec<Event> = Vec::new();
+    let mut next_at = 0;
     loop {
+        // At most 60 frames a second: input that comes sooner moves the
+        // pointer at once and waits for the next frame, which takes it
+        // all (a drag draws once per frame, not once per pointer report).
+        // The timer ticks every 10 ms: sleep while that fits, then yield.
+        loop {
+            let more = screen.poll();
+            if !more.is_empty() {
+                pending.extend(more);
+                screen.show_pointer();
+            }
+            let now = us();
+            if now >= next_at {
+                break;
+            }
+            if next_at - now > 10_500 {
+                time::sleep_ms(1);
+            } else {
+                process::yield_now();
+            }
+        }
         let start = us();
-        let mut events = screen.poll();
-        stats.key(&mut events);
+        stats.key(&mut pending);
+        let events = core::mem::take(&mut pending);
         let rects = d.frame(&events, &mut screen.canvas, &mut fonts, &mut host);
         set_pointer(&mut screen, &mut d, &mut shown);
-        // Input that came while drawing moves the pointer now.
-        let mut more = screen.poll();
-        stats.key(&mut more);
         let drew = !rects.is_empty();
         if rects.is_empty() {
             screen.show_pointer();
@@ -558,12 +578,7 @@ fn main() -> i32 {
             reported_login = true;
             println!("lumi: login screen");
         }
-        if !more.is_empty() {
-            let rects = d.frame(&more, &mut screen.canvas, &mut fonts, &mut host);
-            for r in &rects {
-                screen.present(*r);
-            }
-        }
+        next_at = if drew { start + FRAME_US } else { 0 };
         d.frame_us = us() - start;
         stats.frame(&d, start, us(), drew);
         match d.exit.take() {
@@ -594,17 +609,11 @@ fn main() -> i32 {
             }
             None => {}
         }
-        // Wait for the next frame: soon while something moves, else
-        // until input, terminal output or the next timer.
+        // Something moves: the next frame (the wait is at the top).
+        // Else sleep until input, terminal output or the next timer.
         let now = us();
         if d.animating() {
-            let due = start + FRAME_US;
-            while us() + 10_500 < due {
-                display::input_wait(1);
-            }
-            while us() < due {
-                process::yield_now();
-            }
+            next_at = start + FRAME_US;
         } else {
             // Nothing moves: sleep until input, terminal output or the
             // next timer (the clock's minute at the latest).

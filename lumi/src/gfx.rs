@@ -111,14 +111,35 @@ pub fn blit_scaled(dst: &mut Canvas, src: &Canvas, to: Rect, corner: &Corner, al
     }
     let sx_step = ((src.width as i64) << 16) / to.w as i64;
     let sy_step = ((src.height as i64) << 16) / to.h as i64;
+    // The source column of every screen column, once per call.
+    let cols: Vec<usize> = (area.x..area.right())
+        .map(|dx| {
+            let lx = (dx - to.x) as i64;
+            (((lx * 2 + 1) * sx_step) >> 17).min(src.width as i64 - 1) as usize
+        })
+        .collect();
+    let r = corner.r;
     for dy in area.y..area.bottom() {
         let ly = dy - to.y;
         let sy = (((ly as i64 * 2 + 1) * sy_step) >> 17).min(src.height as i64 - 1) as usize;
         let srow = sy * src.width;
         let drow = dy as usize * dst.width;
-        for dx in area.x..area.right() {
+        if ly >= r && ly < to.h - r {
+            // No corners in this row.
+            let out = &mut dst.pixels[drow + area.x as usize..drow + area.right() as usize];
+            if alpha >= 255 {
+                for (d, &sx) in out.iter_mut().zip(&cols) {
+                    *d = src.pixels[srow + sx];
+                }
+            } else {
+                for (d, &sx) in out.iter_mut().zip(&cols) {
+                    *d = blend(*d, src.pixels[srow + sx], alpha);
+                }
+            }
+            continue;
+        }
+        for (dx, &sx) in (area.x..area.right()).zip(&cols) {
             let lx = dx - to.x;
-            let sx = (((lx as i64 * 2 + 1) * sx_step) >> 17).min(src.width as i64 - 1) as usize;
             let cov = corner.at(lx, ly, to.w, to.h);
             let a = cov * alpha / 255;
             if a == 0 {
