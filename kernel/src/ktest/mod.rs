@@ -189,6 +189,7 @@ pub fn watchdog(frame: &crate::arch::x86_64::idt::InterruptFrame) {
                 }
             }
         }
+        crate::arch::x86_64::irq::debug_dump(w);
         crate::sched::debug_dump(w);
         crate::smp::debug_dump(w);
     });
