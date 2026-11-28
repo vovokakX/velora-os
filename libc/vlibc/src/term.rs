@@ -1,6 +1,6 @@
 //! The console terminal: line mode or raw keys, foreground process, size.
 
-use crate::sys::syscall2;
+use crate::sys::{syscall2, syscall3};
 use velora_abi::{nr, tty};
 
 pub use velora_abi::tty::{NO_ECHO, RAW};
@@ -42,4 +42,35 @@ pub fn is_console(fd: u64) -> bool {
     // SAFETY: `st` is writable and has the kernel's layout.
     let r = unsafe { syscall2(nr::FSTAT, fd, &mut st as *mut velora_abi::Stat as u64) };
     r == 0 && st.mode & velora_abi::mode::TYPE_MASK == velora_abi::mode::CHAR_DEVICE
+}
+
+/// Opens a pseudo-terminal of `cols` x `rows`: (master, slave)
+/// descriptors. The terminal program keeps the master; a program started
+/// with the slave as descriptors 0, 1 and 2 sees it as its console.
+pub fn pty_open(cols: u32, rows: u32) -> Result<(u64, u64), crate::Errno> {
+    let mut fds = [0u64; 2];
+    // SAFETY: `fds` is writable and 16 bytes long.
+    crate::check(unsafe {
+        syscall3(
+            nr::PTY,
+            velora_abi::pty::OPEN,
+            fds.as_mut_ptr() as u64,
+            (cols as u64) << 32 | rows as u64,
+        )
+    })?;
+    Ok((fds[0], fds[1]))
+}
+
+/// Tells the pseudo-terminal of master `fd` its new size.
+pub fn pty_resize(fd: u64, cols: u32, rows: u32) -> Result<(), crate::Errno> {
+    // SAFETY: no pointers.
+    crate::check(unsafe {
+        syscall3(
+            nr::PTY,
+            velora_abi::pty::RESIZE,
+            fd,
+            (cols as u64) << 32 | rows as u64,
+        )
+    })
+    .map(|_| ())
 }

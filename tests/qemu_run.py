@@ -640,7 +640,7 @@ def check_ktest(proc, reader, monitor, deadline, extra_markers):
         "scheduler running",
         "hello from ring 3",
         "Hello from /bin/hello",
-        "vtest: 34 passed, 0 failed",
+        "vtest: 35 passed, 0 failed",
         "ktest: ALL PASSED",
         # The deliberate panic must produce a complete report.
         "KERNEL PANIC",

@@ -29,6 +29,7 @@ mod smp;
 mod sync;
 mod syscall;
 mod time;
+mod pty;
 mod tty;
 #[cfg(feature = "ktest")]
 mod userprog;

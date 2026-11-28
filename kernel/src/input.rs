@@ -235,9 +235,23 @@ pub fn push_mouse(ev: MouseEvent) {
     }
 }
 
-/// Waits until a key or mouse event is queued or `timeout_ms` passes;
-/// true if one is waiting. For graphical programs, which read the devices
-/// without waiting and must also keep drawing.
+/// Set when a pseudo-terminal has output for its master: the graphical
+/// program waiting in [`wait_any`] wakes to show it.
+static NUDGE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Wakes a graphical program waiting in [`wait_any`] (a terminal it runs
+/// has output).
+pub fn nudge() {
+    NUDGE.store(true, Ordering::SeqCst);
+    if sched::is_running() {
+        ANY.wake_all();
+    }
+}
+
+/// Waits until a key or mouse event is queued, a pseudo-terminal has
+/// output ([`nudge`]) or `timeout_ms` passes; true if one of them
+/// happened. For graphical programs, which read the devices without
+/// waiting and must also keep drawing.
 pub fn wait_any(timeout_ms: u64) -> bool {
     let deadline_tsc = cpu::rdtsc() + crate::time::tsc_hz() * timeout_ms / 1000;
     // The next tick at the earliest (as `sleep_ms`); the TSC decides when
@@ -247,7 +261,7 @@ pub fn wait_any(timeout_ms: u64) -> bool {
     let was = cpu::irq_save();
     let result = loop {
         cpu::disable_interrupts();
-        if QUEUE.lock().len > 0 || MOUSE.lock().len > 0 {
+        if QUEUE.lock().len > 0 || MOUSE.lock().len > 0 || NUDGE.swap(false, Ordering::SeqCst) {
             break true;
         }
         if cpu::rdtsc() >= deadline_tsc || !sched::is_running() {

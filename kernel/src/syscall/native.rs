@@ -73,6 +73,7 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         },
         nr::DISKINFO => diskinfo(a0, a1, a2),
         nr::INPUT_WAIT => crate::input::wait_any(a0.min(60_000)) as i64,
+        nr::PTY => process::pty(a0, a1, a2),
         nr::UMOUNT => files::umount(a0, a1),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
@@ -83,12 +84,12 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
     Console,
     Pipe,
     File,
     Socket(u32),
+    Pty(alloc::sync::Arc<crate::pty::Pty>, bool),
 }
 
 fn target(f: &fs::FileRef) -> Target {
@@ -97,6 +98,8 @@ fn target(f: &fs::FileRef) -> Target {
         fs::Handle::Pipe { .. } => Target::Pipe,
         fs::Handle::File { .. } => Target::File,
         fs::Handle::Socket { id } => Target::Socket(id),
+        fs::Handle::PtyMaster(ref p) => Target::Pty(p.clone(), true),
+        fs::Handle::PtySlave(ref p) => Target::Pty(p.clone(), false),
     }
 }
 
@@ -108,14 +111,20 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
         Target::File => return files::write_file(&f, buf, len),
         Target::Pipe => return files::write_pipe(&f, buf, len),
         Target::Socket(id) => return socket::sendto(id, buf, len, 0, 0),
-        Target::Console => {}
+        Target::Console | Target::Pty(..) => {}
     }
     let len = len.min(MAX_WRITE);
     let Some(bytes) = uaccess::read_slice(buf, len) else {
         return -errno::EFAULT;
     };
-    tty::write(bytes);
-    len as i64
+    match target(&f) {
+        Target::Pty(p, true) => p.master_write(bytes) as i64,
+        Target::Pty(p, false) => p.slave_write(bytes) as i64,
+        _ => {
+            tty::write(bytes);
+            len as i64
+        }
+    }
 }
 
 /// Reads a file, a pipe or the console terminal (see `tty`).
@@ -128,8 +137,17 @@ fn read(fd: u64, buf: u64, len: u64) -> i64 {
         Target::Pipe => return files::read_pipe(&f, buf, len),
         Target::Socket(id) => return socket::recvfrom(id, buf, len, 0, 0),
         Target::Console => {}
+        Target::Pty(..) => {}
     }
-    let data = tty::read(len.min(4096) as usize);
+    let max = len.min(4096) as usize;
+    let data = match target(&f) {
+        Target::Pty(p, true) => match p.master_read(max) {
+            Some(d) => d,
+            None => return -errno::EAGAIN,
+        },
+        Target::Pty(p, false) => p.slave_read(max),
+        _ => tty::read(max),
+    };
     if uaccess::write(buf, &data) {
         data.len() as i64
     } else {

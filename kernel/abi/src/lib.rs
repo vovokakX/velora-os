@@ -110,6 +110,21 @@ pub mod nr {
     /// (on `/dev/keyboard`, `/dev/pointer` or `/dev/mouse`), 0 after the
     /// timeout. Returns at once if one is already waiting.
     pub const INPUT_WAIT: u64 = 52;
+    /// pty(op, a, b): pseudo-terminals (see `pty`)
+    pub const PTY: u64 = 53;
+}
+
+/// `pty` operations. The master side (the terminal program) writes typed
+/// bytes and reads output without waiting (`EAGAIN`: nothing yet; 0: the
+/// program side is closed). The slave side works like the console, and
+/// the `tty` calls of a process whose descriptor 0 is a slave act on it.
+/// `input_wait` also returns when a pseudo-terminal has new output.
+pub mod pty {
+    /// pty(OPEN, out: *mut [u64; 2], cols << 32 | rows): writes the master
+    /// and slave descriptors.
+    pub const OPEN: u64 = 0;
+    /// pty(RESIZE, master fd, cols << 32 | rows)
+    pub const RESIZE: u64 = 1;
 }
 
 /// Error numbers (returned negated).

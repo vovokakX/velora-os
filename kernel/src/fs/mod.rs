@@ -249,6 +249,10 @@ pub enum Handle {
     Pipe { pipe: Arc<pipe::Pipe>, write: bool },
     /// A network socket (see `net`).
     Socket { id: u32 },
+    /// The terminal side of a pseudo-terminal (see `pty`).
+    PtyMaster(Arc<crate::pty::Pty>),
+    /// The program side of a pseudo-terminal: works like the console.
+    PtySlave(Arc<crate::pty::Pty>),
 }
 
 pub struct OpenFile {
@@ -265,6 +269,8 @@ impl Drop for OpenFile {
             Handle::File { node, .. } => with(|v| v.close_ref(node.mount)),
             Handle::Pipe { pipe, write } => pipe.close_end(*write),
             Handle::Socket { id } => crate::net::close(*id),
+            Handle::PtyMaster(p) => p.close(true),
+            Handle::PtySlave(p) => p.close(false),
             Handle::Console => {}
         }
     }
@@ -425,6 +431,19 @@ pub fn new_pipe() -> (OpenFile, OpenFile) {
         append: false,
     };
     (end(false), end(true))
+}
+
+/// Creates a pseudo-terminal of `cols` x `rows`: (master, slave).
+pub fn new_pty(cols: u32, rows: u32) -> (OpenFile, OpenFile) {
+    let p = Arc::new(crate::pty::Pty::new(cols, rows));
+    let end = |h: Handle| OpenFile {
+        handle: h,
+        offset: 0,
+        readable: true,
+        writable: true,
+        append: false,
+    };
+    (end(Handle::PtyMaster(p.clone())), end(Handle::PtySlave(p)))
 }
 
 /// Mount id of `/dev` (for tests).
