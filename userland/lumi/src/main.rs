@@ -22,9 +22,11 @@ use velora_lumi::apps::Assets;
 use velora_lumi::config::{self, Config};
 use velora_lumi::host::{DirEntry, Host, NetState, Power, SysInfo, Term, TermRead, UserInfo};
 use velora_lumi::{Desktop, Exit, Pointer as Shape};
+use velora_ui::Event;
 use velora_ui::image::{Picture, Pointer};
 use velora_ui::screen::Screen;
 use velora_ui::text::Fonts;
+use velora_ui::ui::{Key, mods};
 use vlibc::{Errno, display, fs, io, println, process, term, time};
 
 vlibc::main!(main);
@@ -316,6 +318,71 @@ fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Option<(Shape, 
     screen.speed = (d.scale as i32).max(256);
 }
 
+/// Counters for measurements: Ctrl+Alt+F12 prints them; the end of a
+/// window drag prints its frames.
+#[derive(Default)]
+struct Stats {
+    wakeups: u64,
+    frames: u64,
+    busy_us: u64,
+    /// While a window is dragged: start, frames, busy time, longest frame.
+    drag: Option<(u64, u64, u64, u64)>,
+}
+
+impl Stats {
+    fn frame(&mut self, d: &Desktop, start: u64, end: u64, drew: bool) {
+        let t = end - start;
+        self.wakeups += 1;
+        self.busy_us += t;
+        if drew {
+            self.frames += 1;
+        }
+        match (&mut self.drag, d.dragging()) {
+            (None, true) => self.drag = Some((start, 0, 0, 0)),
+            (Some(g), true) => {
+                if drew {
+                    g.1 += 1;
+                    g.2 += t;
+                    g.3 = g.3.max(t);
+                }
+            }
+            (Some(g), false) => {
+                let (t0, n, busy, max) = *g;
+                self.drag = None;
+                let ms = (end - t0) / 1000;
+                println!(
+                    "lumi: drag {} frames in {} ms ({} fps), frame avg {}.{} ms max {}.{} ms",
+                    n,
+                    ms,
+                    n * 1000 / ms.max(1),
+                    busy / n.max(1) / 1000,
+                    busy / n.max(1) / 100 % 10,
+                    max / 1000,
+                    max / 100 % 10
+                );
+            }
+            (None, false) => {}
+        }
+    }
+
+    /// Takes Ctrl+Alt+F12 out of the input and prints the counters.
+    fn key(&self, events: &mut Vec<Event>) {
+        let before = events.len();
+        events.retain(|e| {
+            !matches!(e, Event::Chord { key: Key::F(12), mods: m }
+                if m & mods::CTRL != 0 && m & mods::ALT != 0)
+        });
+        if events.len() != before {
+            println!(
+                "lumi: stats wakeups {} frames {} busy {} ms",
+                self.wakeups,
+                self.frames,
+                self.busy_us / 1000
+            );
+        }
+    }
+}
+
 fn main() -> i32 {
     let t0 = us();
     let cfg = load_config();
@@ -353,13 +420,17 @@ fn main() -> i32 {
     println!("lumi: ready {}x{} in {} ms", w, h, (us() - t0) / 1000);
     let mut shown = None;
     let mut reported_login = false;
+    let mut stats = Stats::default();
     loop {
         let start = us();
-        let events = screen.poll();
+        let mut events = screen.poll();
+        stats.key(&mut events);
         let rects = d.frame(&events, &mut screen.canvas, &mut fonts, &mut host);
         set_pointer(&mut screen, &mut d, &mut shown);
         // Input that came while drawing moves the pointer now.
-        let more = screen.poll();
+        let mut more = screen.poll();
+        stats.key(&mut more);
+        let drew = !rects.is_empty();
         if rects.is_empty() {
             screen.show_pointer();
         }
@@ -377,6 +448,7 @@ fn main() -> i32 {
             }
         }
         d.frame_us = us() - start;
+        stats.frame(&d, start, us(), drew);
         match d.exit.take() {
             Some(Exit::Logout) => {
                 println!("lumi: logged out");

@@ -1880,6 +1880,11 @@ impl Desktop {
             .collect()
     }
 
+    /// A window is being moved or resized with the pointer.
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some_and(|d| d.moved)
+    }
+
     /// The title of the window that has the keyboard.
     pub fn focused_title(&self) -> Option<String> {
         let id = self.focused_window()?;
