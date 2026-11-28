@@ -1331,7 +1331,7 @@ def run_clicks(args, work):
 
 
 FPS_LINE = re.compile(r"velora-start: fps ([\d.]+) fps\s+([\d.]+) ms\s+max ([\d.]+) ms\s+pointer ([\d.]+)/s"
-                      r"(?:\s+anim ([\d.]+) fps\s+gap max ([\d.]+) ms)?")
+                      r"\s+input ([\d.]+)/s(?:\s+anim ([\d.]+) fps\s+gap max ([\d.]+) ms)?")
 
 
 def last_areas(reader):
@@ -1350,19 +1350,27 @@ def run_fps(args, work):
     """Frame rate of the graphical installer: the counter (F12) is turned
     on, then the pointer circles over the window (a USB tablet through
     QMP), and then screens change back and forth while it moves. Prints
-    frames per second, the average and longest frame and pointer moves
-    per second for each part. Needs velora-uitest.iso (its reports tell
-    where the buttons are)."""
+    frames per second, the average and longest frame, pointer moves shown
+    and pointer reports read per second for each part. Needs
+    velora-uitest.iso (its reports tell where the buttons are).
+
+    Checks: the pointer is drawn at most once a frame (60/s); the xHCI
+    controller uses MSI-X and the tablet's reports are read faster than
+    the 100 Hz timer (QMP sends 250 positions a second). With
+    --xhci-polled QEMU's xHCI has no MSI or MSI-X: the controller must be
+    polled and the pointer must still move (D51)."""
     import math
     import uiclick
     w, h = (int(v) for v in args.resolution.split("x"))
     qmp_port = free_port()
     extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h),
-             "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
+             "-device", "qemu-xhci,id=xhci" + (",msi=off,msix=off" if args.xhci_polled else ""),
+             "-device", "usb-tablet,bus=xhci.0",
              "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % qmp_port]
     disk = os.path.join(work, "install.img")
     with open(disk, "wb") as f:
         f.truncate(INSTALL_DISK_SIZE)
+    rates = {}
 
     def circle(qmp, seconds, rate, step=None):
         t0 = time.monotonic()
@@ -1389,20 +1397,23 @@ def run_fps(args, work):
         if not vals:
             raise AssertionError("no frame counter lines during '%s'" % name)
         n = len(vals)
-        avg = [sum(float(v[i]) for v in vals) / n for i in range(4)]
+        avg = [sum(float(v[i]) for v in vals) / n for i in range(5)]
         worst = max(float(v[2]) for v in vals)
-        anim = [(float(v[4]), float(v[5])) for v in vals if v[4]]
+        rates[name] = (avg[3], avg[4], max(float(v[3]) for v in vals))
+        anim = [(float(v[5]), float(v[6])) for v in vals if v[5]]
         anim_text = "anim --"
         if anim:
             anim_text = "anim %4.1f fps  gap max %4.1f ms" % (
                 sum(a for a, _ in anim) / len(anim), max(g for _, g in anim))
-        print("qemu_run: fps %-12s %5.1f fps  frame %5.1f ms  max %5.1f ms  pointer %5.0f/s  %s  (%d s)"
-              % (name, avg[0], avg[1], worst, avg[3], anim_text, n))
+        print("qemu_run: fps %-12s %5.1f fps  frame %5.1f ms  max %5.1f ms  pointer %4.0f/s  input %4.0f/s  %s  (%d s)"
+              % (name, avg[0], avg[1], worst, avg[3], avg[4], anim_text, n))
 
     def check(proc, reader, monitor, deadline):
         s = Session(proc, reader, monitor, deadline)
         qmp = uiclick.Qmp(qmp_port)
         try:
+            mode = "polled" if args.xhci_polled else "MSI-X"
+            assert s.wait("ports, " + mode, timeout=60), "the xHCI controller is not " + mode
             assert s.wait("usb: tablet", timeout=60), "the USB tablet was not found"
             assert s.wait("velora-start: menu", timeout=120), "no start menu"
             qmp.connect()
@@ -1448,6 +1459,15 @@ def run_fps(args, work):
                     qmp.button(False)
 
             phase(reader, "transitions", lambda: circle(qmp, 6, 120, step=switch))
+            for name, (shown, read, most) in rates.items():
+                # One second of the counter can hold 61 frame starts.
+                assert most <= 62, "pointer drawn %d times a second in '%s'" % (most, name)
+                assert shown > 20, "the pointer hardly moved in '%s' (%.0f/s)" % (name, shown)
+            read = rates["pointer"][1]
+            if args.xhci_polled:
+                assert read <= 105, "polled xHCI read %.0f reports a second" % read
+            else:
+                assert read >= 150, "only %.0f tablet reports a second with interrupts" % read
             monitor.command("system_powerdown")
             wait_exit(proc)
         except AssertionError as e:
@@ -1458,7 +1478,8 @@ def run_fps(args, work):
 
     r = run_once(args, work, {"install": disk}, args.log, check, extra=extra)
     if r == 0:
-        print("qemu_run: PASS (frame rate at %s measured)" % args.resolution)
+        print("qemu_run: PASS (frame rate at %s measured, xHCI %s)"
+              % (args.resolution, "polled" if args.xhci_polled else "MSI-X"))
     return r
 
 
@@ -1778,6 +1799,8 @@ def main():
                    help="where the gui mode saves its screenshots")
     p.add_argument("--screens-only", action="store_true",
                    help="gui mode: go through the screens without installing")
+    p.add_argument("--xhci-polled", action="store_true",
+                   help="fps mode: QEMU's xHCI without MSI and MSI-X (the polling fallback)")
     p.add_argument("--iso")
     p.add_argument("--usb", default="velora-usb.img", help="image for the usb mode")
     p.add_argument("--timeout", type=float, default=120.0)

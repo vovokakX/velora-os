@@ -52,7 +52,8 @@ echo "==> every element of the graphical installer clicked with a USB tablet"
 ./build.sh --uitest
 "$PY" tests/qemu_run.py clicks --timeout 900
 
-echo "==> frame rate of the graphical installer at 1920x1080 (printed, not judged)"
+echo "==> frame rate of the graphical installer at 1920x1080, with xHCI interrupts and polled"
 "$PY" tests/qemu_run.py fps --resolution 1920x1080 --memory 1G --timeout 300 --log build/logs/fps.log
+"$PY" tests/qemu_run.py fps --xhci-polled --resolution 1920x1080 --memory 1G --timeout 300 --log build/logs/fps-polled.log
 
 echo "==> all tests passed"
