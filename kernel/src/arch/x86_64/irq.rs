@@ -8,8 +8,6 @@
 use super::apic;
 use super::idt::InterruptFrame;
 use super::pic;
-#[cfg(feature = "ktest")]
-use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 pub type Handler = fn(&mut InterruptFrame);
