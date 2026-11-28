@@ -65,11 +65,10 @@ fn main() {
     let mut c = Canvas::new(1920, 1080);
     let mut d = Desktop::new(1920, 1080, Config::default(), assets, &mut h);
     println!("desktop + one canvas: {}", mib());
-    let step =
-        |d: &mut Desktop, c: &mut Canvas, f: &mut Fonts, h: &mut FakeHost, ev: &[Event]| {
-            h.now += 16;
-            d.frame(ev, c, f, h);
-        };
+    let step = |d: &mut Desktop, c: &mut Canvas, f: &mut Fonts, h: &mut FakeHost, ev: &[Event]| {
+        h.now += 16;
+        d.frame(ev, c, f, h);
+    };
     for _ in 0..30 {
         step(&mut d, &mut c, &mut f, &mut h, &[]);
     }
