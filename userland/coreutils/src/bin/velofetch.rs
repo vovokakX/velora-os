@@ -1,8 +1,9 @@
 //! velofetch: a system summary next to the Velora logo.
 //!
-//! On the screen console the logo is the image from `assets/`, sent with
-//! the Kitty graphics protocol and scaled to the height of the summary in
-//! pixels of the current font. Without graphics (output to a file or a
+//! On the screen console the logo is the Velora mark drawn from its
+//! geometry (`velora_gfx::logo`) at the height of the summary in pixels of
+//! the current font, on a transparent background, and sent with the Kitty
+//! graphics protocol. Without graphics (output to a file or a
 //! pipe, a console without a screen, a terminal that does not answer the
 //! graphics query, `--ascii`) the logo is ASCII art.
 
@@ -15,8 +16,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use coreutils::*;
-use velora_gfx::image::{self, Image};
-use velora_gfx::{kitty, png};
+use velora_gfx::image::Image;
+use velora_gfx::{kitty, logo};
 use vlibc::process::{self, field_str};
 use vlibc::{env, fs, io, println, term};
 
@@ -33,8 +34,6 @@ const LOGO: [&str; 9] = [
     "  V E L O R A ",
     "              ",
 ];
-
-const LOGO_PNG: &[u8] = include_bytes!("../../../../assets/velora-logo.png");
 
 /// Columns the summary needs next to the image; narrower screens get
 /// the ASCII logo.
@@ -191,28 +190,21 @@ fn shows_images() -> bool {
 /// The escape sequence that shows the logo over `rows` text rows, and
 /// the number of columns it covers.
 ///
-/// The background of the picture (the colour of its corner) is made
-/// transparent and cut away, so only the mark is left and it sits on the
-/// console background. The mark is scaled to the text height minus half a
-/// row above and below, in the exact pixel size of the cells, so the
-/// terminal shows it without scaling it again.
+/// The mark is drawn from its geometry, white with antialiased edges on a
+/// transparent background, so it sits on the console background. It is
+/// as high as the text minus half a row above and below, in the exact
+/// pixel size of the cells, so the terminal shows it without scaling.
 fn logo_image(rows: usize, cw: usize, ch: usize, screen_cols: usize) -> Option<(String, usize)> {
-    let mut logo = png::decode(LOGO_PNG, 4 << 20).ok()?;
-    let corner = logo.pixel(0, 0);
-    logo.color_to_alpha((corner[0] as u32) << 16 | (corner[1] as u32) << 8 | corner[2] as u32);
-    let mark = logo.trim();
     let h = rows * ch;
-    let mark_h = h - ch;
-    let mark_w = (mark.width * mark_h).div_ceil(mark.height);
+    let mark = logo::mark(h - ch, 0xffffff);
     // Half a cell of space on each side.
-    let cols = (mark_w + cw).div_ceil(cw);
+    let cols = (mark.width + cw).div_ceil(cw);
     if cols + 2 + TEXT_COLS > screen_cols {
         return None;
     }
     let w = cols * cw;
-    let (lw, lh) = image::fit(mark.width, mark.height, w - cw, mark_h);
     let mut canvas = Image::new(w, h);
-    canvas.draw(&mark.resize(lw, lh), (w - lw) / 2, (h - lh) / 2);
+    canvas.draw(&mark, (w - mark.width) / 2, (h - mark.height) / 2);
     let keys = format!("a=T,f=32,s={},v={},c={},r={},C=1,q=2", w, h, cols, rows);
     Some((kitty::transmit(&keys, &canvas.to_rgba()), cols))
 }
