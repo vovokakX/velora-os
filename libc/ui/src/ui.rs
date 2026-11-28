@@ -48,6 +48,24 @@ pub enum Key {
     Char(char),
     /// A function key, F1 is 1.
     F(u8),
+    Insert,
+}
+
+/// Modifier bits of [`Event::Chord`] and [`Event::Modifier`].
+pub mod mods {
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 2;
+    pub const ALT: u8 = 4;
+    pub const SUPER: u8 = 8;
+}
+
+/// A modifier key itself (see [`Event::Modifier`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Modifier {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +84,26 @@ pub enum Event {
     },
     /// Wheel steps, positive towards the user (scrolls down a list).
     Wheel(i32),
+    /// A key pressed with Ctrl, Alt or Super held (`mods`: bits of
+    /// [`mods`]); a letter comes as its lower case character. Widgets
+    /// ignore these: they are shortcuts for the program.
+    Chord {
+        key: Key,
+        mods: u8,
+    },
+    /// A modifier key pressed or released; `mods` is the state after it.
+    /// Only reported when the program asks for it
+    /// (`Screen::extended_input`).
+    Modifier {
+        key: Modifier,
+        down: bool,
+        mods: u8,
+    },
+    /// The right button pressed or released (only with
+    /// `Screen::extended_input`).
+    RightButton {
+        down: bool,
+    },
 }
 
 /// What the next frame has to draw again (see [`Ui::plan`]).
@@ -89,7 +127,11 @@ pub fn one_key_per_frame(events: &[Event]) -> Vec<Vec<Event>> {
     for ev in events {
         let is_key = matches!(
             ev,
-            Event::Key { .. } | Event::MouseButton { .. } | Event::Wheel(_)
+            Event::Key { .. }
+                | Event::MouseButton { .. }
+                | Event::Wheel(_)
+                | Event::Chord { .. }
+                | Event::RightButton { .. }
         );
         if is_key && has_key {
             out.push(core::mem::take(&mut cur));
@@ -426,6 +468,7 @@ impl Ui {
                     }
                     self.keys.push((key, shift));
                 }
+                Event::Chord { .. } | Event::Modifier { .. } | Event::RightButton { .. } => {}
             }
         }
     }

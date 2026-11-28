@@ -12,6 +12,9 @@ pub enum Weight {
     Regular = 0,
     Medium = 1,
     SemiBold = 2,
+    /// The monospace face, if one was added ([`Fonts::add_mono`]);
+    /// otherwise the regular face.
+    Mono = 3,
 }
 
 struct Glyph {
@@ -55,6 +58,37 @@ impl Fonts {
         })
     }
 
+    /// Adds the monospace face (for terminals), drawn as [`Weight::Mono`].
+    pub fn add_mono(&mut self, data: &[u8]) -> Result<(), &'static str> {
+        let settings = FontSettings {
+            scale: 32.0,
+            ..FontSettings::default()
+        };
+        let f = Font::from_bytes(data, settings)?;
+        let m = f.metrics('x', 1000.0);
+        let xh = (m.height as i32 + m.ymin) as f32 / 1000.0;
+        self.fonts.truncate(3);
+        self.x_height.truncate(3);
+        self.fonts.push(f);
+        self.x_height.push(xh);
+        Ok(())
+    }
+
+    /// True if a monospace face was added.
+    pub fn has_mono(&self) -> bool {
+        self.fonts.len() > 3
+    }
+
+    fn face(&self, w: Weight) -> usize {
+        let i = w as usize;
+        if i < self.fonts.len() { i } else { 0 }
+    }
+
+    /// Forgets the rendered glyphs (they are drawn again when needed).
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
+    }
+
     /// The size actually used for `px`: changed by a few percent at most
     /// so that the x-height is a whole number of pixels. With the baseline
     /// on a pixel row too, the tops and bottoms of lowercase letters fall
@@ -62,7 +96,7 @@ impl Fonts {
     /// no hinter).
     pub fn snapped_size(&self, w: Weight, px: u32) -> f32 {
         let p = px as f32;
-        let r = self.x_height[w as usize];
+        let r = self.x_height[self.face(w)];
         if px < 8 || r <= 0.1 {
             return p;
         }
@@ -78,12 +112,12 @@ impl Fonts {
     }
 
     fn font(&self, w: Weight) -> &Font {
-        &self.fonts[w as usize]
+        &self.fonts[self.face(w)]
     }
 
     fn glyph(&mut self, w: Weight, ch: char, px: u32) -> &Glyph {
         let size = self.snapped_size(w, px);
-        let font = &self.fonts[w as usize];
+        let font = &self.fonts[self.face(w)];
         self.cache.entry((w as u8, ch, px)).or_insert_with(|| {
             let (m, bitmap) = font.rasterize(ch, size);
             Glyph {
@@ -163,6 +197,35 @@ impl Fonts {
             prev = Some(ch);
         }
         round(pen)
+    }
+
+    /// Width a character advances the pen by, in pixels (fractional).
+    pub fn advance(&mut self, w: Weight, px: u32, ch: char) -> f32 {
+        self.glyph(w, ch, px).advance
+    }
+
+    /// Draws one character with its pen position at `x` and baseline at
+    /// `baseline`, without kerning (for terminal cells).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_char(
+        &mut self,
+        c: &mut Canvas,
+        w: Weight,
+        px: u32,
+        x: i32,
+        baseline: i32,
+        ch: char,
+        color: Color,
+    ) {
+        let g = self.glyph(w, ch, px);
+        let gx = x + g.xmin;
+        let gy = baseline - g.height as i32 - g.ymin;
+        c.draw_mask(gx, gy, g.width, g.height, &g.bitmap, color);
+    }
+
+    /// True if the font has a glyph for `ch` (not the missing-glyph box).
+    pub fn has_glyph(&self, w: Weight, ch: char) -> bool {
+        self.font(w).lookup_glyph_index(ch) != 0
     }
 
     /// Draws `text` vertically centred on `cy` (by the capital height).

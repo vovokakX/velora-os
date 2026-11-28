@@ -17,7 +17,7 @@
 
 use crate::canvas::Canvas;
 use crate::geom::Rect;
-use crate::ui::{Event, Key};
+use crate::ui::{Event, Key, Modifier, mods};
 use alloc::vec::Vec;
 use velora_abi::{DisplayInfo, key, pointer};
 use velora_gfx::image::Image;
@@ -48,6 +48,9 @@ pub struct Screen {
     /// Where the pointer is on the screen now.
     shown: Option<Rect>,
     native: bool,
+    /// Also report modifier keys and the right button (see
+    /// [`Event::Modifier`]).
+    pub extended_input: bool,
 }
 
 impl Screen {
@@ -80,6 +83,7 @@ impl Screen {
             pointer: None,
             shown: None,
             native,
+            extended_input: false,
         })
     }
 
@@ -131,6 +135,34 @@ impl Screen {
                     let code = u16::from_le_bytes([p[0], p[1]]);
                     let flags = p[2];
                     let ch = u32::from_le_bytes([p[4], p[5], p[6], p[7]]);
+                    let mut m = 0;
+                    for (bit, md) in [
+                        (key::SHIFT, mods::SHIFT),
+                        (key::CTRL, mods::CTRL),
+                        (key::ALT, mods::ALT),
+                        (key::SUPER, mods::SUPER),
+                    ] {
+                        if flags & bit != 0 {
+                            m |= md;
+                        }
+                    }
+                    let modifier = match code {
+                        key::SHIFT_KEY => Some(Modifier::Shift),
+                        key::CTRL_KEY => Some(Modifier::Ctrl),
+                        key::ALT_KEY => Some(Modifier::Alt),
+                        key::SUPER_KEY => Some(Modifier::Super),
+                        _ => None,
+                    };
+                    if let Some(k) = modifier {
+                        if self.extended_input {
+                            out.push(Event::Modifier {
+                                key: k,
+                                down: flags & key::PRESSED != 0,
+                                mods: m,
+                            });
+                        }
+                        continue;
+                    }
                     if flags & key::PRESSED == 0 {
                         continue;
                     }
@@ -150,12 +182,21 @@ impl Screen {
                         key::PAGE_DOWN => Key::PageDown,
                         key::SPACE => Key::Space,
                         key::F1..=key::F12 => Key::F((code - key::F1 + 1) as u8),
+                        key::INSERT => Key::Insert,
                         key::CHAR => match char::from_u32(ch) {
                             Some(c) => Key::Char(c),
                             None => continue,
                         },
                         _ => continue,
                     };
+                    if m & (mods::CTRL | mods::ALT | mods::SUPER) != 0 {
+                        let k = match k {
+                            Key::Char(c) => Key::Char(c.to_lowercase().next().unwrap_or(c)),
+                            k => k,
+                        };
+                        out.push(Event::Chord { key: k, mods: m });
+                        continue;
+                    }
                     out.push(Event::Key {
                         key: k,
                         shift: flags & key::SHIFT != 0,
@@ -220,6 +261,11 @@ impl Screen {
                 // Movement before the button change counts first.
                 self.flush_motion(&mut dx, &mut dy, &mut moved, &mut out);
                 out.push(Event::MouseButton { down: left != 0 });
+            }
+            let right = buttons & 2;
+            if right != self.buttons & 2 && self.extended_input {
+                self.flush_motion(&mut dx, &mut dy, &mut moved, &mut out);
+                out.push(Event::RightButton { down: right != 0 });
             }
             self.buttons = buttons;
         }
