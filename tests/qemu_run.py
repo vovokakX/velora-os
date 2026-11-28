@@ -173,6 +173,48 @@ def usb_args(stick):
             "-device", "usb-storage,bus=xhci.0,drive=stick"]
 
 
+def audio_args(workdir):
+    """Intel HDA with an output codec; what the system plays goes to
+    audio.wav in the work directory (the WAV back end has no input, so
+    not hda-duplex)."""
+    return ["-audiodev", "wav,id=snd0,path=" + os.path.join(workdir, "audio.wav"),
+            "-device", "intel-hda", "-device", "hda-output,audiodev=snd0"]
+
+
+def check_audio(workdir):
+    """The kernel test plays 0.5 s of a 440 Hz triangle wave: the WAV file
+    QEMU wrote must hold a tone of about that pitch and length."""
+    path = os.path.join(workdir, "audio.wav")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        return "no sound recorded: %s" % e
+    # QEMU fills the sizes in the header only when it closes the file, so
+    # the header is read for the format and the samples follow it.
+    if len(raw) < 44 or raw[:4] != b"RIFF" or raw[8:16] != b"WAVEfmt ":
+        return "no WAV file from QEMU (%d bytes: %r)" % (len(raw), raw[:16])
+    ch = int.from_bytes(raw[22:24], "little")
+    rate = int.from_bytes(raw[24:28], "little")
+    width = int.from_bytes(raw[34:36], "little") // 8
+    data = raw[44:]
+    if width != 2 or ch < 1:
+        return "unexpected WAV format: %d channels, %d bytes per sample" % (ch, width)
+    left = [int.from_bytes(data[i:i + 2], "little", signed=True)
+            for i in range(0, len(data) - 1, 2 * ch)]
+    loud = [i for i, v in enumerate(left) if abs(v) > 500]
+    if not loud:
+        return "the recorded sound is silent (%d frames)" % len(left)
+    part = left[loud[0]:loud[-1] + 1]
+    secs = len(part) / rate
+    crossings = sum(1 for a, b in zip(part, part[1:]) if a < 0 <= b)
+    freq = crossings / secs if secs else 0
+    print("qemu_run: audio: %.2f s of sound at about %.0f Hz (%d Hz WAV)" % (secs, freq, rate))
+    if not 0.35 < secs < 0.8 or not 380 < freq < 500:
+        return "the recorded sound is not the test tone: %.2f s, %.0f Hz" % (secs, freq)
+    return None
+
+
 def make_disks(workdir):
     paths = {}
     for kind in DISK_KINDS:
@@ -532,7 +574,7 @@ def run_once(args, work, disks, log, check, iso="default", extra=None):
     port = free_port()
     iso = args.iso if iso == "default" else iso
     if extra is None and args.mode == "ktest":
-        extra = net_args() + usb_args(disks["stick"])
+        extra = net_args() + usb_args(disks["stick"]) + audio_args(work)
     cmd, accel = build_command(iso, work, args.memory, port, disks, extra)
     print("qemu_run: mode=%s accel=%s iso=%s" % (args.mode, accel, iso or "none (boot from disk)"))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -591,6 +633,9 @@ def run(args):
                 if problem:
                     return fail("after boot %d: %s" % (boot, problem))
             print("qemu_run: VeloraFS and FAT32 checked on the host after boot %d" % boot)
+            problem = check_audio(work)
+            if problem:
+                return fail("after boot %d: %s" % (boot, problem))
             problem = check_usb_stick(disks["stick"], boot)
             if problem:
                 return fail("after boot %d: %s" % (boot, problem))
@@ -1399,12 +1444,14 @@ def last_areas(reader):
 
 def run_lumi(args, work):
     """The Live system with the Lumi desktop (key 3 in the start menu):
-    the login screen, the app menu, a terminal running vsh, Plume,
+    the login screen, the app menu, a terminal running vsh (also reading
+    /dev/mixer of the Intel HDA card), Plume,
     /var/log/lumi.log, Lumi started again after a crash, the power
     button. Prints Lumi's memory use at the login screen and on the empty
     desktop; screenshots go to build/logs/lumi-*.png."""
     w, h = (int(v) for v in args.resolution.split("x"))
     extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h)]
+    extra += audio_args(work)
 
     def check(proc, reader, monitor, deadline):
         s = Session(proc, reader, monitor, deadline)
@@ -1417,6 +1464,8 @@ def run_lumi(args, work):
                 ("echo Lumi-$((1+1))", "Lumi-"),
                 ("ps", "lumi"),
                 ("mem", "used"),
+                # The sound card, with the volume Lumi set at login.
+                ("cat /dev/mixer", "device line"),
             ))
             # Plume in its own window from the app menu; Ctrl+X ends it.
             s.keys(["meta_l"])

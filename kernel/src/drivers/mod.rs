@@ -6,6 +6,7 @@ pub mod ahci;
 pub mod block;
 pub mod dma;
 pub mod e1000;
+pub mod hda;
 pub mod msix;
 pub mod nvme;
 pub mod pci;
@@ -44,6 +45,7 @@ pub fn init() {
         if ecam { "ECAM" } else { "I/O ports" }
     );
     let disks = virtio_blk::probe_all() + ahci::probe_all() + nvme::probe_all();
+    hda::probe();
     let usb = xhci::probe_all();
     if usb > 0 {
         crate::kok!("USB: {} device(s)", usb);

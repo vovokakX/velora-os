@@ -1,0 +1,8 @@
+[package]
+name = "velora-hda"
+description = "Intel High Definition Audio: codec verbs, widget graph, output paths, volume, playback ring, mixer text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

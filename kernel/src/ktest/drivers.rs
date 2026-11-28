@@ -231,3 +231,67 @@ pub fn rtc_matches_bootloader_time() {
     let b = time::realtime_ns().unwrap();
     assert!(b - a >= 20_000_000, "wall clock does not advance");
 }
+
+/// Intel HDA (`-device intel-hda -device hda-duplex`, a WAV file on the
+/// host): the mixer text, half a second of a 440 Hz tone through
+/// `/dev/audio`'s path, the link position moving, and the stream stopping
+/// after the silence. The host checks the tone in the WAV file.
+pub fn audio_plays() {
+    use crate::drivers::hda;
+    assert!(hda::present(), "no HDA controller");
+    let text = hda::mixer_text();
+    kprint!(
+        "({}) ",
+        text.lines().filter(|l| l.starts_with("device")).count()
+    );
+    assert!(text.contains("device "), "no outputs: {}", text);
+    assert!(hda::mixer_write(
+        "volume 100
+mute 0
+"
+    ));
+    assert!(hda::mixer_text().starts_with(
+        "volume 100
+mute 0
+"
+    ));
+    assert!(!hda::mixer_write("volume loud"));
+    // 0.5 s of 440 Hz at half scale (a 109-entry period of 48000 / 440).
+    let frames = velora_hda::RATE as usize / 2;
+    let mut pcm = Vec::with_capacity(frames * 4);
+    for i in 0..frames {
+        let t = (i % 109) as i32;
+        // A triangle wave: rises over the first half period, falls after.
+        let v = if t < 55 {
+            t * 600 - 16000
+        } else {
+            (109 - t) * 600 - 16000
+        } as i16;
+        pcm.extend_from_slice(&v.to_le_bytes());
+        pcm.extend_from_slice(&v.to_le_bytes());
+    }
+    let mut off = 0;
+    let t0 = time::uptime_ms();
+    while off < pcm.len() {
+        match hda::write(&pcm[off..]) {
+            Some(0) => time::sleep_ms(20),
+            Some(n) => off += n,
+            None => panic!("no sound card"),
+        }
+        assert!(time::uptime_ms() - t0 < 5000, "the buffer does not drain");
+    }
+    time::sleep_ms(300);
+    let (running, lpib) = hda::position().unwrap();
+    assert!(
+        running && lpib > 0,
+        "the stream does not move: {} {}",
+        running,
+        lpib
+    );
+    // Silence for over 2 s stops the stream.
+    let t1 = time::uptime_ms();
+    while hda::position().unwrap().0 {
+        assert!(time::uptime_ms() - t1 < 8000, "the stream did not stop");
+        time::sleep_ms(100);
+    }
+}

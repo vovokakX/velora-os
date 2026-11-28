@@ -150,6 +150,8 @@ static TESTS: &[Test] = tests![
     user::commands_work,
     // stage 10: network
     net::dhcp_and_ping_gateway,
+    // sound
+    drivers::audio_plays,
 ];
 
 static EXPECTING_PANIC: AtomicBool = AtomicBool::new(false);

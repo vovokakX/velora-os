@@ -1800,3 +1800,72 @@ back at the bottom edge (a strip of about 40 points under it), with Super
 and while a menu is open. NOT IMPLEMENTED: changing keyboard layouts (the
 kernel knows English and Russian with Alt+Shift), shortcuts of one's own,
 changing the screen resolution (the firmware chooses it), sound.
+
+## D62. Звук: Intel HDA, /dev/audio и /dev/mixer / Sound: Intel HDA, /dev/audio and /dev/mixer
+
+**2026-11-28**
+
+**RU.** Первый звуковой драйвер — Intel HDA: он есть почти во всех ПК с
+UEFI и в QEMU (`-device intel-hda -device hda-duplex`). Аппаратно-
+независимая часть — crate `drivers/hda` (`velora-hda`, тесты на хосте с
+поддельным кодеком): кодирование команд, чтение графа виджетов
+функциональной группы, поиск пути от выходного контакта к ЦАП (поиск в
+глубину через смесители и селекторы), настройка пути, громкость, кольцевой
+буфер и текст микшера. Ядро (`kernel/src/drivers/hda.rs`) говорит с
+кодеком через CORB/RIRB опросом (после каждого ответа сбрасывается флаг в
+RIRBSTS: без этого контроллер, и в QEMU тоже, перестаёт брать команды) и
+играет один формат — 48 кГц, 16 бит, стерео — из циклического буфера
+256 КиБ (4 записи BDL, 1,36 с). Прерывания не нужны: поток `audio` во
+время звука каждый тик читает позицию (LPIB), обнуляет сыгранное, чтобы
+цикл играл тишину, и через 2 с тишины останавливает поток; без звука он
+спит до записи. Программы пишут сэмплы в `/dev/audio` (запись берёт
+сколько помещается, `Busy`, если места нет: блокировать нельзя, у VFS одна
+блокировка, D21) и управляют громкостью, «без звука» и выходом через
+`/dev/mixer` (строки `volume N`, `mute 0|1`, `output N`; чтение — то же
+плюс `device <вид>` для каждого выхода). Громкость — усилитель на пути
+(ЦАП, иначе ближайший к нему), проценты идут по его шагам до 0 дБ; если
+усилителя нет, сэмплы умножаются в ядре. Выход по умолчанию — первый из
+списка: динамики, наушники, линейный, прочие, цифровой. Lumi: кнопка
+громкости на панели открывает окошко с ползунком, кнопкой «без звука» и
+списком выходов; когда ползунок отпускают, звучит тихий щелчок (18 мс,
+2 кГц); раздел «Звук» в Настройках с проверкой звука (два тона, 1 с).
+Громкость и «без звука» хранятся в настройках пользователя и ставятся при
+входе. Синусы считаются рекуррентно (`y[n] = 2cos(w)·y[n-1] − y[n-2]`), без
+функции синуса. Тест ядра `drivers::audio_plays` играет 0,5 с тона 440 Гц,
+хост находит его в WAV, который пишет QEMU (`-audiodev wav`, `hda-output`:
+у WAV нет входа). NOT IMPLEMENTED: запись (микрофон), определение
+подключения наушников, HDMI, несколько программ одновременно (сэмплы идут
+подряд, без смешивания), другие частоты.
+
+**EN.** The first sound driver is Intel HDA: almost every UEFI PC has it,
+and QEMU does (`-device intel-hda -device hda-duplex`). The hardware-
+independent part is the `drivers/hda` crate (`velora-hda`, host tests with
+a fake codec): verb encoding, reading the widget graph of the function
+group, finding a path from an output pin to a DAC (depth-first through
+mixers and selectors), setting the path up, volume, the ring buffer and
+the mixer text. The kernel (`kernel/src/drivers/hda.rs`) talks to the
+codec through CORB/RIRB by polling (the flag in RIRBSTS is cleared after
+each response: without that the controller, QEMU's too, stops taking
+commands) and plays one format — 48 kHz, 16-bit, stereo — from a 256 KiB
+cyclic buffer (4 BDL entries, 1.36 s). No interrupts: while sound plays
+the `audio` thread reads the position (LPIB) every tick, clears what was
+played so the loop plays silence, and stops the stream after 2 s of
+silence; otherwise it sleeps until a write. Programs write samples to
+`/dev/audio` (a write takes what fits, `Busy` when nothing does: it must
+not block, the VFS has one lock, D21) and control volume, mute and the
+output through `/dev/mixer` (lines `volume N`, `mute 0|1`, `output N`;
+reading gives the same plus `device <kind>` for each output). The volume
+is an amplifier on the path (the DAC's, else the nearest one), the per
+cent go along its steps up to 0 dB; without an amplifier the kernel scales
+the samples. The default output is the first of: speakers, headphones,
+line out, others, digital. Lumi: the volume button on the panel opens a
+small window with a slider, a mute button and the outputs; letting go of
+the slider plays a quiet click (18 ms, 2 kHz); the Sound page of Settings
+has a sound test (two tones, 1 s). Volume and mute are kept in the user's
+settings and set at login. Sines come from the recurrence (`y[n] =
+2cos(w)·y[n-1] − y[n-2]`), no sine function. The kernel test
+`drivers::audio_plays` plays 0.5 s of a 440 Hz tone and the host finds it
+in the WAV file QEMU writes (`-audiodev wav`, `hda-output`: WAV has no
+input). NOT IMPLEMENTED: recording (microphone), headphone jack detection,
+HDMI, several programs at once (samples follow each other, no mixing),
+other rates.

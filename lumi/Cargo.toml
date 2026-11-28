@@ -10,3 +10,4 @@ publish = false
 [dependencies]
 velora-ui = { path = "../libc/ui" }
 velora-gfx = { path = "../kernel/gfx" }
+velora-hda = { path = "../drivers/hda" }

@@ -31,6 +31,8 @@ pub enum Icon {
     Gear,
     Info,
     Speaker,
+    /// A speaker with a cross: no sound.
+    SpeakerMute,
     /// Signal arcs: the network.
     Network,
     Power,
@@ -329,6 +331,19 @@ pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: Color,
             let (cx, cy) = g.p(12, 12);
             c.arc_fx(cx, cy, g.len(4), w, 10000, 12768, true, color);
             c.arc_fx(cx, cy, g.len(8), w, 9000, 14768, true, color);
+        }
+        Icon::SpeakerMute => {
+            let pts = [
+                g.p(3, 9),
+                g.p(7, 9),
+                g.p(12, 4),
+                g.p(12, 20),
+                g.p(7, 15),
+                g.p(3, 15),
+            ];
+            c.fill_polygon_fx(&pts, color);
+            line(c, g.p(16, 9), g.p(22, 15));
+            line(c, g.p(22, 9), g.p(16, 15));
         }
         Icon::Network => {
             let (cx, cy) = g.p(12, 19);

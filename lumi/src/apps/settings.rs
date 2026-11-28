@@ -101,6 +101,8 @@ pub struct Settings {
     note: Option<(bool, String)>,
     info: SysInfo,
     keyboard: (String, String),
+    /// The volume slider clicks again from this time.
+    click_at: u64,
 }
 
 impl Settings {
@@ -141,6 +143,7 @@ impl Settings {
             note: None,
             info: host.sysinfo(),
             keyboard,
+            click_at: 0,
         }
     }
 
@@ -1734,38 +1737,136 @@ impl Settings {
     fn sound(&mut self, cx: &mut Cx, a: &Area, y: i32) -> i32 {
         let t = cx.theme;
         let ru = cx.ru;
-        let card = Rect::new(a.x, y, a.w, a.s(120));
-        cx.c.fill_rrect(card, a.s(cx.cfg.round(12)), t.field);
-        icons::draw(
-            cx.c,
-            Icon::Speaker,
-            card.x + a.s(24),
-            card.y + a.s(26),
-            a.s(32),
-            t.text_dim,
-            0,
-        );
-        cx.f.draw(
-            cx.c,
-            Weight::Medium,
-            cx.ui.px(15),
-            card.x + a.s(76),
-            card.y + a.s(40),
-            tr(ru, "Звуковых устройств нет", "No sound devices"),
-            t.text,
-        );
-        let sub = tr(
-            ru,
-            "NOT IMPLEMENTED: в Velora OS пока нет драйверов звука, поэтому громкость не меняется.",
-            "NOT IMPLEMENTED: Velora OS has no sound drivers yet, so there is no volume to change.",
-        );
-        let inner = Area {
-            x: card.x + a.s(76),
-            w: card.w - a.s(96),
-            ..*a
+        let Some(m) = cx.host.mixer().filter(|m| !m.devices.is_empty()) else {
+            let card = Rect::new(a.x, y, a.w, a.s(120));
+            cx.c.fill_rrect(card, a.s(cx.cfg.round(12)), t.field);
+            icons::draw(
+                cx.c,
+                Icon::Speaker,
+                card.x + a.s(24),
+                card.y + a.s(26),
+                a.s(32),
+                t.text_dim,
+                0,
+            );
+            cx.f.draw(
+                cx.c,
+                Weight::Medium,
+                cx.ui.px(15),
+                card.x + a.s(76),
+                card.y + a.s(40),
+                tr(ru, "Звуковых устройств нет", "No sound devices"),
+                t.text,
+            );
+            let sub = tr(
+                ru,
+                "Velora OS поддерживает звуковые карты Intel HDA. Такой карты в этом компьютере нет.",
+                "Velora OS supports Intel HDA sound cards. This computer has none.",
+            );
+            let inner = Area {
+                x: card.x + a.s(76),
+                w: card.w - a.s(96),
+                ..*a
+            };
+            note(cx, &inner, card.y + a.s(52), sub);
+            return card.bottom() + a.s(8);
         };
-        note(cx, &inner, card.y + a.s(52), sub);
-        card.bottom() + a.s(8)
+        let cfg = cx.cfg.clone();
+        let mut y = section(cx, a, y, tr(ru, "Вывод", "Output"));
+        let mut v = m.volume as i32;
+        let text = format!("{} %", v);
+        if slider_row(
+            cx,
+            a,
+            &mut y,
+            90,
+            tr(ru, "Громкость", "Volume"),
+            &text,
+            &cfg,
+            &mut v,
+            (0, 100, 5),
+        ) {
+            cx.host.set_mixer(&format!(
+                "volume {}
+",
+                v
+            ));
+            // A quiet click confirms the new volume, at most every 150 ms.
+            if cx.now >= self.click_at {
+                cx.host.play(&crate::sound::click());
+                self.click_at = cx.now + 150;
+            }
+        }
+        let mut mute = m.mute;
+        if toggle_row(
+            cx,
+            a,
+            &mut y,
+            91,
+            tr(ru, "Без звука", "Mute"),
+            "",
+            &cfg,
+            &mut mute,
+        ) {
+            cx.host.set_mixer(&format!(
+                "mute {}
+",
+                mute as u8
+            ));
+        }
+        let names: Vec<&str> = m
+            .devices
+            .iter()
+            .map(|d| {
+                let (r, e) = d.name();
+                tr(ru, r, e)
+            })
+            .collect();
+        let mut sel = m.output;
+        if choice_row(
+            cx,
+            a,
+            &mut y,
+            92,
+            tr(ru, "Устройство вывода", "Output device"),
+            &names,
+            &mut sel,
+            &cfg,
+        ) {
+            cx.host.set_mixer(&format!(
+                "output {}
+",
+                sel
+            ));
+        }
+        let r = row(
+            cx,
+            a,
+            y,
+            tr(ru, "Проверка звука", "Sound test"),
+            tr(
+                ru,
+                "Короткая мелодия на выбранном устройстве",
+                "A short tune on the chosen device",
+            ),
+            &cfg,
+        );
+        let bw = a.s(150);
+        let b = Rect::new(r.right() - bw - a.s(12), r.y + a.s(10), bw, r.h - a.s(20));
+        let pressed = in_view(cx, a, b, |x| {
+            x.button(
+                99,
+                b,
+                tr(ru, "Проверить", "Play"),
+                ButtonKind::Tonal,
+                Some(Icon::Speaker),
+                None,
+            )
+        });
+        if pressed {
+            cx.host.play(&crate::sound::chime());
+        }
+        r.bottom() + a.s(8)
     }
 
     fn user(&mut self, cx: &mut Cx, a: &Area, y: i32) -> i32 {

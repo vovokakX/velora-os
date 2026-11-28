@@ -3,7 +3,9 @@
 //! `root` (password `velora`), and terminals that print a prepared
 //! session.
 
-use crate::host::{DirEntry, Host, NetState, Power, SysInfo, Term, TermRead, UserInfo, parent};
+use crate::host::{
+    DirEntry, Host, Mixer, NetState, Power, SysInfo, Term, TermRead, UserInfo, parent,
+};
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
@@ -31,6 +33,10 @@ pub struct FakeHost {
     pub logged_in: Option<String>,
     /// The password of `user` and `root`.
     pub password: String,
+    /// A sound card with speakers and headphones (`None`: no card).
+    pub mixer: Option<Mixer>,
+    /// Everything played.
+    pub played: Vec<u8>,
 }
 
 impl Default for FakeHost {
@@ -52,6 +58,14 @@ impl FakeHost {
             terms: Vec::new(),
             logged_in: None,
             password: String::from("velora"),
+            mixer: Some(Mixer {
+                devices: alloc::vec![
+                    velora_hda::codec::Jack::Speaker,
+                    velora_hda::codec::Jack::Headphones
+                ],
+                ..Mixer::default()
+            }),
+            played: Vec::new(),
         };
         for d in [
             "/",
@@ -217,6 +231,25 @@ impl Host for FakeHost {
             uptime_s: 754,
             processes: 6,
         }
+    }
+
+    fn mixer(&mut self) -> Option<Mixer> {
+        self.mixer.clone()
+    }
+
+    fn set_mixer(&mut self, cmd: &str) -> bool {
+        let (Some(m), Some(cmds)) = (self.mixer.as_mut(), velora_hda::mixer::commands(cmd)) else {
+            return false;
+        };
+        cmds.into_iter().all(|c| m.apply(c))
+    }
+
+    fn play(&mut self, pcm: &[u8]) -> usize {
+        if self.mixer.is_none() {
+            return 0;
+        }
+        self.played.extend_from_slice(pcm);
+        pcm.len()
     }
 
     fn net(&mut self) -> NetState {

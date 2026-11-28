@@ -393,3 +393,66 @@ fn the_panel_hides_and_comes_back() {
     let text = String::from_utf8(saved).unwrap();
     assert!(text.contains("panel=autohide\n") && text.contains("pinned=terminal,about\n"));
 }
+
+/// The sound window on the panel: the slider sets the volume on the
+/// card with a click at the end, mute and another output; the volume is
+/// kept in the user's settings.
+#[test]
+fn the_sound_window_sets_the_volume() {
+    let mut r = Run::new(1280, 720);
+    r.login();
+    r.wait(800);
+    let icon = r.d.panel_item_rect("volume").expect("no volume item");
+    let (cx, cy) = (icon.center_x(), icon.center_y());
+    r.step(&[Event::MouseMove { x: cx, y: cy }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    r.step(&[Event::MouseButton { down: false }]);
+    r.wait(300);
+    let (mute, track, rows) = r.d.volume_controls().expect("the sound window is not open");
+    assert_eq!(rows.len(), 2, "speakers and headphones");
+    // Drag the slider to a quarter, then let go: one click is played.
+    let y = track.center_y();
+    r.step(&[Event::MouseMove {
+        x: track.x + track.w / 2,
+        y,
+    }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    r.step(&[Event::MouseMove {
+        x: track.x + track.w / 4,
+        y,
+    }]);
+    assert!(r.h.played.is_empty(), "no click while dragging");
+    r.step(&[Event::MouseButton { down: false }]);
+    let m = r.h.mixer.clone().unwrap();
+    assert_eq!((m.volume, m.mute), (25, false));
+    assert_eq!(r.h.played.len(), velora_lumi::sound::click().len());
+    // Mute, then the headphones.
+    r.step(&[Event::MouseMove {
+        x: mute.center_x(),
+        y: mute.center_y(),
+    }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    r.step(&[Event::MouseButton { down: false }]);
+    assert!(r.h.mixer.as_ref().unwrap().mute);
+    let row = rows[1];
+    r.step(&[Event::MouseMove {
+        x: row.center_x(),
+        y: row.center_y(),
+    }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    r.step(&[Event::MouseButton { down: false }]);
+    assert_eq!(r.h.mixer.as_ref().unwrap().output, 1);
+    // The volume and mute are written to the settings file.
+    r.wait(600);
+    let saved =
+        r.h.files
+            .get("/home/user/.config/lumi/settings.conf")
+            .cloned()
+            .flatten();
+    let text = String::from_utf8(saved.expect("settings not saved")).unwrap();
+    assert!(
+        text.contains("volume=25\n") && text.contains("mute=yes\n"),
+        "{}",
+        text
+    );
+}

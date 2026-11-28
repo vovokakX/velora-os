@@ -2,7 +2,10 @@
 //! packets: buttons, dx, dy, wheel; relative movements only; reads do not
 //! wait), pointer (8-byte packets of every mouse and tablet event,
 //! `velora_abi::pointer`; reads do not wait), keyboard (8-byte key
-//! packets, `velora_abi::key`; reads do not wait) and one node per disk.
+//! packets, `velora_abi::key`; reads do not wait), audio (48 kHz 16-bit
+//! stereo samples; a write takes what fits in the buffer, `Busy` when
+//! nothing does), mixer (volume, mute and output as text,
+//! `velora_hda::mixer`) and one node per disk.
 //!
 //! Disks are read and written at byte offsets that are multiples of the
 //! sector size. The console node is turned into a console handle when it
@@ -22,6 +25,8 @@ const KMSG: Ino = 5;
 const MOUSE: Ino = 6;
 const KEYBOARD: Ino = 7;
 const POINTER: Ino = 8;
+const AUDIO: Ino = 9;
+const MIXER: Ino = 10;
 const FIRST_DISK: Ino = 16;
 
 pub struct DevFs {
@@ -45,6 +50,8 @@ impl DevFs {
             (String::from("mouse"), MOUSE, Kind::CharDevice),
             (String::from("keyboard"), KEYBOARD, Kind::CharDevice),
             (String::from("pointer"), POINTER, Kind::CharDevice),
+            (String::from("audio"), AUDIO, Kind::CharDevice),
+            (String::from("mixer"), MIXER, Kind::File),
         ];
         for (i, d) in self.disks.iter().enumerate() {
             v.push((
@@ -95,6 +102,8 @@ impl FileSystem for DevFs {
             NULL | ZERO | CONSOLE_INO => (Kind::CharDevice, 0o666, 0),
             KMSG => (Kind::File, 0o444, crate::console::klog::len() as u64),
             MOUSE | KEYBOARD | POINTER => (Kind::CharDevice, 0o444, 0),
+            AUDIO => (Kind::CharDevice, 0o666, 0),
+            MIXER => (Kind::File, 0o666, 0),
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 (Kind::BlockDevice, 0o600, d.size_bytes())
@@ -146,6 +155,15 @@ impl FileSystem for DevFs {
             }
             CONSOLE_INO => Err(FsError::Unsupported),
             KMSG => Ok(crate::console::klog::read(offset as usize, buf)),
+            AUDIO => Ok(0),
+            MIXER => {
+                let text = crate::drivers::hda::mixer_text();
+                let b = text.as_bytes();
+                let start = (offset as usize).min(b.len());
+                let n = buf.len().min(b.len() - start);
+                buf[..n].copy_from_slice(&b[start..start + n]);
+                Ok(n)
+            }
             MOUSE => {
                 let mut n = 0;
                 while n + 4 <= buf.len() {
@@ -205,6 +223,19 @@ impl FileSystem for DevFs {
             ROOT => Err(FsError::IsDir),
             NULL | ZERO => Ok(data.len()),
             CONSOLE_INO | KMSG | MOUSE | KEYBOARD | POINTER => Err(FsError::Unsupported),
+            AUDIO => match crate::drivers::hda::write(data) {
+                None => Err(FsError::Io),
+                Some(0) if !data.is_empty() => Err(FsError::Busy),
+                Some(n) => Ok(n),
+            },
+            MIXER => {
+                let text = core::str::from_utf8(data).map_err(|_| FsError::Invalid)?;
+                if crate::drivers::hda::mixer_write(text) {
+                    Ok(data.len())
+                } else {
+                    Err(FsError::Invalid)
+                }
+            }
             _ => {
                 let d = self.disk(ino).ok_or(FsError::NotFound)?;
                 let (lba, len) = Self::disk_range(&**d, offset, data.len())?;

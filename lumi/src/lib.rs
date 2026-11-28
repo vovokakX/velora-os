@@ -18,6 +18,7 @@ pub mod host;
 mod launcher;
 mod login;
 mod panel;
+pub mod sound;
 pub mod tz;
 pub mod vt;
 pub mod wallpaper;
