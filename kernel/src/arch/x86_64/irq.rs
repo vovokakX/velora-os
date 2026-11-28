@@ -16,6 +16,8 @@ pub const VECTOR_KEYBOARD: u8 = 0x21;
 pub const VECTOR_PS2_MOUSE: u8 = 0x2c;
 /// First vector handed out to PCI devices (MSI-X).
 pub const VECTOR_DEVICE_BASE: u8 = 0x30;
+/// xHCI controllers (MSI-X or MSI), one vector each, up to four.
+pub const VECTOR_XHCI: u8 = 0x48;
 
 static HANDLERS: [AtomicUsize; 256] = [const { AtomicUsize::new(0) }; 256];
 static SPURIOUS: AtomicU64 = AtomicU64::new(0);
