@@ -1,8 +1,9 @@
 //! Time Lumi takes for frames on the host, 1920x1080 by default:
 //! `cargo run --release -p velora-lumi --example bench [-- WxH]`.
 //! A window dragged in circles over two others, windows opening and
-//! closing, the app menu opening. The time is spent composing the screen
-//! (the program then copies the changed areas to the screen).
+//! closing, the app menu opening, the wallpaper dimming slider moved, and
+//! rest with and without dimming and blur. The time is spent composing
+//! the screen (the program then copies the changed areas to the screen).
 
 use std::time::Instant;
 use velora_lumi::apps::{AppId, Assets};
@@ -155,8 +156,26 @@ fn main() {
         }
     }
     report("app menu open and close", &menu);
+    rest(&mut b, "rest (1 s)");
+    // The dimming slider moved by one step a frame, as when dragged.
+    let mut slide = Vec::new();
+    for dim in (0..=80).step_by(5).chain((0..80).step_by(5).rev()) {
+        let mut cfg = b.d.cfg.clone();
+        cfg.wallpaper_dim = dim;
+        cfg.wallpaper_blur = 40;
+        let t = Instant::now();
+        b.d.apply_config(cfg, &mut b.h, false);
+        let set = t.elapsed().as_micros();
+        slide.push(set + b.step(&[]));
+    }
+    report("dimming slider", &slide);
+    b.wait(500);
+    rest(&mut b, "rest, dimmed and blurred");
+}
+
+fn rest(b: &mut Bench, what: &str) {
     let idle: Vec<u128> = (0..60).map(|_| b.step(&[])).collect();
     let drawn = idle.iter().filter(|&&t| t > 200).count();
-    report("rest (1 s)", &idle);
+    report(what, &idle);
     println!("frames at rest that drew something: {}", drawn);
 }

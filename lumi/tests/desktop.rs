@@ -393,3 +393,52 @@ fn the_panel_hides_and_comes_back() {
     let text = String::from_utf8(saved).unwrap();
     assert!(text.contains("panel=autohide\n") && text.contains("pinned=terminal,about\n"));
 }
+
+/// Dimming and blur are made when they change, never per frame: at rest
+/// with them on nothing is drawn or made again; the dimming slider only
+/// dims (no new picture, blur or cross-fade), and the screen still equals
+/// a full redraw.
+#[test]
+fn wallpaper_effects_are_made_once() {
+    let mut r = Run::new(1024, 640);
+    r.login();
+    r.d.launch(AppId::Settings, &mut r.h, &mut r.f);
+    r.wait(400);
+    let mut cfg = r.d.cfg.clone();
+    cfg.wallpaper_dim = 30;
+    cfg.wallpaper_blur = 40;
+    r.d.apply_config(cfg, &mut r.h, false);
+    r.wait(600);
+    let builds = r.d.wall_builds;
+    let painted = r.d.painted;
+    r.wait(2000);
+    assert_eq!(r.d.painted, painted, "frames at rest drew something");
+    assert_eq!(r.d.wall_builds, builds, "the wallpaper was made at rest");
+    // The slider moved over its range: one dimming per step.
+    for dim in (0..=80).step_by(5) {
+        let mut cfg = r.d.cfg.clone();
+        cfg.wallpaper_dim = dim;
+        r.d.apply_config(cfg, &mut r.h, false);
+        r.step(&[]);
+        assert!(!r.d.animating(), "dimming {} started an animation", dim);
+    }
+    let after = r.d.wall_builds;
+    assert_eq!(after[0], builds[0], "the picture was made again");
+    assert_eq!(after[1], builds[1], "the blur was made again");
+    assert_eq!(after[2], builds[2] + 17);
+    // A new blur level makes only the blur again.
+    let mut cfg = r.d.cfg.clone();
+    cfg.wallpaper_blur = 70;
+    r.d.apply_config(cfg, &mut r.h, false);
+    r.wait(100);
+    assert_eq!(r.d.wall_builds[..2], [after[0], after[1] + 1]);
+    let incremental = r.c.pixels.clone();
+    r.d.damage_all();
+    r.step(&[]);
+    let diff = incremental
+        .iter()
+        .zip(&r.c.pixels)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(diff, 0, "{} pixels differ from a full redraw", diff);
+}
