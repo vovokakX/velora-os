@@ -2,7 +2,8 @@
 //! menu button, the pinned and running apps, the volume, the network and
 //! the clock; their tooltips and small windows; the Alt+Tab switcher.
 
-use crate::apps::{self, AppId, PINNED, tr};
+use crate::apps::{self, AppId, tr};
+use crate::config::{PANEL_ALWAYS, PANEL_ITEM, PANEL_SMART};
 use crate::desktop::{Desktop, Exit, PopKind, Popover, Switcher};
 use crate::gfx::Corner;
 use crate::host::{Host, Power};
@@ -32,6 +33,22 @@ const POP: u64 = 0x500;
 const POP_HOVER: u64 = 0x600;
 const SWITCH: u64 = 0x700;
 
+/// The panel hiding (autohide and smart modes): where it goes and since
+/// when.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Hide {
+    /// The panel is out of sight or on its way.
+    pub(crate) hidden: bool,
+    /// The change started at `t0` from `from` (hidden, 0..=1000).
+    pub(crate) t0: u64,
+    pub(crate) from: u32,
+    /// The pointer left: the panel hides at this time.
+    pub(crate) at: Option<u64>,
+}
+
+/// The panel hides this long after the pointer leaves it.
+const HIDE_DELAY_MS: u64 = 500;
+
 /// Actions in the clock's small window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PopAction {
@@ -42,9 +59,22 @@ enum PopAction {
 }
 
 impl Desktop {
+    /// The pinned apps, in the order of the settings.
+    pub(crate) fn pinned(&self) -> Vec<AppId> {
+        let mut v = Vec::new();
+        for k in &self.cfg.pinned {
+            if let Some(a) = AppId::from_key(k)
+                && !v.contains(&a)
+            {
+                v.push(a);
+            }
+        }
+        v
+    }
+
     pub(crate) fn panel_items(&self) -> Vec<Item> {
         let mut v = alloc::vec![Item::Menu, Item::Sep];
-        for a in PINNED {
+        for a in self.pinned() {
             v.push(Item::App(a));
         }
         for w in &self.windows {
@@ -60,26 +90,178 @@ impl Desktop {
         v
     }
 
+    /// The size of a panel item in design units.
+    pub(crate) fn item_du(&self) -> i32 {
+        PANEL_ITEM[self.cfg.panel_size.min(2)]
+    }
+
     fn item_w(&self, it: Item) -> i32 {
         match it {
             Item::Sep => self.s(17),
-            Item::Clock => self.s(62),
-            _ => self.s(42),
+            Item::Clock => {
+                let time = if self.cfg.clock_24h { 62 } else { 84 };
+                self.s(time + if self.cfg.show_date { 64 } else { 0 })
+            }
+            _ => self.s(self.item_du()),
         }
     }
 
+    /// Where the panel is when shown.
     pub fn panel_rect(&self) -> Rect {
         let items = self.panel_items();
         let pad = self.s(7);
         let w: i32 = items.iter().map(|&i| self.item_w(i)).sum::<i32>() + 2 * pad;
-        let h = self.s(54);
+        let h = self.s(self.item_du() + 12);
         Rect::new((self.w - w) / 2, self.h - h - self.s(10), w, h)
+    }
+
+    /// How far the panel is hidden now: 0 (shown) to 1000.
+    pub(crate) fn panel_hidden(&self) -> u32 {
+        let h = &self.panel_hide;
+        let to = if h.hidden { 1000 } else { 0 };
+        let d = self.dur(if h.hidden { 260 } else { 200 }) as u64;
+        let el = self.now.saturating_sub(h.t0);
+        if d == 0 || el >= d {
+            return to;
+        }
+        let p = anim::ease_out((el * 1000 / d) as u32) as i64;
+        (h.from as i64 + (to as i64 - h.from as i64) * p / 1000) as u32
+    }
+
+    /// The panel's offset down from its place (hiding and appearing).
+    fn panel_dy(&self) -> i32 {
+        let appear = self.panel_appear();
+        let pr = self.panel_rect();
+        let away = self.h - pr.y + self.s(12);
+        let a = (self.s(70) as i64 * (1000 - appear) as i64 / 1000) as i32;
+        let b = (away as i64 * self.panel_hidden() as i64 / 1000) as i32;
+        a.max(b)
+    }
+
+    /// The panel is fully in sight (for tests and logs).
+    pub fn panel_visible(&self) -> bool {
+        self.panel_hidden() == 0
+    }
+
+    /// The apps on the panel, in order (for tests).
+    pub fn panel_apps(&self) -> Vec<AppId> {
+        self.panel_items()
+            .into_iter()
+            .filter_map(|i| match i {
+                Item::App(a) => Some(a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where the panel is now, if it can be clicked.
+    pub(crate) fn panel_hit_rect(&self) -> Rect {
+        if self.panel_hidden() > 300 {
+            Rect::default()
+        } else {
+            self.panel_rect()
+        }
+    }
+
+    fn set_panel_hidden(&mut self, hidden: bool) {
+        if self.panel_hide.hidden == hidden {
+            return;
+        }
+        let from = self.panel_hidden();
+        self.panel_hide = Hide {
+            hidden,
+            t0: self.now,
+            from,
+            at: None,
+        };
+        if hidden {
+            self.panel_hover = None;
+            self.panel_press = None;
+            self.tw.set(TIP, 0);
+        }
+        self.host_log_pending = Some(if hidden {
+            "lumi: panel hidden"
+        } else {
+            "lumi: panel shown"
+        });
+        self.damage_panel_strip();
+    }
+
+    /// The bottom of the screen where the panel, its shadow and its
+    /// tooltips are.
+    fn damage_panel_strip(&mut self) {
+        let pr = self.panel_rect();
+        self.add_damage(Rect::new(
+            0,
+            pr.y - self.s(70),
+            self.w,
+            self.h - pr.y + self.s(70),
+        ));
+    }
+
+    /// A window covers the panel's place (smart hiding).
+    fn window_over_panel(&self) -> bool {
+        let pr = self.panel_rect();
+        self.windows
+            .iter()
+            .any(|w| !w.minimized && !w.closing && !w.rect.intersect(pr).is_empty())
+    }
+
+    /// The pointer is near the bottom edge under the panel, or over it.
+    fn pointer_wants_panel(&self) -> bool {
+        let (x, y) = self.mouse;
+        let pr = self.panel_rect();
+        let zone = Rect::new(
+            pr.x - self.s(60),
+            self.h - self.s(32),
+            pr.w + self.s(120),
+            self.s(32),
+        );
+        zone.contains(x, y) || (!self.panel_hide.hidden && pr.inset(-self.s(10)).contains(x, y))
+    }
+
+    /// The panel's mode changed: windows that fill the work area fit the
+    /// new one.
+    pub(crate) fn panel_mode_changed(&mut self, _host: &mut dyn Host) {
+        self.refit = true;
+        if self.cfg.panel_mode == PANEL_ALWAYS {
+            self.set_panel_hidden(false);
+        }
+    }
+
+    /// Shows or hides the panel by its mode, the pointer and what is
+    /// open; once per frame.
+    pub(crate) fn tick_panel_hide(&mut self) {
+        let mode = self.cfg.panel_mode;
+        let keep = mode == PANEL_ALWAYS
+            || self.launcher.is_some()
+            || self.popover.is_some()
+            || self.switcher.is_some()
+            || self.panel_press.is_some()
+            || self.mods & velora_ui::ui::mods::SUPER != 0
+            || self.pointer_wants_panel()
+            || (mode == PANEL_SMART && !self.window_over_panel());
+        if keep {
+            self.panel_hide.at = None;
+            // Out of the way of a window being dragged over it, though.
+            self.set_panel_hidden(false);
+        } else if !self.panel_hide.hidden {
+            match self.panel_hide.at {
+                None => self.panel_hide.at = Some(self.now + HIDE_DELAY_MS),
+                Some(t) if self.now >= t => self.set_panel_hidden(true),
+                Some(_) => {}
+            }
+        }
+        let d = self.dur(260) as u64 + 20;
+        if self.now.saturating_sub(self.panel_hide.t0) <= d {
+            self.damage_panel_strip();
+        }
     }
 
     fn panel_layout(&self) -> Vec<(Item, Rect)> {
         let pr = self.panel_rect();
         let mut x = pr.x + self.s(7);
-        let size = self.s(42);
+        let size = self.s(self.item_du());
         let y = pr.y + (pr.h - size) / 2;
         self.panel_items()
             .into_iter()
@@ -120,7 +302,7 @@ impl Desktop {
     }
 
     pub(crate) fn panel_hover_at(&mut self, x: i32, y: i32) {
-        let h = if self.panel_rect().contains(x, y) && self.drag_none() {
+        let h = if self.panel_hit_rect().contains(x, y) && self.drag_none() {
             self.panel_item_at(x, y)
         } else {
             None
@@ -201,18 +383,17 @@ impl Desktop {
     pub(crate) fn draw_panel(&mut self, c: &mut Canvas, fonts: &mut Fonts) {
         let pr = self.panel_rect();
         let appear = self.panel_appear();
-        let dy = (self.s(70) as i64 * (1000 - appear) as i64 / 1000) as i32;
+        let dy = self.panel_dy();
+        if pr.y + dy >= self.h {
+            return;
+        }
         let alpha = appear * 255 / 1000;
         let r = pr.offset(0, dy);
         if r.inset(-self.s(30)).intersect(c.frame()).is_empty() {
             return;
         }
         let t = self.theme;
-        let rad = if self.cfg.rounded_corners {
-            self.s(18)
-        } else {
-            self.s(4)
-        };
+        let rad = self.s(self.cfg.round(18));
         self.shadow_small.draw(
             c,
             r.offset(0, self.s(5)),
@@ -221,9 +402,13 @@ impl Desktop {
             r,
         );
         let corner = Corner::new(rad);
-        if self.cfg.transparency {
+        if self.cfg.transparency > 0 {
             self.frost.rounded_to(c, r, &corner, alpha);
-            c.fill_rrect(r, rad, fade(t.window, (150 * alpha / 255) as u8));
+            c.fill_rrect(
+                r,
+                rad,
+                fade(t.window, (self.cfg.panel_alpha() * alpha / 255) as u8),
+            );
         } else {
             c.fill_rrect(r, rad, fade(t.window, alpha as u8));
         }
@@ -242,11 +427,7 @@ impl Desktop {
             ) as u32;
             let pressed = self.panel_press == Some(i);
             let br = ir.inset(self.s(3));
-            let brad = if self.cfg.rounded_corners {
-                self.s(11)
-            } else {
-                self.s(3)
-            };
+            let brad = self.s(self.cfg.round(11));
             let active = matches!(it, Item::App(a) if Some(*a) == focus_app);
             if active {
                 c.fill_rrect(
@@ -264,7 +445,7 @@ impl Desktop {
                 c.fill_rrect(br, brad, fade(base, (hov * alpha / 255 * 200 / 255) as u8));
             }
             let col = fade(t.text, alpha as u8);
-            let isz = self.s(21);
+            let isz = self.s(self.item_du() / 2);
             let ix = ir.center_x() - isz / 2;
             let iy = ir.center_y() - isz / 2;
             match *it {
@@ -353,7 +534,17 @@ impl Desktop {
             return String::from("--:--");
         }
         let m = self.minute.rem_euclid(24 * 60);
-        alloc::format!("{:02}:{:02}", m / 60, m % 60)
+        let (h, mm) = (m / 60, m % 60);
+        let time = if self.cfg.clock_24h {
+            alloc::format!("{:02}:{:02}", h, mm)
+        } else {
+            let h12 = if h % 12 == 0 { 12 } else { h % 12 };
+            alloc::format!("{}:{:02} {}", h12, mm, if h < 12 { "AM" } else { "PM" })
+        };
+        match self.local_now().filter(|_| self.cfg.show_date) {
+            Some(l) => alloc::format!("{}  {}", l.short_date(self.ru()), time),
+            None => time,
+        }
     }
 
     fn local_now(&self) -> Option<tz::Local> {
@@ -407,7 +598,7 @@ impl Desktop {
             tw + self.s(24),
             r.h,
         );
-        let rad = if self.cfg.rounded_corners {
+        let rad = if self.cfg.radius > 0 {
             r.h / 2
         } else {
             self.s(4)
@@ -575,11 +766,7 @@ impl Desktop {
         }
         let t = self.theme;
         let ru = self.ru();
-        let rad = if self.cfg.rounded_corners {
-            self.s(18)
-        } else {
-            self.s(4)
-        };
+        let rad = self.s(self.cfg.round(18));
         self.shadow_small.draw(
             c,
             r.offset(0, self.s(6)),
@@ -588,9 +775,16 @@ impl Desktop {
             r,
         );
         let corner = Corner::new(rad);
-        if self.cfg.transparency {
+        if self.cfg.transparency > 0 {
             self.frost.rounded_to(c, r, &corner, a);
-            c.fill_rrect(r, rad, fade(t.window, (190 * a / 255) as u8));
+            c.fill_rrect(
+                r,
+                rad,
+                fade(
+                    t.window,
+                    ((self.cfg.panel_alpha() + 40).min(255) * a / 255) as u8,
+                ),
+            );
         } else {
             c.fill_rrect(r, rad, fade(t.window, a as u8));
         }
@@ -858,11 +1052,7 @@ impl Desktop {
             return;
         }
         let t = self.theme;
-        let rad = if self.cfg.rounded_corners {
-            self.s(22)
-        } else {
-            self.s(4)
-        };
+        let rad = self.s(self.cfg.round(22));
         self.shadow_small.draw(
             c,
             r.offset(0, self.s(8)),
@@ -871,9 +1061,16 @@ impl Desktop {
             r,
         );
         let corner = Corner::new(rad);
-        if self.cfg.transparency {
+        if self.cfg.transparency > 0 {
             self.frost.rounded_to(c, r, &corner, a);
-            c.fill_rrect(r, rad, fade(t.window, (200 * a / 255) as u8));
+            c.fill_rrect(
+                r,
+                rad,
+                fade(
+                    t.window,
+                    ((self.cfg.panel_alpha() + 50).min(255) * a / 255) as u8,
+                ),
+            );
         } else {
             c.fill_rrect(r, rad, fade(t.window, a as u8));
         }
@@ -898,7 +1095,7 @@ impl Desktop {
             }
             let tile = self.s(68);
             let tr_ = Rect::new(cr.center_x() - tile / 2, cr.y + self.s(16), tile, tile);
-            apps::draw_tile(c, w.app.id(), tr_, self.cfg.rounded_corners, a);
+            apps::draw_tile(c, w.app.id(), tr_, self.cfg.radius > 0, a);
             let px = self.px(12);
             let mut title = w.title.clone();
             while title.chars().count() > 3
@@ -925,6 +1122,7 @@ impl Desktop {
     // --- per-frame upkeep ---------------------------------------------------
 
     pub(crate) fn tick_overlays(&mut self, now: u64) {
+        self.tick_panel_hide();
         let pr = self.panel_rect();
         if self.panel_appear() < 1000 || self.now.saturating_sub(self.session_t0) < 700 {
             self.add_damage(Rect::new(
@@ -978,8 +1176,10 @@ impl Desktop {
     }
 
     pub(crate) fn overlays_animating(&self) -> bool {
+        let hide = self.panel_hidden();
         self.mode == crate::desktop::Mode::Session
             && (self.panel_appear() < 1000
+                || (hide != 0 && hide != 1000)
                 || self
                     .popover
                     .is_some_and_anim(self.now, self.dur(160) as u64)
@@ -987,7 +1187,7 @@ impl Desktop {
     }
 
     pub(crate) fn overlay_wake(&self) -> Option<u64> {
-        let mut t = None;
+        let mut t = self.panel_hide.at;
         if self.panel_hover.is_some() && self.now < self.panel_hover_t + 450 {
             t = Some(self.panel_hover_t + 450);
         }

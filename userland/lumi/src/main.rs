@@ -188,6 +188,42 @@ impl Drop for PtyTerm {
 
 struct System {
     env: Vec<String>,
+    /// The password helper's input and output (see `passwd_helper`).
+    passwd: Option<(u64, u64)>,
+    /// Screen width, height and bits per pixel.
+    mode: (u32, u32, u32),
+}
+
+/// Starts `passwd --serve USER` while Lumi is still root: after login
+/// Lumi cannot write /etc/shadow, the helper changes only this user's
+/// password and only with the old one. Returns its input and output.
+fn passwd_helper(user: &str) -> Option<(u64, u64)> {
+    let (in_r, in_w) = io::pipe().ok()?;
+    let (out_r, out_w) = io::pipe().ok()?;
+    let saved: Vec<Option<u64>> = (0..2).map(|fd| io::dup(fd).ok()).collect();
+    let _ = io::dup2(in_r, 0);
+    let _ = io::dup2(out_w, 1);
+    let pid = process::spawn(
+        "/bin/passwd",
+        &["/bin/passwd", "--serve", user],
+        &["PATH=/bin"],
+    );
+    for (fd, s) in saved.iter().enumerate() {
+        if let Some(s) = s {
+            let _ = io::dup2(*s, fd as u64);
+            let _ = fs::close(*s);
+        }
+    }
+    let _ = fs::close(in_r);
+    let _ = fs::close(out_w);
+    match pid {
+        Ok(_) => Some((in_w, out_r)),
+        Err(_) => {
+            let _ = fs::close(in_w);
+            let _ = fs::close(out_r);
+            None
+        }
+    }
 }
 
 impl Host for System {
@@ -341,6 +377,9 @@ impl Host for System {
         if !fs::exists(&u.home) {
             let _ = fs::mkdir(&u.home, 0o700).and_then(|_| fs::chown(&u.home, u.uid, u.gid));
         }
+        if self.passwd.is_none() {
+            self.passwd = passwd_helper(&u.name);
+        }
         process::setuid(u.uid, u.gid).map_err(err)?;
         if fs::chdir(&u.home).is_err() {
             let _ = fs::chdir("/");
@@ -363,6 +402,33 @@ impl Host for System {
     fn log(&mut self, line: &str) {
         println!("{}", line);
         log_file(line);
+    }
+
+    fn change_password(&mut self, old: &str, new: &str) -> Result<(), String> {
+        if [old, new].iter().any(|s| s.contains(['\t', '\n'])) {
+            return Err(String::from("tab or newline in the password"));
+        }
+        let Some((to, from)) = self.passwd else {
+            return Err(String::from("no password helper"));
+        };
+        io::write_all(to, format!("{}\t{}\n", old, new).as_bytes()).map_err(err)?;
+        let mut reply = Vec::new();
+        let mut buf = [0u8; 128];
+        while !reply.contains(&b'\n') {
+            match io::read(from, &mut buf) {
+                Ok(0) | Err(_) => return Err(String::from("the password helper ended")),
+                Ok(n) => reply.extend_from_slice(&buf[..n]),
+            }
+        }
+        let text = String::from_utf8_lossy(&reply);
+        match text.trim_end() {
+            "ok" => Ok(()),
+            e => Err(String::from(e.strip_prefix("error: ").unwrap_or(e))),
+        }
+    }
+
+    fn display_mode(&self) -> (u32, u32, u32) {
+        self.mode
     }
 }
 
@@ -392,18 +458,22 @@ fn load_config() -> Config {
 }
 
 /// Shows the pointer the desktop asks for, in the chosen style.
-fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Option<(Shape, usize, bool)>) {
-    let want = (d.pointer, d.cfg.pointer, d.cfg.large_pointer);
+type Shown = Option<(Shape, usize, usize, usize, i64)>;
+
+fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Shown) {
+    let want = (
+        d.pointer,
+        d.cfg.pointer,
+        d.cfg.pointer_size,
+        d.cfg.pointer_speed,
+        d.scale,
+    );
     if *shown == Some(want) {
         return;
     }
     *shown = Some(want);
     let base = (24 * d.scale / 256) as usize;
-    let size = if d.cfg.large_pointer {
-        base * 3 / 2
-    } else {
-        base
-    };
+    let size = base * config::POINTER_SIZES[d.cfg.pointer_size.min(3)] as usize / 100;
     match d.pointer {
         Shape::Arrow => {
             let (img, hx, hy) = d.assets.pointers[d.cfg.pointer.min(2)].at(size.max(12));
@@ -414,7 +484,9 @@ fn set_pointer(screen: &mut Screen, d: &mut Desktop, shown: &mut Option<(Shape, 
             screen.set_pointer(Some((&img, hx, hy)));
         }
     }
-    screen.speed = (d.scale as i32).max(256);
+    // Relative mice move faster on large screens and at the chosen speed.
+    let pct = config::POINTER_SPEEDS[d.cfg.pointer_speed.min(4)] as i32;
+    screen.speed = ((d.scale as i32).max(256) * pct / 100).max(64);
 }
 
 /// Counters for measurements: Ctrl+Alt+F12 prints them; the end of a
@@ -531,6 +603,12 @@ fn main() -> i32 {
     };
     let mut host = System {
         env: alloc::vec![String::from("PATH=/bin")],
+        passwd: None,
+        mode: (
+            screen.info.width,
+            screen.info.height,
+            screen.info.bits_per_pixel,
+        ),
     };
     let (w, h) = (screen.width(), screen.height());
     let mut d = Desktop::new(w, h, cfg, assets, &mut host);

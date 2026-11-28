@@ -364,6 +364,82 @@ fn box_blur(px: &mut [u32], w: usize, h: usize, r: usize) {
     pass(&tmp, px, h, w, w, 1);
 }
 
+/// The desktop's wallpaper softened by the settings: blurred (`blur`
+/// 0..=100: averaged down by 2 to 12 times, blurred and scaled up
+/// bilinearly) and darkened by `dim` per cent.
+pub fn soften(src: &Canvas, blur: u32, dim: u32) -> Canvas {
+    let (w, h) = (src.width, src.height);
+    let mut out = if blur == 0 {
+        let mut c = Canvas::new(w, h);
+        c.pixels.copy_from_slice(&src.pixels);
+        c
+    } else {
+        let k = 2 + blur.min(100) as usize / 10;
+        let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
+        let mut small = vec![0u32; sw * sh];
+        for sy in 0..sh {
+            for sx in 0..sw {
+                let mut acc = [0u32; 3];
+                let mut n = 0;
+                for y in sy * k..((sy + 1) * k).min(h) {
+                    for x in sx * k..((sx + 1) * k).min(w) {
+                        let p = src.pixels[y * w + x];
+                        acc[0] += (p >> 16) & 0xff;
+                        acc[1] += (p >> 8) & 0xff;
+                        acc[2] += p & 0xff;
+                        n += 1;
+                    }
+                }
+                let n = n.max(1);
+                small[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
+            }
+        }
+        for _ in 0..2 {
+            box_blur(&mut small, sw, sh, 1);
+        }
+        let mut c = Canvas::new(w, h);
+        // Bilinear: pixel centres of the small grid at (i + 0.5) * k.
+        let pos = |v: usize, n: usize| -> (usize, usize, u32) {
+            let f = ((v * 2 + 1) * 256 / (2 * k)) as i64 - 128;
+            let f = f.clamp(0, ((n - 1) * 256) as i64) as usize;
+            let i = f >> 8;
+            (i, (i + 1).min(n - 1), (f & 0xff) as u32)
+        };
+        let lerp = |a: u32, b: u32, t: u32| -> u32 {
+            let mut o = 0;
+            for sh_ in [16u32, 8, 0] {
+                let (x, y) = ((a >> sh_) & 0xff, (b >> sh_) & 0xff);
+                o |= ((x * (256 - t) + y * t) >> 8) << sh_;
+            }
+            o
+        };
+        let xs: Vec<(usize, usize, u32)> = (0..w).map(|x| pos(x, sw)).collect();
+        for y in 0..h {
+            let (y0, y1, ty) = pos(y, sh);
+            let (r0, r1) = (&small[y0 * sw..y0 * sw + sw], &small[y1 * sw..y1 * sw + sw]);
+            let row = &mut c.pixels[y * w..y * w + w];
+            for (x, d) in row.iter_mut().enumerate() {
+                let (x0, x1, tx) = xs[x];
+                let top = lerp(r0[x0], r0[x1], tx);
+                let bot = lerp(r1[x0], r1[x1], tx);
+                *d = lerp(top, bot, ty);
+            }
+        }
+        c
+    };
+    if dim > 0 {
+        let keep = 100 - dim.min(100);
+        for p in out.pixels.iter_mut() {
+            let mut o = *p & 0xff00_0000;
+            for sh_ in [16u32, 8, 0] {
+                o |= (((*p >> sh_) & 0xff) * keep / 100) << sh_;
+            }
+            *p = o;
+        }
+    }
+    out
+}
+
 /// The frosted copy of a wallpaper: strongly blurred and mixed with a
 /// tint, kept at an eighth of the resolution (130 KiB for 1920 x 1080
 /// instead of 8 MiB) and scaled up bilinearly, with a little grain, as it

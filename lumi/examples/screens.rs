@@ -3,7 +3,7 @@
 //! [dark|light|gamers]`. Writes PPM files (the tests convert them).
 
 use velora_lumi::apps::{AppId, Assets};
-use velora_lumi::config::Config;
+use velora_lumi::config::{Accent, Config};
 use velora_lumi::desktop::Desktop;
 use velora_lumi::fake::FakeHost;
 use velora_ui::image::{Picture, Pointer};
@@ -95,7 +95,7 @@ fn main() {
         "gamers" => 2,
         _ => 0,
     };
-    cfg.accent = Some(if cfg.theme == 2 { 7 } else { 0 });
+    cfg.accent = Accent::Preset(if cfg.theme == 2 { 7 } else { 0 });
     let mut host = FakeHost::new();
     host.term_output = SESSION.as_bytes().to_vec();
     let d = Desktop::new(w, h, cfg, assets, &mut host);

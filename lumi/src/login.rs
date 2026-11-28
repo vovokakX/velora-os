@@ -344,7 +344,7 @@ impl Desktop {
         };
         let elems = self.login_elems();
         let field = self.field_rect().offset(shake, 0);
-        let rad = if self.cfg.rounded_corners {
+        let rad = if self.cfg.radius > 0 {
             field.h / 2
         } else {
             self.s(6)

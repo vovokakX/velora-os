@@ -36,14 +36,36 @@ pub const MENU: [AppId; 5] = [
     AppId::About,
 ];
 
-/// The apps pinned to the panel.
-pub const PINNED: [AppId; 4] = [AppId::Plume, AppId::Files, AppId::Terminal, AppId::Settings];
+/// The apps that can be pinned to the panel (the settings' list).
+pub const PINNABLE: [AppId; 5] = [
+    AppId::Plume,
+    AppId::Files,
+    AppId::Terminal,
+    AppId::Settings,
+    AppId::About,
+];
 
 pub fn tr(ru: bool, r: &'static str, e: &'static str) -> &'static str {
     if ru { r } else { e }
 }
 
 impl AppId {
+    /// The id in the settings file (`pinned=plume,files,...`).
+    pub fn key(self) -> &'static str {
+        match self {
+            AppId::Terminal => "terminal",
+            AppId::Files => "files",
+            AppId::Plume => "plume",
+            AppId::Settings => "settings",
+            AppId::About => "about",
+            AppId::Viewer => "viewer",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<AppId> {
+        PINNABLE.iter().copied().find(|a| a.key() == k)
+    }
+
     pub fn name(self, ru: bool) -> &'static str {
         match self {
             AppId::Terminal => tr(ru, "Терминал", "Terminal"),
@@ -165,7 +187,7 @@ pub enum Action {
         app: AppId,
     },
     /// New settings: applied with a transition and saved.
-    Config(Config),
+    Config(alloc::boxed::Box<Config>),
     /// Puts text on the clipboard.
     Copy(String),
     Close,

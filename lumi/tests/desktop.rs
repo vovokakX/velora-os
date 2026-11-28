@@ -155,7 +155,7 @@ fn login_menu_windows_and_settings() {
     r.wait(500);
     let saved =
         r.h.files
-            .get("/home/user/.config/velora/desktop.conf")
+            .get("/home/user/.config/lumi/settings.conf")
             .cloned()
             .flatten()
             .unwrap();
@@ -311,4 +311,81 @@ fn a_crashing_program_closes_only_its_window() {
     r.typed("ok");
     r.wait(50);
     assert_eq!(r.h.terms[1].borrow().written, b"ok");
+}
+
+/// The panel's modes: smart hiding (the default) hides it when a window
+/// covers it; it comes back at the bottom edge, with Super and while the
+/// app menu is open; autohide hides it on an empty desktop; always shown
+/// keeps it and the windows out of its place.
+#[test]
+fn the_panel_hides_and_comes_back() {
+    let mut r = Run::new(1280, 720);
+    r.login();
+    r.wait(800);
+    assert!(r.d.panel_visible(), "smart: nothing covers the panel");
+    r.d.launch(AppId::Terminal, &mut r.h, &mut r.f);
+    r.wait(400);
+    r.step(&[Event::MouseMove { x: 640, y: 300 }]);
+    r.step(&[Event::Chord {
+        key: Key::Up,
+        mods: mods::SUPER,
+    }]);
+    r.wait(300);
+    assert!(r.d.panel_visible(), "it waits half a second");
+    r.wait(800);
+    assert!(!r.d.panel_visible(), "a maximized window covers it");
+    assert_eq!(r.d.window_rect_of("Терминал").unwrap().h, 720);
+    // The pointer at the bottom edge brings it back; leaving hides it.
+    r.step(&[Event::MouseMove { x: 640, y: 715 }]);
+    r.wait(400);
+    assert!(r.d.panel_visible());
+    r.step(&[Event::MouseMove { x: 640, y: 300 }]);
+    r.wait(1000);
+    assert!(!r.d.panel_visible());
+    // Super shows it while held; the app menu keeps it.
+    r.step(&[Event::Modifier {
+        key: Modifier::Super,
+        down: true,
+        mods: mods::SUPER,
+    }]);
+    r.wait(300);
+    assert!(r.d.panel_visible());
+    r.step(&[Event::Modifier {
+        key: Modifier::Super,
+        down: false,
+        mods: 0,
+    }]);
+    r.wait(1000);
+    assert!(r.d.panel_visible(), "the app menu is open");
+    r.key(Key::Escape);
+    r.wait(1000);
+    assert!(!r.d.panel_visible());
+    // Always shown: the maximized window makes room for it.
+    let mut cfg = r.d.cfg.clone();
+    cfg.panel_mode = velora_lumi::config::PANEL_ALWAYS;
+    r.d.apply_config(cfg, &mut r.h, true);
+    r.wait(800);
+    assert!(r.d.panel_visible());
+    assert!(r.d.window_rect_of("Терминал").unwrap().h < 720);
+    // Autohide: hidden on an empty desktop too; the pinned order counts.
+    let mut cfg = r.d.cfg.clone();
+    cfg.panel_mode = velora_lumi::config::PANEL_AUTOHIDE;
+    cfg.pinned = vec![String::from("terminal"), String::from("about")];
+    r.d.apply_config(cfg, &mut r.h, true);
+    r.step(&[Event::Chord {
+        key: Key::F(4),
+        mods: mods::ALT,
+    }]);
+    r.wait(1200);
+    assert!(r.titles().is_empty());
+    assert!(!r.d.panel_visible());
+    assert_eq!(r.d.panel_apps(), vec![AppId::Terminal, AppId::About]);
+    let saved =
+        r.h.files
+            .get("/home/user/.config/lumi/settings.conf")
+            .cloned()
+            .flatten()
+            .unwrap();
+    let text = String::from_utf8(saved).unwrap();
+    assert!(text.contains("panel=autohide\n") && text.contains("pinned=terminal,about\n"));
 }

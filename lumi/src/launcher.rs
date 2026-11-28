@@ -243,7 +243,7 @@ impl Desktop {
             (l.query.clone(), l.sel, l.hover)
         };
         let sr = sc(self.search_rect());
-        let rad = if self.cfg.rounded_corners {
+        let rad = if self.cfg.radius > 0 {
             sr.h / 2
         } else {
             self.s(6)
@@ -322,11 +322,7 @@ impl Desktop {
                 as u32;
             let box_ = cell.inset(self.s(6));
             if h > 0 {
-                let r = if self.cfg.rounded_corners {
-                    self.s(20)
-                } else {
-                    self.s(4)
-                };
+                let r = self.s(self.cfg.round(20));
                 c.fill_rrect(
                     box_,
                     r,
@@ -344,7 +340,7 @@ impl Desktop {
                 tile,
                 tile,
             );
-            apps::draw_tile(c, *app, tr_, self.cfg.rounded_corners, a);
+            apps::draw_tile(c, *app, tr_, self.cfg.radius > 0, a);
             let name = app.name(ru);
             let npx = self.px(14);
             let w = fonts.measure(Weight::Medium, npx, name);

@@ -132,6 +132,12 @@ pub trait Host {
     fn login(&mut self, name: &str, password: &str) -> Result<UserInfo, String>;
     /// A progress line for the console (the QEMU tests follow them).
     fn log(&mut self, line: &str);
+    /// Changes the logged-in user's password (`old` must be right).
+    fn change_password(&mut self, old: &str, new: &str) -> Result<(), String>;
+    /// The screen's size in pixels and the bits per pixel.
+    fn display_mode(&self) -> (u32, u32, u32) {
+        (0, 0, 32)
+    }
 }
 
 /// `a/b` without doubled slashes.

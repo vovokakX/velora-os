@@ -30,18 +30,15 @@ use velora_ui::theme::Theme;
 use velora_ui::ui::{Ctx, Key, Modifier, Redraw, mods};
 use velora_ui::{Event, Rect, Ui};
 
-/// Pixels per design unit times 256 for a screen height: the steps of
-/// the installer, about 1x at 720 lines, 1.25x at 1080, 2.5x at 2160.
+/// Pixels per design unit times 256 for a screen height (automatic
+/// interface scale): the steps of the installer.
 pub fn scale_for(h: i32) -> i64 {
-    const STEPS: [i64; 9] = [256, 320, 384, 448, 512, 640, 768, 896, 1024];
-    let fit = h as i64 * 256 / 860;
-    STEPS
-        .iter()
-        .rev()
-        .find(|&&s| s <= fit)
-        .copied()
-        .unwrap_or(256)
+    config::auto_scale(h)
 }
+
+/// The settings are written this long after the last change, so a slider
+/// moved through many values writes the file once.
+const SAVE_DELAY_MS: u64 = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -191,7 +188,10 @@ pub struct Desktop {
     pub assets: Assets,
     pub(crate) wall: Canvas,
     pub(crate) frost: wallpaper::Frost,
-    wall_key: (String, bool),
+    /// The wallpaper, dark theme, dimming and blur it was made for.
+    wall_key: (String, bool, u32, u32),
+    /// The wallpaper before dimming and blur (only while they are on).
+    wall_base: Option<Canvas>,
     pub mode: Mode,
     pub(crate) windows: Vec<Win>,
     next_id: u32,
@@ -243,19 +243,27 @@ pub struct Desktop {
     /// Frames drawn (the tint colour), and areas drawn since start.
     pub frames: u64,
     pub painted: u64,
+    /// The settings changed: write them at this time.
+    save_at: Option<u64>,
+    /// The work area changed: maximized and snapped windows fit it again.
+    pub(crate) refit: bool,
+    /// The interface scale changed: lay the windows out again.
+    relayout: bool,
+    /// The panel hiding and showing.
+    pub(crate) panel_hide: crate::panel::Hide,
 }
 
 impl Desktop {
     /// The desktop for a `w` x `h` screen, starting at the login screen.
     pub fn new(w: i32, h: i32, mut cfg: Config, assets: Assets, host: &mut dyn Host) -> Desktop {
-        let scale = scale_for(h);
+        let scale = cfg.scale_for(h);
         let theme = cfg.theme();
         let s = |d: i32| ((d as i64 * scale + 128) >> 8) as i32;
         if !wallpaper::is_builtin(&cfg.wallpaper) && !cfg.wallpaper.starts_with("file:") {
             cfg.wallpaper = String::from("waves");
         }
         let users = host.users();
-        let rad = if cfg.rounded_corners { s(12) } else { 0 };
+        let rad = s(cfg.radius as i32);
         let mut d = Desktop {
             w,
             h,
@@ -264,7 +272,8 @@ impl Desktop {
             assets,
             wall: Canvas::new(1, 1),
             frost: wallpaper::frost(&Canvas::new(8, 8), 0),
-            wall_key: (String::new(), false),
+            wall_key: (String::new(), false, 0, 0),
+            wall_base: None,
             mode: Mode::Login,
             windows: Vec::new(),
             next_id: 1,
@@ -308,9 +317,13 @@ impl Desktop {
             debug_damage: false,
             frames: 0,
             painted: 0,
+            save_at: None,
+            refit: false,
+            relayout: false,
+            panel_hide: crate::panel::Hide::default(),
             cfg,
         };
-        d.tw.enabled = d.cfg.animations;
+        d.tw.enabled = d.cfg.animations_on();
         d.load_wallpaper(host);
         d
     }
@@ -331,17 +344,15 @@ impl Desktop {
         self.cfg.ru()
     }
 
-    /// Duration of an animation, or 0 with animations off.
+    /// Duration of an animation at the chosen speed, 0 with animations
+    /// off.
     pub(crate) fn dur(&self, ms: u32) -> u32 {
-        if self.cfg.animations { ms } else { 0 }
+        self.cfg.dur(ms)
     }
 
+    /// The window corner radius in pixels.
     pub(crate) fn radius(&self) -> i32 {
-        if self.cfg.rounded_corners {
-            self.s(12)
-        } else {
-            0
-        }
+        self.s(self.cfg.radius as i32)
     }
 
     pub fn add_damage(&mut self, r: Rect) {
@@ -356,9 +367,10 @@ impl Desktop {
         self.damage.push(self.bounds());
     }
 
-    /// The area windows use: the screen without the panel's strip.
+    /// The area windows use: the screen without the panel's strip when
+    /// the panel is always shown; all of it when the panel hides.
     pub(crate) fn work_area(&self) -> Rect {
-        let reserve = if self.mode == Mode::Session {
+        let reserve = if self.mode == Mode::Session && self.cfg.panel_mode == config::PANEL_ALWAYS {
             self.panel_rect().h + 2 * self.s(10)
         } else {
             0
@@ -369,7 +381,12 @@ impl Desktop {
     // --- wallpaper --------------------------------------------------------
 
     fn load_wallpaper(&mut self, host: &mut dyn Host) {
-        let key = (self.cfg.wallpaper.clone(), self.theme.dark);
+        let key = (
+            self.cfg.wallpaper.clone(),
+            self.theme.dark,
+            self.cfg.wallpaper_dim,
+            self.cfg.wallpaper_blur,
+        );
         if key == self.wall_key {
             return;
         }
@@ -395,6 +412,18 @@ impl Desktop {
                 wallpaper::draw_builtin(&mut c, id);
             }
             self.wall = c;
+            self.wall_base = None;
+        }
+        // Dimming and blur work on the original picture, kept aside.
+        if key.2 > 0 || key.3 > 0 {
+            let base = self
+                .wall_base
+                .take()
+                .unwrap_or_else(|| core::mem::replace(&mut self.wall, Canvas::new(1, 1)));
+            self.wall = wallpaper::soften(&base, key.3, key.2);
+            self.wall_base = Some(base);
+        } else if let Some(base) = self.wall_base.take() {
+            self.wall = base;
         }
         let tint = if self.theme.dark {
             0x58000000
@@ -417,10 +446,16 @@ impl Desktop {
     pub fn apply_config(&mut self, cfg: Config, host: &mut dyn Host, save: bool) {
         let old = core::mem::replace(&mut self.cfg, cfg);
         self.theme = self.cfg.theme();
-        self.tw.enabled = self.cfg.animations;
-        if old.rounded_corners != self.cfg.rounded_corners {
+        self.tw.enabled = self.cfg.animations_on();
+        let scale = self.cfg.scale_for(self.h);
+        if scale != self.scale {
+            self.scale = scale;
+            self.relayout = true;
+        }
+        if old.radius != self.cfg.radius || self.relayout {
             let rad = self.radius();
             self.shadow = Shadow::new(rad, self.s(26));
+            self.shadow_small = Shadow::new(self.s(16), self.s(14));
             self.corner = Corner::new(rad);
         }
         self.load_wallpaper(host);
@@ -428,20 +463,59 @@ impl Desktop {
             w.full = true;
             w.app.settings_changed();
         }
-        if old.animations || self.cfg.animations {
+        if old.animations_on() || self.cfg.animations_on() {
             self.pending_transition = true;
         }
-        self.damage_all();
-        if save && let Some(u) = self.user.as_ref() {
-            let dir = join(&u.home, ".config/velora");
-            let _ = host.mkdir(&join(&u.home, ".config"));
-            let _ = host.mkdir(&dir);
-            let path = join(&u.home, config::USER_FILE);
-            match host.write(&path, self.cfg.to_text().as_bytes()) {
-                Ok(()) => host.log("lumi: settings saved"),
-                Err(e) => host.log(&alloc::format!("lumi: cannot save settings: {}", e)),
-            }
+        if old.panel_mode != self.cfg.panel_mode {
+            self.panel_mode_changed(host);
         }
+        self.damage_all();
+        if save {
+            self.save_at = Some(self.now + SAVE_DELAY_MS);
+        }
+    }
+
+    /// Writes the settings to the user's file now if they changed.
+    pub fn flush_settings(&mut self, host: &mut dyn Host) {
+        if self.save_at.take().is_none() {
+            return;
+        }
+        let Some(u) = self.user.as_ref() else {
+            return;
+        };
+        let _ = host.mkdir(&join(&u.home, ".config"));
+        let _ = host.mkdir(&join(&u.home, config::USER_DIR));
+        let path = join(&u.home, config::USER_FILE);
+        match host.write(&path, self.cfg.to_text().as_bytes()) {
+            Ok(()) => host.log("lumi: settings saved"),
+            Err(e) => host.log(&alloc::format!("lumi: cannot save settings: {}", e)),
+        }
+    }
+
+    /// After a new interface scale: the windows get new widgets and lay
+    /// out their content again.
+    fn relayout_windows(&mut self, host: &mut dyn Host, fonts: &mut Fonts) {
+        self.relayout = false;
+        let work = self.work_area();
+        for i in 0..self.windows.len() {
+            let mut w = self.windows.remove(i);
+            let mut ui = Ui::new(self.scale);
+            ui.theme = self.theme;
+            ui.set_animations(self.cfg.animations_on());
+            w.ui = ui;
+            let min = w.app.size().1;
+            let (mw, mh) = (self.s(min.0).min(work.w), self.s(min.1).min(work.h));
+            w.rect.w = w.rect.w.max(mw);
+            w.rect.h = w.rect.h.max(mh);
+            if w.state == State::Maximized {
+                w.rect = work;
+            }
+            // A new picture, so the app lays out again.
+            w.buf = Canvas::new(1, 1);
+            self.resize_buffer(&mut w, host, fonts);
+            self.windows.insert(i, w);
+        }
+        self.damage_all();
     }
 
     // --- windows ----------------------------------------------------------
@@ -524,7 +598,7 @@ impl Desktop {
         self.next_id += 1;
         let mut ui = Ui::new(self.scale);
         ui.theme = self.theme;
-        ui.set_animations(self.cfg.animations);
+        ui.set_animations(self.cfg.animations_on());
         let title = app.title(self.ru());
         let mut win = Win {
             id,
@@ -813,12 +887,22 @@ impl Desktop {
         None
     }
 
+    /// The title bar buttons: on the right (minimize, maximize, close)
+    /// or on the left (close, minimize, maximize).
     fn buttons(&self, w: &Win) -> [(Btn, Rect); 3] {
         let d = self.s(26);
         let tb = self.title_h();
         let y = (tb - d) / 2;
-        let right = w.rect.w - self.s(10);
         let gap = self.s(8);
+        if self.cfg.buttons_left {
+            let x = self.s(10);
+            return [
+                (Btn::Close, Rect::new(x, y, d, d)),
+                (Btn::Minimize, Rect::new(x + d + gap, y, d, d)),
+                (Btn::Maximize, Rect::new(x + 2 * (d + gap), y, d, d)),
+            ];
+        }
+        let right = w.rect.w - self.s(10);
         [
             (Btn::Minimize, Rect::new(right - 3 * d - 2 * gap, y, d, d)),
             (Btn::Maximize, Rect::new(right - 2 * d - gap, y, d, d)),
@@ -845,20 +929,23 @@ impl Desktop {
         let title_col = if focused { t.text } else { t.text_faint };
         let icon_col = if focused { t.text_dim } else { t.text_faint };
         let isz = self.s(16);
-        icons::draw(
-            c,
-            w.app.id().icon(),
-            self.s(16),
-            (tb - isz) / 2,
-            isz,
-            icon_col,
-            0,
-        );
+        // The app's icon on the side without the buttons.
+        let left = self.cfg.buttons_left;
+        let ix = if left {
+            w.rect.w - self.s(16) - isz
+        } else {
+            self.s(16)
+        };
+        icons::draw(c, w.app.id().icon(), ix, (tb - isz) / 2, isz, icon_col, 0);
         let px = self.px(13);
         let tw = fonts.measure(Weight::Medium, px, &w.title);
-        let max_w = buttons[0].1.x - self.s(16) - self.s(44);
-        let tx = ((w.rect.w - tw) / 2).max(self.s(44));
-        let old = c.set_clip(Rect::new(self.s(40), 0, max_w.max(0), tb));
+        let (lo, hi) = if left {
+            (buttons[2].1.right() + self.s(12), ix - self.s(8))
+        } else {
+            (self.s(40), buttons[0].1.x - self.s(12))
+        };
+        let tx = ((w.rect.w - tw) / 2).max(lo);
+        let old = c.set_clip(Rect::new(lo, 0, (hi - lo).max(0), tb));
         fonts.draw_centered_y(c, Weight::Medium, px, tx, tb / 2, &w.title, title_col);
         c.set_clip(old);
         for (b, r) in buttons {
@@ -924,7 +1011,7 @@ impl Desktop {
         }
         let events = core::mem::take(&mut w.events);
         w.ui.theme = self.theme;
-        w.ui.set_animations(self.cfg.animations);
+        w.ui.set_animations(self.cfg.animations_on());
         w.ui.set_time(now);
         let all = Rect::new(0, 0, w.rect.w, w.rect.h);
         let content = self.content_rect(&w);
@@ -1110,7 +1197,7 @@ impl Desktop {
                 let t = TerminalApp::new(app, argv);
                 self.open(Box::new(t), host, fonts);
             }
-            Action::Config(c) => self.apply_config(c, host, true),
+            Action::Config(c) => self.apply_config(*c, host, true),
             Action::Copy(s) => self.clipboard = s,
             Action::Close => self.close_window(from, host),
         }
@@ -1311,7 +1398,9 @@ impl Desktop {
                     // Keep the title bar reachable.
                     r.y = (r.y + dy).clamp(0, self.h - self.title_h());
                     let edge = self.s(2);
-                    let target = if x <= edge {
+                    let target = if !self.cfg.snap {
+                        None
+                    } else if x <= edge {
                         Some(self.snap_rect(State::Left))
                     } else if x >= self.w - 1 - edge {
                         Some(self.snap_rect(State::Right))
@@ -1535,11 +1624,11 @@ impl Desktop {
                             continue;
                         }
                         self.close_popover();
-                        if self.panel_rect().contains(x, y) {
+                        if self.panel_hit_rect().contains(x, y) {
                             continue;
                         }
                     }
-                    if self.panel_rect().contains(x, y) {
+                    if self.panel_hit_rect().contains(x, y) {
                         self.panel_press = self.panel_item_at(x, y);
                         continue;
                     }
@@ -1557,8 +1646,13 @@ impl Desktop {
                 }
                 Event::Wheel(_) | Event::RightButton { .. } => {
                     let (x, y) = self.mouse;
+                    // Natural scrolling: the content follows the fingers.
+                    let ev = match *ev {
+                        Event::Wheel(d) if self.cfg.natural_scroll => Event::Wheel(-d),
+                        e => e,
+                    };
                     if let Some((id, Edge::Resize(0), None)) = self.hit(x, y) {
-                        self.send_to_window(id, *ev);
+                        self.send_to_window(id, ev);
                     }
                 }
                 Event::Key {
@@ -1601,6 +1695,26 @@ impl Desktop {
         let now = self.now;
         if let Some(line) = self.host_log_pending.take() {
             host.log(line);
+        }
+        if self.relayout {
+            self.relayout_windows(host, fonts);
+        }
+        if self.refit {
+            self.refit = false;
+            let fits: Vec<(u32, State)> = self
+                .windows
+                .iter()
+                .filter(|w| w.state != State::Normal && !w.closing)
+                .map(|w| (w.id, w.state))
+                .collect();
+            for (id, st) in fits {
+                let r = self.snap_rect(st);
+                self.set_geometry(id, r, st, host, fonts);
+            }
+        }
+        if self.save_at.is_some_and(|t| now >= t) || (self.exit.is_some() && self.save_at.is_some())
+        {
+            self.flush_settings(host);
         }
         // The clock.
         if let Some(utc) = host.utc() {
@@ -1727,6 +1841,9 @@ impl Desktop {
             }
         }
         if let Some(at) = self.overlay_wake() {
+            t = t.min(at);
+        }
+        if let Some(at) = self.save_at {
             t = t.min(at);
         }
         if self.mode == Mode::Session && self.net.present && self.net.ip.is_none() {
@@ -1927,9 +2044,13 @@ impl Desktop {
 
     /// Starts the session of `user` (after the login screen).
     pub fn start_session(&mut self, user: UserInfo, host: &mut dyn Host) {
-        let path = join(&user.home, config::USER_FILE);
         let mut cfg = self.cfg.clone();
-        if let Some(text) = host.read(&path).and_then(|d| String::from_utf8(d).ok()) {
+        // The user's file, or where older versions kept it.
+        let text = [config::USER_FILE, config::OLD_USER_FILE]
+            .iter()
+            .find_map(|f| host.read(&join(&user.home, f)))
+            .and_then(|d| String::from_utf8(d).ok());
+        if let Some(text) = text {
             cfg.apply(&text);
         }
         host.log(&alloc::format!("lumi: session {}", user.name));
@@ -1939,7 +2060,7 @@ impl Desktop {
         if cfg != self.cfg {
             self.apply_config(cfg, host, false);
         }
-        self.pending_transition = self.cfg.animations;
+        self.pending_transition = self.cfg.animations_on();
         self.damage_all();
         self.panel_changed();
     }
