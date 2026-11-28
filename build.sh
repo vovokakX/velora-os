@@ -53,6 +53,14 @@ fi
 
 # Inter (the font of the graphical programs), verified by checksum.
 ./tools/fetch-fonts.sh
+# Only the glyphs Velora shows: fontdue keeps every outline in memory.
+echo "==> subsetting fonts"
+mkdir -p build/fonts/subset
+for f in Inter-Regular Inter-Medium Inter-SemiBold; do
+    cargo run -q -p fontsubset --release -- "build/fonts/$f.ttf" "build/fonts/subset/$f.ttf"
+done
+cargo run -q -p fontsubset --release -- build/fonts/JetBrainsMono-Regular.ttf \
+    build/fonts/subset/JetBrainsMono-Regular.ttf --terminal
 
 # 2. Kernel.
 echo "==> building kernel ($MODE)"
@@ -86,10 +94,16 @@ cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
 KSTRIP="$BUILD/velora-$MODE-stripped.elf"
 cargo run -q -p kstrip --release -- "$KCOPY" "$KSTRIP"
 
-PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc host fetch plume dmesg velora-setup velora-start uidemo"
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc host fetch plume dmesg velora-setup velora-start uidemo lumi"
 FILES=()
 for p in $PROGRAMS; do
     FILES+=(--file "bin/$p=$UBIN/$p:755")
+done
+# Pictures in assets/wallpapers appear in Lumi's wallpaper choice (the
+# built-in wallpapers are drawn by Lumi itself).
+for f in assets/wallpapers/*.png; do
+    [ -f "$f" ] || continue
+    FILES+=(--file "usr/share/wallpapers/$(basename "$f")=$f:644")
 done
 cargo run -q -p mkinitrd --release -- \
     --out "$INITRD" \
@@ -100,11 +114,11 @@ cargo run -q -p mkinitrd --release -- \
     --file "etc/shadow=$SHADOW:600" \
     --file "usr/lib/velora/velora=$KSTRIP:644" \
     --file "usr/lib/velora/BOOTX64.EFI=$LIMINE_DIR/BOOTX64.EFI:644" \
-    --file "usr/share/fonts/Inter-Regular.ttf=build/fonts/Inter-Regular.ttf:644" \
-    --file "usr/share/fonts/Inter-Medium.ttf=build/fonts/Inter-Medium.ttf:644" \
-    --file "usr/share/fonts/Inter-SemiBold.ttf=build/fonts/Inter-SemiBold.ttf:644" \
-    --file "usr/share/fonts/JetBrainsMono-Regular.ttf=build/fonts/JetBrainsMono-Regular.ttf:644" \
-    --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
+    --file "usr/share/fonts/Inter-Regular.ttf=build/fonts/subset/Inter-Regular.ttf:644" \
+    --file "usr/share/fonts/Inter-Medium.ttf=build/fonts/subset/Inter-Medium.ttf:644" \
+    --file "usr/share/fonts/Inter-SemiBold.ttf=build/fonts/subset/Inter-SemiBold.ttf:644" \
+    --file "usr/share/fonts/JetBrainsMono-Regular.ttf=build/fonts/subset/JetBrainsMono-Regular.ttf:644" \
+    --dir "usr/share/wallpapers" --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.
 CONF="$BUILD/limine-${OUT%.iso}.conf"

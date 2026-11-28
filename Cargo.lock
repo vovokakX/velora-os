@@ -40,6 +40,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fontsubset"
+version = "0.16.0"
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
