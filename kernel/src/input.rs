@@ -89,7 +89,13 @@ pub fn key_packet(ev: &KeyEvent) -> [u8; velora_abi::key::PACKET] {
         K::F10 => key::F1 + 9,
         K::F11 => key::F1 + 10,
         K::F12 => key::F12,
+        K::LeftShift | K::RightShift => key::SHIFT_KEY,
+        K::LeftCtrl | K::RightCtrl => key::CTRL_KEY,
+        K::LeftAlt | K::RightAlt => key::ALT_KEY,
+        K::LeftMeta | K::RightMeta => key::SUPER_KEY,
+        K::Insert => key::INSERT,
         _ if ev.ch.is_some_and(|c| !c.is_control()) => key::CHAR,
+        _ if ctrl_letter(ev).is_some() => key::CHAR,
         _ => key::OTHER,
     };
     let mut flags = 0;
@@ -105,10 +111,28 @@ pub fn key_packet(ev: &KeyEvent) -> [u8; velora_abi::key::PACKET] {
     if ev.mods.alt {
         flags |= key::ALT;
     }
-    let ch = ev.ch.filter(|c| !c.is_control()).map_or(0, |c| c as u32);
+    if ev.mods.meta {
+        flags |= key::SUPER;
+    }
+    let ch = ev
+        .ch
+        .filter(|c| !c.is_control())
+        .or_else(|| ctrl_letter(ev))
+        .map_or(0, |c| c as u32);
     let c = code.to_le_bytes();
     let ch = ch.to_le_bytes();
     [c[0], c[1], flags, 0, ch[0], ch[1], ch[2], ch[3]]
+}
+
+/// The letter of Ctrl + a letter key (which types a control character on
+/// the console), for graphical programs: Ctrl+C is 'c'.
+fn ctrl_letter(ev: &KeyEvent) -> Option<char> {
+    match ev.ch {
+        Some(c @ ''..='') if ev.mods.ctrl => {
+            char::from_u32(c as u32 - 1 + 'a' as u32)
+        }
+        _ => None,
+    }
 }
 
 pub fn dropped() -> u64 {

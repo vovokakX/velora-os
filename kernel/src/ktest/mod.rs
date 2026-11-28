@@ -509,6 +509,18 @@ fn key_events_become_packets() {
     assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 'й' as u32);
     let p = crate::input::key_packet(&ev(KeyCode::Left, None, false));
     assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::LEFT);
+    // Ctrl+C is the letter with the Ctrl flag; Super is its own key.
+    let mut e = ev(KeyCode::C, Some('\x03'), false);
+    e.mods.ctrl = true;
+    let p = crate::input::key_packet(&e);
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::CHAR);
+    assert_eq!(p[2], key::PRESSED | key::CTRL);
+    assert_eq!(u32::from_le_bytes([p[4], p[5], p[6], p[7]]), 'c' as u32);
+    let mut e = ev(KeyCode::LeftMeta, None, false);
+    e.mods.meta = true;
+    let p = crate::input::key_packet(&e);
+    assert_eq!(u16::from_le_bytes([p[0], p[1]]), key::SUPER_KEY);
+    assert_eq!(p[2], key::PRESSED | key::SUPER);
 }
 
 fn pointer_events_become_packets() {

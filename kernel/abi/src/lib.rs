@@ -333,6 +333,8 @@ pub mod key {
     pub const SHIFT: u8 = 2;
     pub const CTRL: u8 = 4;
     pub const ALT: u8 = 8;
+    /// The Super (Windows) key is held.
+    pub const SUPER: u8 = 16;
 
     pub const OTHER: u16 = 0;
     pub const ESCAPE: u16 = 1;
@@ -349,11 +351,20 @@ pub mod key {
     pub const PAGE_UP: u16 = 12;
     pub const PAGE_DOWN: u16 = 13;
     pub const SPACE: u16 = 14;
-    /// A key that types a character (see `ch`).
+    /// A key that types a character (see `ch`). With Ctrl held, a letter
+    /// key comes as `CHAR` with the letter in `ch` (lower case), not as
+    /// the control character it types on the console.
     pub const CHAR: u16 = 15;
     /// F1 ... F12 are `F1 + n - 1`.
     pub const F1: u16 = 16;
     pub const F12: u16 = 27;
+    /// The modifier keys themselves (presses and releases; the flags
+    /// give the state after the event).
+    pub const SHIFT_KEY: u16 = 28;
+    pub const CTRL_KEY: u16 = 29;
+    pub const ALT_KEY: u16 = 30;
+    pub const SUPER_KEY: u16 = 31;
+    pub const INSERT: u16 = 32;
 }
 
 /// `/dev/pointer`: every mouse and tablet event as an 8-byte packet;
