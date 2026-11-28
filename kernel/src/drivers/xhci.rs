@@ -1321,7 +1321,7 @@ pub fn start_thread() {
     // Interrupts go to the CPU that set them up (CPU 0, see `usb_thread`).
     let irqs = ctls.iter().all(|c| !matches!(c.lock().irq, Irq::Polled));
     let tid = if irqs {
-        sched::spawn_kernel_on("usb", usb_thread, 0, Priority::High, 0)
+        sched::spawn_kernel("usb", usb_thread, 0, Priority::High)
     } else {
         sched::spawn_kernel("usb", usb_thread, 0, Priority::High)
     };
