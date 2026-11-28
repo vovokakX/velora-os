@@ -23,7 +23,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use velora_auth::{parse_passwd, shadow_hash, verify_password};
 use velora_lumi::apps::Assets;
 use velora_lumi::config::{self, Config};
-use velora_lumi::host::{DirEntry, Host, NetState, Power, SysInfo, Term, TermRead, UserInfo};
+use velora_lumi::host::{
+    DirEntry, Host, Mixer, NetState, Power, SysInfo, Term, TermRead, UserInfo,
+};
 use velora_lumi::{Desktop, Exit, Pointer as Shape};
 use velora_ui::Event;
 use velora_ui::image::{Picture, Pointer};
@@ -192,6 +194,8 @@ struct System {
     passwd: Option<(u64, u64)>,
     /// Screen width, height and bits per pixel.
     mode: (u32, u32, u32),
+    /// `/dev/audio`, opened at the first sound.
+    audio: Option<fs::File>,
 }
 
 /// Starts `passwd --serve USER` while Lumi is still root: after login
@@ -318,6 +322,30 @@ impl Host for System {
             },
             Err(_) => SysInfo::default(),
         }
+    }
+
+    fn mixer(&mut self) -> Option<Mixer> {
+        let text = fs::read("/dev/mixer").ok()?;
+        let m = Mixer::parse(core::str::from_utf8(&text).ok()?);
+        // Without a sound card the mixer lists no outputs.
+        (!m.devices.is_empty()).then_some(m)
+    }
+
+    fn set_mixer(&mut self, cmd: &str) -> bool {
+        fs::File::open_with("/dev/mixer", fs::flags::WRITE, 0)
+            .and_then(|mut f| f.write(cmd.as_bytes()))
+            .is_ok()
+    }
+
+    fn play(&mut self, pcm: &[u8]) -> usize {
+        if self.audio.is_none() {
+            self.audio = fs::File::open_with("/dev/audio", fs::flags::WRITE, 0).ok();
+        }
+        // A full buffer (EBUSY) drops the rest: these are short sounds.
+        self.audio
+            .as_mut()
+            .and_then(|f| f.write(pcm).ok())
+            .unwrap_or(0)
     }
 
     fn net(&mut self) -> NetState {
@@ -609,6 +637,7 @@ fn main() -> i32 {
             screen.info.height,
             screen.info.bits_per_pixel,
         ),
+        audio: None,
     };
     let (w, h) = (screen.width(), screen.height());
     let mut d = Desktop::new(w, h, cfg, assets, &mut host);

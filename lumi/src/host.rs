@@ -5,6 +5,9 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// The sound card's volume, mute and outputs (`/dev/mixer`).
+pub use velora_hda::mixer::State as Mixer;
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct DirEntry {
     pub name: String,
@@ -134,6 +137,19 @@ pub trait Host {
     fn log(&mut self, line: &str);
     /// Changes the logged-in user's password (`old` must be right).
     fn change_password(&mut self, old: &str, new: &str) -> Result<(), String>;
+    /// The sound card's volume, mute and outputs; `None` without one.
+    fn mixer(&mut self) -> Option<Mixer> {
+        None
+    }
+    /// Sends a mixer command (`volume N`, `mute 0|1`, `output N`).
+    fn set_mixer(&mut self, _cmd: &str) -> bool {
+        false
+    }
+    /// Plays 48 kHz 16-bit stereo samples; returns the bytes taken (the
+    /// rest did not fit and is dropped).
+    fn play(&mut self, _pcm: &[u8]) -> usize {
+        0
+    }
     /// The screen's size in pixels and the bits per pixel.
     fn display_mode(&self) -> (u32, u32, u32) {
         (0, 0, 32)

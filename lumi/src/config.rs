@@ -107,6 +107,9 @@ pub struct Config {
     pub pointer_speed: usize,
     /// The content moves with the fingers (wheel direction reversed).
     pub natural_scroll: bool,
+    /// Sound volume (0..=100) and mute, set on the sound card at login.
+    pub volume: u32,
+    pub mute: bool,
     /// A region id (`UA`, `DE`, ...) for the time zone.
     pub region: String,
     /// `ru` or `en` (from the system language).
@@ -140,6 +143,8 @@ impl Default for Config {
             pointer_size: 0,
             pointer_speed: 2,
             natural_scroll: false,
+            volume: 70,
+            mute: false,
             region: String::from("UA"),
             language: String::from("ru"),
             session: String::from("lumi"),
@@ -223,6 +228,8 @@ impl Config {
                     }
                 }
                 "natural_scroll" => self.natural_scroll = yes(v).unwrap_or(self.natural_scroll),
+                "volume" => self.volume = number(v, 100).unwrap_or(self.volume),
+                "mute" => self.mute = yes(v).unwrap_or(self.mute),
                 "transparency" => {
                     self.transparency = match yes(v) {
                         Some(true) => 50,
@@ -365,6 +372,8 @@ impl Config {
                 POINTER_SPEEDS[self.pointer_speed.min(4)].to_string()
             ),
             ("natural_scroll", yn(self.natural_scroll)),
+            ("volume", self.volume.to_string()),
+            ("mute", yn(self.mute)),
             ("region", self.region.clone()),
         ];
         let mut done = alloc::vec![false; values.len()];
@@ -547,6 +556,8 @@ mod tests {
             pointer_size: 3,
             pointer_speed: 4,
             natural_scroll: true,
+            volume: 35,
+            mute: true,
             ..Config::default()
         };
         let text = c.to_text();

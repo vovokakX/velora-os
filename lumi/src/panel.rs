@@ -479,15 +479,22 @@ impl Desktop {
                         );
                     }
                 }
-                Item::Volume => icons::draw(
-                    c,
-                    Icon::Speaker,
-                    ix + self.s(1),
-                    iy + self.s(1),
-                    isz - self.s(2),
-                    fade(t.text_dim, alpha as u8),
-                    0,
-                ),
+                Item::Volume => {
+                    let (icon, col) = match self.sound.as_ref() {
+                        Some(m) if m.mute || m.volume == 0 => (Icon::SpeakerMute, t.text_dim),
+                        Some(m) if !m.devices.is_empty() => (Icon::Speaker, t.text_dim),
+                        _ => (Icon::Speaker, t.text_faint),
+                    };
+                    icons::draw(
+                        c,
+                        icon,
+                        ix + self.s(1),
+                        iy + self.s(1),
+                        isz - self.s(2),
+                        fade(col, alpha as u8),
+                        0,
+                    )
+                }
                 Item::Network => {
                     let on = self.net.ip.is_some();
                     let ncol = if on { t.text_dim } else { t.text_faint };
@@ -566,7 +573,14 @@ impl Desktop {
         let text = match it {
             Item::Menu => String::from(tr(ru, "Приложения", "Applications")),
             Item::App(a) => String::from(a.name(ru)),
-            Item::Volume => String::from(tr(ru, "Звук", "Sound")),
+            Item::Volume => match self.sound.as_ref() {
+                Some(m) if m.devices.is_empty() => {
+                    String::from(tr(ru, "Нет устройств вывода", "No output devices"))
+                }
+                Some(m) if m.mute => String::from(tr(ru, "Звук выключен", "Sound off")),
+                Some(m) => alloc::format!("{} {} %", tr(ru, "Громкость", "Volume"), m.volume),
+                None => String::from(tr(ru, "Звуковое устройство не найдено", "No sound device")),
+            },
             Item::Network => String::from(match self.net.ip {
                 Some(_) => tr(ru, "Сеть: подключено", "Network: connected"),
                 None => tr(ru, "Сеть: нет подключения", "Network: not connected"),
@@ -642,6 +656,10 @@ impl Desktop {
             let _ = p;
             self.add_damage(r.inset(-self.s(30)));
         }
+        if k == PopKind::Volume {
+            // Read again when it opens (Settings may have changed it).
+            self.sound_next = 0;
+        }
         self.popover = Some(Popover {
             kind: k,
             t0: self.now,
@@ -670,6 +688,13 @@ impl Desktop {
         let pr = self.panel_rect();
         let (w, h) = match p.kind {
             PopKind::Clock => (self.s(300), self.s(330)),
+            PopKind::Volume => match self.sound.as_ref() {
+                Some(m) if !m.devices.is_empty() => (
+                    self.s(320),
+                    self.s(148) + self.s(40) * m.devices.len() as i32 + self.s(8),
+                ),
+                _ => (self.s(300), self.s(132)),
+            },
             _ => (self.s(300), self.s(132)),
         };
         let anchor = self
@@ -733,6 +758,14 @@ impl Desktop {
     ) -> bool {
         if !self.popover_rect().contains(x, y) {
             return false;
+        }
+        if self
+            .popover
+            .as_ref()
+            .is_some_and(|p| p.kind == PopKind::Volume)
+        {
+            self.volume_click(x, y, host);
+            return true;
         }
         let hit = self.pop_items().into_iter().find(|(_, r)| r.contains(x, y));
         if let Some((a, _)) = hit {
@@ -937,41 +970,264 @@ impl Desktop {
                     al(t.text_dim),
                 );
             }
-            PopKind::Volume => {
-                fonts.draw(
+            PopKind::Volume => self.draw_volume(c, fonts, r, &al),
+        }
+        let _ = base;
+    }
+
+    // --- the sound window -------------------------------------------------
+
+    /// Reads the sound card; a change (from Settings or a program) shows
+    /// on the panel and is kept in the settings.
+    pub(crate) fn refresh_sound(&mut self, host: &mut dyn Host) {
+        let m = host.mixer();
+        if m == self.sound {
+            return;
+        }
+        if let Some(st) = m.as_ref()
+            && (st.volume != self.cfg.volume || st.mute != self.cfg.mute)
+        {
+            self.cfg.volume = st.volume;
+            self.cfg.mute = st.mute;
+            self.save_at = Some(self.now + crate::desktop::SAVE_DELAY_MS);
+        }
+        self.sound = m;
+        let r = self.panel_rect();
+        self.add_damage(r);
+        if self.popover.is_some() {
+            let p = self.popover_rect();
+            self.add_damage(p.inset(-self.s(30)));
+        }
+    }
+
+    /// Sends a mixer command and shows the result.
+    fn mixer_cmd(&mut self, host: &mut dyn Host, cmd: &str) {
+        host.set_mixer(cmd);
+        self.refresh_sound(host);
+    }
+
+    /// The mute button, the slider's track and the output rows.
+    fn volume_layout(&self) -> (Rect, Rect, Vec<Rect>) {
+        let r = self.popover_rect();
+        let mute = Rect::new(r.x + self.s(14), r.y + self.s(58), self.s(40), self.s(40));
+        let track = Rect::new(
+            mute.right() + self.s(12),
+            mute.center_y() - self.s(3),
+            r.right() - mute.right() - self.s(12) - self.s(70),
+            self.s(6),
+        );
+        let n = self.sound.as_ref().map_or(0, |m| m.devices.len());
+        let rows = (0..n)
+            .map(|i| {
+                Rect::new(
+                    r.x + self.s(10),
+                    r.y + self.s(146) + self.s(40) * i as i32,
+                    r.w - self.s(20),
+                    self.s(38),
+                )
+            })
+            .collect();
+        (mute, track, rows)
+    }
+
+    /// Where a panel item is: `menu`, `volume`, `network` or `clock`
+    /// (for tests).
+    pub fn panel_item_rect(&self, name: &str) -> Option<Rect> {
+        let want = match name {
+            "menu" => Item::Menu,
+            "volume" => Item::Volume,
+            "network" => Item::Network,
+            "clock" => Item::Clock,
+            _ => return None,
+        };
+        self.panel_layout()
+            .into_iter()
+            .find(|(it, _)| *it == want)
+            .map(|x| x.1)
+    }
+
+    /// The sound window's mute button, slider track and output rows while
+    /// it is open (for tests).
+    pub fn volume_controls(&self) -> Option<(Rect, Rect, Vec<Rect>)> {
+        self.popover
+            .as_ref()
+            .filter(|p| p.kind == PopKind::Volume && !p.closing)
+            .map(|_| self.volume_layout())
+    }
+
+    /// Sets the volume from the slider at `x`.
+    pub(crate) fn volume_at(&mut self, x: i32, host: &mut dyn Host) {
+        let (_, track, _) = self.volume_layout();
+        let v = ((x - track.x) * 100 + track.w / 2) / track.w.max(1);
+        let v = v.clamp(0, 100) as u32;
+        if self.sound.as_ref().is_some_and(|m| m.volume != v || m.mute) {
+            let cmd = alloc::format!("volume {}\nmute 0\n", v);
+            self.mixer_cmd(host, &cmd);
+        }
+    }
+
+    fn volume_click(&mut self, x: i32, y: i32, host: &mut dyn Host) {
+        let Some(m) = self.sound.clone() else {
+            return;
+        };
+        if m.devices.is_empty() {
+            return;
+        }
+        let (mute, track, rows) = self.volume_layout();
+        if mute.contains(x, y) {
+            let cmd = alloc::format!("mute {}\n", !m.mute as u8);
+            self.mixer_cmd(host, &cmd);
+            if m.mute {
+                host.play(&crate::sound::click());
+            }
+        } else if track.inset(-self.s(14)).contains(x, y) {
+            self.vol_drag = true;
+            self.volume_at(x, host);
+        } else if let Some(i) = rows.iter().position(|r| r.contains(x, y))
+            && i != m.output
+        {
+            let cmd = alloc::format!("output {}\n", i);
+            self.mixer_cmd(host, &cmd);
+            host.play(&crate::sound::click());
+        }
+    }
+
+    fn draw_volume(&mut self, c: &mut Canvas, fonts: &mut Fonts, r: Rect, al: &dyn Fn(u32) -> u32) {
+        let t = self.theme;
+        let ru = self.ru();
+        let x = r.x + self.s(22);
+        fonts.draw(
+            c,
+            Weight::SemiBold,
+            self.px(16),
+            x,
+            r.y + self.s(40),
+            tr(ru, "Звук", "Sound"),
+            al(t.text),
+        );
+        let Some(m) = self.sound.clone().filter(|m| !m.devices.is_empty()) else {
+            fonts.draw(
+                c,
+                Weight::Medium,
+                self.px(14),
+                x,
+                r.y + self.s(74),
+                tr(ru, "Звуковое устройство не найдено", "No sound device"),
+                al(t.text),
+            );
+            fonts.draw(
+                c,
+                Weight::Regular,
+                self.px(12),
+                x,
+                r.y + self.s(98),
+                tr(
+                    ru,
+                    "Поддерживаются карты Intel HDA",
+                    "Intel HDA cards are supported",
+                ),
+                al(t.text_dim),
+            );
+            return;
+        };
+        // The popover is drawn shifted while it slides in.
+        let dy = r.y - self.popover_rect().y;
+        let (mute, track, rows) = self.volume_layout();
+        let (mute, track) = (mute.offset(0, dy), track.offset(0, dy));
+        let off = m.mute || m.volume == 0;
+        c.fill_rrect(
+            mute,
+            mute.h / 2,
+            al(if off {
+                t.field
+            } else {
+                lerp(t.field, t.accent, 60)
+            }),
+        );
+        let isz = self.s(20);
+        icons::draw(
+            c,
+            if off {
+                Icon::SpeakerMute
+            } else {
+                Icon::Speaker
+            },
+            mute.center_x() - isz / 2,
+            mute.center_y() - isz / 2,
+            isz,
+            al(t.text),
+            0,
+        );
+        // The slider: track, filled part, knob.
+        let v = if m.mute { 0 } else { m.volume as i32 };
+        c.fill_rrect(track, track.h / 2, al(t.field));
+        let fx = track.x + track.w * v / 100;
+        c.fill_rrect(
+            Rect::new(track.x, track.y, fx - track.x, track.h),
+            track.h / 2,
+            al(if m.mute { t.text_faint } else { t.accent }),
+        );
+        c.fill_circle(fx, track.center_y(), self.s(9), al(t.text));
+        let pct = alloc::format!("{} %", m.volume);
+        let px = self.px(13);
+        let pw = fonts.measure(Weight::Medium, px, &pct);
+        fonts.draw_centered_y(
+            c,
+            Weight::Medium,
+            px,
+            r.right() - self.s(22) - pw,
+            track.center_y(),
+            &pct,
+            al(if m.mute { t.text_faint } else { t.text_dim }),
+        );
+        fonts.draw(
+            c,
+            Weight::Medium,
+            self.px(12),
+            x,
+            r.y + self.s(132),
+            tr(ru, "Устройство вывода", "Output device"),
+            al(t.text_dim),
+        );
+        for (i, row) in rows.iter().enumerate() {
+            let row = row.offset(0, dy);
+            let on = i == m.output;
+            if on {
+                c.fill_rrect(row, self.s(10), al(lerp(t.selected, t.accent, 46)));
+            }
+            let (rn, en) = m.devices[i].name();
+            let label = tr(ru, rn, en);
+            let isz = self.s(16);
+            icons::draw(
+                c,
+                Icon::Speaker,
+                row.x + self.s(12),
+                row.center_y() - isz / 2,
+                isz,
+                al(t.text_dim),
+                0,
+            );
+            fonts.draw_centered_y(
+                c,
+                Weight::Medium,
+                self.px(14),
+                row.x + self.s(40),
+                row.center_y(),
+                label,
+                al(t.text),
+            );
+            if on {
+                icons::draw(
                     c,
-                    Weight::SemiBold,
-                    self.px(16),
-                    x,
-                    r.y + self.s(40),
-                    tr(ru, "Звук", "Sound"),
-                    al(t.text),
-                );
-                fonts.draw(
-                    c,
-                    Weight::Medium,
-                    self.px(14),
-                    x,
-                    r.y + self.s(74),
-                    tr(ru, "Звуковое устройство не найдено", "No sound device"),
-                    al(t.text),
-                );
-                fonts.draw(
-                    c,
-                    Weight::Regular,
-                    self.px(12),
-                    x,
-                    r.y + self.s(98),
-                    tr(
-                        ru,
-                        "Драйвера звука в Velora пока нет",
-                        "Velora has no sound driver yet",
-                    ),
-                    al(t.text_dim),
+                    Icon::Check,
+                    row.right() - self.s(28),
+                    row.center_y() - isz / 2,
+                    isz,
+                    al(t.accent),
+                    0,
                 );
             }
         }
-        let _ = base;
     }
 
     // --- the window switcher ----------------------------------------------

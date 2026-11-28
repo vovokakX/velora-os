@@ -38,7 +38,7 @@ pub fn scale_for(h: i32) -> i64 {
 
 /// The settings are written this long after the last change, so a slider
 /// moved through many values writes the file once.
-const SAVE_DELAY_MS: u64 = 400;
+pub(crate) const SAVE_DELAY_MS: u64 = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -231,6 +231,11 @@ pub struct Desktop {
     pub(crate) login: crate::login::Login,
     pub(crate) net: crate::host::NetState,
     net_next: u64,
+    /// The sound card's state as last read (`None`: no card).
+    pub(crate) sound: Option<crate::host::Mixer>,
+    pub(crate) sound_next: u64,
+    /// The volume slider of the small sound window is being dragged.
+    pub(crate) vol_drag: bool,
     /// The last frame took this long (us), for the frame counter.
     pub frame_us: u64,
     /// A progress line to print at the next frame.
@@ -244,7 +249,7 @@ pub struct Desktop {
     pub frames: u64,
     pub painted: u64,
     /// The settings changed: write them at this time.
-    save_at: Option<u64>,
+    pub(crate) save_at: Option<u64>,
     /// The work area changed: maximized and snapped windows fit it again.
     pub(crate) refit: bool,
     /// The interface scale changed: lay the windows out again.
@@ -311,6 +316,9 @@ impl Desktop {
             pop_hover: None,
             net: host.net(),
             net_next: 0,
+            sound: host.mixer(),
+            sound_next: 0,
+            vol_drag: false,
             frame_us: 0,
             host_log_pending: None,
             anim_prev: false,
@@ -1612,10 +1620,18 @@ impl Desktop {
                 continue;
             }
             match *ev {
+                Event::MouseMove { x, y } if self.vol_drag => {
+                    self.mouse = (x, y);
+                    self.volume_at(x, host);
+                }
                 Event::MouseMove { x, y } => {
                     self.panel_hover_at(x, y);
                     self.popover_hover_at(x, y);
                     self.mouse_move(x, y, host, fonts);
+                }
+                Event::MouseButton { down: false } if self.vol_drag => {
+                    self.vol_drag = false;
+                    host.play(&crate::sound::click());
                 }
                 Event::MouseButton { down: true } => {
                     let (x, y) = self.mouse;
@@ -1749,6 +1765,10 @@ impl Desktop {
                 let r = self.panel_rect();
                 self.add_damage(r);
             }
+        }
+        if self.mode == Mode::Session && now >= self.sound_next {
+            self.sound_next = now + 1000;
+            self.refresh_sound(host);
         }
         // Windows: animations, apps, closed programs.
         let mut actions: Vec<(u32, Action)> = Vec::new();
@@ -2060,6 +2080,11 @@ impl Desktop {
         self.session_t0 = self.now;
         if cfg != self.cfg {
             self.apply_config(cfg, host, false);
+        }
+        if self.sound.is_some() {
+            let cmd = alloc::format!("volume {}\nmute {}\n", self.cfg.volume, self.cfg.mute as u8);
+            host.set_mixer(&cmd);
+            self.sound = host.mixer();
         }
         self.pending_transition = self.cfg.animations_on();
         self.damage_all();
