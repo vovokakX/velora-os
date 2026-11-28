@@ -103,6 +103,7 @@ cargo run -q -p mkinitrd --release -- \
     --file "usr/share/fonts/Inter-Regular.ttf=build/fonts/Inter-Regular.ttf:644" \
     --file "usr/share/fonts/Inter-Medium.ttf=build/fonts/Inter-Medium.ttf:644" \
     --file "usr/share/fonts/Inter-SemiBold.ttf=build/fonts/Inter-SemiBold.ttf:644" \
+    --file "usr/share/fonts/JetBrainsMono-Regular.ttf=build/fonts/JetBrainsMono-Regular.ttf:644" \
     --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.
@@ -122,6 +123,7 @@ cargo run -q -p mkiso --release -- \
     --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
     --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
     --file "licenses/inter.txt=docs/licenses/INTER.txt" \
+    --file "licenses/jetbrains-mono.txt=docs/licenses/JETBRAINS-MONO.txt" \
     --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 
 # 6. Image for USB drives (release build only): GPT + FAT32 EFI partition.
@@ -138,6 +140,7 @@ if [ "$OUT" = "velora.iso" ]; then
         --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
         --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
         --file "licenses/inter.txt=docs/licenses/INTER.txt" \
+        --file "licenses/jetbrains-mono.txt=docs/licenses/JETBRAINS-MONO.txt" \
         --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 fi
 
