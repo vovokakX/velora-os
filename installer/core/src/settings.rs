@@ -1,10 +1,10 @@
 //! Choices made in the installer and the configuration files they become.
 //!
-//! The graphical shell (Lumi) does not exist yet: the appearance, pointer
-//! and locale choices are only written to `/etc/velora/*.conf` for it.
-//! NOT IMPLEMENTED: nothing in the installed system reads these files yet
-//! (the console keeps its own colours, the keyboard switches EN/RU with
-//! Alt+Shift as before).
+//! The appearance, pointer and locale choices are written to
+//! `/etc/velora/*.conf`. The graphical shell Lumi reads desktop.conf and
+//! the region in locale.conf. NOT IMPLEMENTED: keyboard.conf and the
+//! system language are not read yet (the keyboard switches EN/RU with
+//! Alt+Shift as before; Lumi speaks Russian or English).
 
 use alloc::format;
 use alloc::string::String;
@@ -98,10 +98,11 @@ pub const ICONS: [Choice; 2] = [
     c("velora-line", "Velora Line", "Velora Line"),
 ];
 
-pub const WALLPAPERS: [Choice; 3] = [
+pub const WALLPAPERS: [Choice; 4] = [
     c("waves", "Волны", "Waves"),
     c("graphite", "Графит", "Graphite"),
     c("aurora", "Сияние", "Aurora"),
+    c("ember", "Угли", "Ember"),
 ];
 
 /// Accent colours (0xRRGGBB), as in the design, and the neon violet of
@@ -139,6 +140,8 @@ pub struct Settings {
     pub animations: bool,
     pub use_accent: bool,
     pub accent: usize,
+    /// Start with the console login instead of the Lumi desktop.
+    pub console: bool,
 }
 
 impl Default for Settings {
@@ -159,6 +162,7 @@ impl Default for Settings {
             animations: true,
             use_accent: true,
             accent: 0,
+            console: false,
         }
     }
 }
@@ -198,11 +202,13 @@ impl Settings {
             (
                 "/etc/velora/desktop.conf",
                 format!(
-                    "{}# For the graphical shell (Lumi), which is not part of the system yet.\n\
+                    "{}# For the graphical shell Lumi (session=console: the console login).\n\
+                     session={}\n\
                      theme={}\nicons={}\nwallpaper={}\npointer={}\nlarge_pointer={}\n\
                      transparency={}\nrounded_corners={}\nanimations={}\n\
                      accent={}\naccent_color=#{:06x}\n",
                     header,
+                    if self.console { "console" } else { "lumi" },
                     pick(&THEMES, self.theme),
                     pick(&ICONS, self.icons),
                     pick(&WALLPAPERS, self.wallpaper),
@@ -241,6 +247,7 @@ mod tests {
         assert!(desktop.contains("theme=velora-gamers\n"));
         assert!(desktop.contains("accent=mint\naccent_color=#78bea2\n"));
         assert!(desktop.contains("large_pointer=yes\n"));
+        assert!(desktop.contains("session=lumi\n"));
         let locale = &files[0].1;
         assert!(locale.contains("language=ru_RU\nregion=UA\n"));
         s.use_accent = false;

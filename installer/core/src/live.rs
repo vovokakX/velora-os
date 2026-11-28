@@ -212,14 +212,20 @@ impl Source for LiveSource {
                 mode: st.mode & 0o7777,
             });
         }
-        if let Ok(fonts) = fs::read_dir("/usr/share/fonts") {
-            for ent in fonts.flatten() {
-                let path = format!("/usr/share/fonts/{}", ent.name);
-                out.push(SourceFile {
-                    data: read(&path)?,
-                    path,
-                    mode: 0o644,
-                });
+        // Fonts and the wallpaper pictures (Lumi).
+        for dir in ["/usr/share/fonts", "/usr/share/wallpapers"] {
+            if let Ok(list) = fs::read_dir(dir) {
+                for ent in list.flatten() {
+                    if ent.is_dir || ent.name == "." || ent.name == ".." {
+                        continue;
+                    }
+                    let path = format!("{}/{}", dir, ent.name);
+                    out.push(SourceFile {
+                        data: read(&path)?,
+                        path,
+                        mode: 0o644,
+                    });
+                }
             }
         }
         out.push(SourceFile {

@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! velora-setup                                   asks everything
-//! velora-setup --auto --disk vd0 --user anna [--yes]
+//! velora-setup --auto --disk vd0 --user anna [--yes] [--console]
 //! ```
 //!
 //! With `--auto` the passwords come from the environment variables
@@ -71,7 +71,7 @@ fn ask_password(who: &str) -> Option<String> {
 
 fn usage() -> i32 {
     println!("usage: velora-setup");
-    println!("       velora-setup --auto --disk NAME --user NAME [--yes]");
+    println!("       velora-setup --auto --disk NAME --user NAME [--yes] [--console]");
     println!("       (--auto reads SETUP_ROOT_PASSWORD and SETUP_USER_PASSWORD)");
     2
 }
@@ -135,12 +135,13 @@ fn main() -> i32 {
             println!("velora-setup: set SETUP_ROOT_PASSWORD and SETUP_USER_PASSWORD");
             return 2;
         };
-        let plan = Plan {
+        let mut plan = Plan {
             user,
             root_password: rp.into(),
             user_password: up.into(),
             ..Plan::default()
         };
+        plan.settings.console = argv.contains(&"--console");
         (disk, plan)
     } else {
         let Some(disk) = ask("Disk to install on: ") else {
@@ -161,12 +162,14 @@ fn main() -> i32 {
         let Some(root_password) = ask_password("root") else {
             return 1;
         };
-        let plan = Plan {
+        let mut plan = Plan {
             user,
             root_password,
             user_password,
             ..Plan::default()
         };
+        let desk = ask("Start the Lumi desktop after boot? [Y/n]: ").unwrap_or_default();
+        plan.settings.console = matches!(desk.trim(), "n" | "N" | "no");
         (disk, plan)
     };
 

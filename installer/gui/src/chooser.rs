@@ -19,6 +19,9 @@ pub enum Mode {
     Graphical,
     Terminal,
     Live,
+    /// The Live system with the console login instead of Lumi (key 4,
+    /// not shown as a card; the QEMU tests use it).
+    LiveConsole,
 }
 
 impl Mode {
@@ -28,7 +31,8 @@ impl Mode {
         match self {
             Mode::Graphical => "graphical",
             Mode::Terminal => "terminal",
-            Mode::Live => "live",
+            Mode::Live => "live desktop",
+            Mode::LiveConsole => "live console",
         }
     }
 
@@ -46,11 +50,11 @@ impl Mode {
                 "Программа velora-setup:\nвопросы и ответы в консоли.",
                 "velora-setup: questions\nand answers in the console.",
             ),
-            Mode::Live => (
+            Mode::Live | Mode::LiveConsole => (
                 "Live-режим",
                 "Live system",
-                "Терминал vsh без установки.\nПароль для входа: velora.",
-                "The vsh terminal, no install.\nLogin password: velora.",
+                "Рабочий стол Lumi без установки.\nПароль для входа: velora.",
+                "The Lumi desktop, no install.\nLogin password: velora.",
             ),
         }
     }
@@ -59,7 +63,7 @@ impl Mode {
         match self {
             Mode::Graphical => Icon::Pointer,
             Mode::Terminal => Icon::Keyboard,
-            Mode::Live => Icon::Globe,
+            Mode::Live | Mode::LiveConsole => Icon::Globe,
         }
     }
 }
@@ -246,6 +250,9 @@ impl Chooser {
                 self.selected = i;
                 chosen = Some(Mode::ALL[i]);
             }
+        }
+        if x.ui.take_key(Key::Char('4')) {
+            chosen = Some(Mode::LiveConsole);
         }
         if x.ui.focused().is_none() {
             if x.ui.take_key(Key::Right) || x.ui.take_key(Key::Down) {

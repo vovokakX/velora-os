@@ -118,11 +118,12 @@ pub fn preview(c: &mut Canvas, r: Rect, radius: i32, colors: (Color, Color, Colo
     );
 }
 
-/// The wallpaper previews (waves, graphite, aurora).
+/// The wallpaper previews (waves, graphite, aurora, ember).
 pub fn wallpaper_colors(i: usize) -> (Color, Color, Color) {
     match i {
         1 => (rgb(44, 44, 48), rgb(90, 90, 96), rgb(220, 220, 226)),
         2 => (rgb(14, 40, 52), rgb(40, 150, 140), rgb(220, 250, 240)),
+        3 => (rgb(24, 18, 16), rgb(150, 86, 40), rgb(255, 200, 140)),
         _ => (rgb(12, 12, 14), rgb(80, 80, 88), rgb(236, 236, 240)),
     }
 }

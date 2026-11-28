@@ -3,7 +3,9 @@
 //!
 //! The menu offers: 1) graphical installation (the default, started
 //! after 10 seconds), 2) installation in the terminal (`velora-setup`),
-//! 3) the Live system (the program ends and the login prompt appears).
+//! 3) the Live system with the Lumi desktop (the program ends with status
+//! 3 and the kernel starts Lumi); key 4 chooses the Live system with the
+//! console login (status 0).
 //! Without a frame buffer the menu is printed on the console and the Live
 //! system starts after 10 seconds.
 //!
@@ -525,8 +527,13 @@ fn main() -> i32 {
                     Err(_) => return 0,
                 };
             }
+            // Status 3 asks the kernel for the Lumi desktop.
             Mode::Live => {
-                println!("velora-start: live");
+                println!("velora-start: live desktop");
+                return 3;
+            }
+            Mode::LiveConsole => {
+                println!("velora-start: live console");
                 return 0;
             }
         }
