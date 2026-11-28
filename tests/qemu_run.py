@@ -1767,7 +1767,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
     print("qemu_run: start menu after %.2f s (QEMU start, firmware included)" % t)
     if max_seconds and t > max_seconds:
         return fail("start menu after %.2f s, limit %.2f s" % (t, max_seconds))
-    monitor.keys(["3"], delay=0.05)
+    monitor.keys(["4"], delay=0.05)
     if not wait_for(proc, reader, "velora login:", deadline):
         return fail("no login prompt after choosing the Live system")
     print("qemu_run: login prompt after %.2f s" % reader.find("velora login:"))
