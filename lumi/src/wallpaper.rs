@@ -8,6 +8,11 @@
 //! The frosted copy ([`frost`]) is a strongly blurred, darkened version
 //! for the login screen, the app menu and the panel, made at an eighth of
 //! the resolution and scaled up.
+//!
+//! Dimming and blur ([`soften`]) and the frosted copy are made when the
+//! picture, the screen size, the theme or these settings change, never
+//! per frame: the desktop keeps the finished picture and the small grids
+//! they come from (D61).
 
 use crate::config::BUILTIN_WALLPAPERS;
 use alloc::vec;
@@ -364,19 +369,20 @@ fn box_blur(px: &mut [u32], w: usize, h: usize, r: usize) {
     pass(&tmp, px, h, w, w, 1);
 }
 
-/// The desktop's wallpaper softened by the settings: blurred (`blur`
-/// 0..=100: averaged down by 2 to 12 times, blurred and scaled up
-/// bilinearly) and darkened by `dim` per cent.
-pub fn soften(src: &Canvas, blur: u32, dim: u32) -> Canvas {
-    let (w, h) = (src.width, src.height);
-    let mut out = if blur == 0 {
-        let mut c = Canvas::new(w, h);
-        c.pixels.copy_from_slice(&src.pixels);
-        c
-    } else {
-        let k = 2 + blur.min(100) as usize / 10;
+/// A picture averaged down by `k` in both directions (`sw` x `sh`).
+pub struct Grid {
+    k: usize,
+    sw: usize,
+    sh: usize,
+    px: Vec<u32>,
+}
+
+impl Grid {
+    /// `src` averaged down by `k`.
+    pub fn new(src: &Canvas, k: usize) -> Grid {
+        let (w, h) = (src.width, src.height);
         let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
-        let mut small = vec![0u32; sw * sh];
+        let mut px = vec![0u32; sw * sh];
         for sy in 0..sh {
             for sx in 0..sw {
                 let mut acc = [0u32; 3];
@@ -391,53 +397,99 @@ pub fn soften(src: &Canvas, blur: u32, dim: u32) -> Canvas {
                     }
                 }
                 let n = n.max(1);
-                small[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
+                px[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
             }
         }
-        for _ in 0..2 {
-            box_blur(&mut small, sw, sh, 1);
+        Grid { k, sw, sh, px }
+    }
+
+    /// Box blur `times` times with radius `r`.
+    fn blurred(mut self, r: usize, times: usize) -> Grid {
+        for _ in 0..times {
+            box_blur(&mut self.px, self.sw, self.sh, r);
         }
-        let mut c = Canvas::new(w, h);
-        // Bilinear: pixel centres of the small grid at (i + 0.5) * k.
-        let pos = |v: usize, n: usize| -> (usize, usize, u32) {
-            let f = ((v * 2 + 1) * 256 / (2 * k)) as i64 - 128;
-            let f = f.clamp(0, ((n - 1) * 256) as i64) as usize;
-            let i = f >> 8;
-            (i, (i + 1).min(n - 1), (f & 0xff) as u32)
-        };
-        let lerp = |a: u32, b: u32, t: u32| -> u32 {
-            let mut o = 0;
-            for sh_ in [16u32, 8, 0] {
-                let (x, y) = ((a >> sh_) & 0xff, (b >> sh_) & 0xff);
-                o |= ((x * (256 - t) + y * t) >> 8) << sh_;
-            }
-            o
-        };
-        let xs: Vec<(usize, usize, u32)> = (0..w).map(|x| pos(x, sw)).collect();
-        for y in 0..h {
-            let (y0, y1, ty) = pos(y, sh);
-            let (r0, r1) = (&small[y0 * sw..y0 * sw + sw], &small[y1 * sw..y1 * sw + sw]);
-            let row = &mut c.pixels[y * w..y * w + w];
-            for (x, d) in row.iter_mut().enumerate() {
-                let (x0, x1, tx) = xs[x];
-                let top = lerp(r0[x0], r0[x1], tx);
-                let bot = lerp(r1[x0], r1[x1], tx);
-                *d = lerp(top, bot, ty);
-            }
+        self
+    }
+
+    /// Memory taken by the pixels.
+    pub fn bytes(&self) -> usize {
+        self.px.len() * 4
+    }
+}
+
+/// Keeps `keep` / 256 of each channel of `p`.
+#[inline]
+fn darken(p: u32, keep: u32) -> u32 {
+    let rb = (((p & 0x00ff_00ff) * keep) >> 8) & 0x00ff_00ff;
+    let g = (((p & 0x0000_ff00) * keep) >> 8) & 0x0000_ff00;
+    (p & 0xff00_0000) | rb | g
+}
+
+/// The share of a channel that dimming by `dim` per cent keeps, of 256.
+fn keep_of(dim: u32) -> u32 {
+    (100 - dim.min(100)) * 256 / 100
+}
+
+/// The small blurred picture that [`soften`] scales up for `blur`
+/// (1..=100): `src` averaged down by 2 to 12 times and blurred. It depends
+/// only on the picture and `blur`, so the desktop keeps it and dimming
+/// alone does not make it again.
+pub fn blur_grid(src: &Canvas, blur: u32) -> Grid {
+    Grid::new(src, 2 + blur.clamp(1, 100) as usize / 10).blurred(1, 2)
+}
+
+/// The desktop's wallpaper softened by the settings: `src` (the picture
+/// at the screen's size) blurred when `grid` is given (from
+/// [`blur_grid`], scaled up bilinearly) and darkened by `dim` per cent,
+/// in one pass over the screen.
+pub fn soften(src: &Canvas, grid: Option<&Grid>, dim: u32) -> Canvas {
+    let (w, h) = (src.width, src.height);
+    let keep = keep_of(dim);
+    let mut c = Canvas::new(w, h);
+    let Some(g) = grid else {
+        for (d, s) in c.pixels.iter_mut().zip(&src.pixels) {
+            *d = darken(*s, keep);
         }
-        c
+        return c;
     };
-    if dim > 0 {
-        let keep = 100 - dim.min(100);
-        for p in out.pixels.iter_mut() {
-            let mut o = *p & 0xff00_0000;
-            for sh_ in [16u32, 8, 0] {
-                o |= (((*p >> sh_) & 0xff) * keep / 100) << sh_;
+    let (k, sw, sh, small) = (g.k, g.sw, g.sh, &g.px);
+    // Bilinear: pixel centres of the small grid at (i + 0.5) * k.
+    let pos = |v: usize, n: usize| -> (usize, usize, u32) {
+        let f = ((v * 2 + 1) * 256 / (2 * k)) as i64 - 128;
+        let f = f.clamp(0, ((n - 1) * 256) as i64) as usize;
+        let i = f >> 8;
+        (i, (i + 1).min(n - 1), (f & 0xff) as u32)
+    };
+    // Two channels at once: red and blue in one word, green in another.
+    let lerp = |a: u32, b: u32, t: u32| -> u32 {
+        let rb = ((a & 0x00ff_00ff) * (256 - t) + (b & 0x00ff_00ff) * t) >> 8;
+        let g = ((a & 0x0000_ff00) * (256 - t) + (b & 0x0000_ff00) * t) >> 8;
+        (rb & 0x00ff_00ff) | (g & 0x0000_ff00)
+    };
+    let xs: Vec<(usize, usize, u32)> = (0..w).map(|x| pos(x, sw)).collect();
+    // One row of the small grid scaled up horizontally, reused by the k
+    // rows of the screen between the same two grid rows.
+    let mut top = vec![0u32; w];
+    let mut bot = vec![0u32; w];
+    let mut rows = (usize::MAX, usize::MAX);
+    for y in 0..h {
+        let (y0, y1, ty) = pos(y, sh);
+        if rows != (y0, y1) {
+            for (row, gy) in [(&mut top, y0), (&mut bot, y1)] {
+                let r = &small[gy * sw..gy * sw + sw];
+                for (x, d) in row.iter_mut().enumerate() {
+                    let (x0, x1, tx) = xs[x];
+                    *d = lerp(r[x0], r[x1], tx);
+                }
             }
-            *p = o;
+            rows = (y0, y1);
+        }
+        let out = &mut c.pixels[y * w..y * w + w];
+        for ((d, a), b) in out.iter_mut().zip(&top).zip(&bot) {
+            *d = darken(lerp(*a, *b, ty), keep);
         }
     }
-    out
+    c
 }
 
 /// The frosted copy of a wallpaper: strongly blurred and mixed with a
@@ -454,48 +506,46 @@ pub struct Frost {
 
 const K: usize = 8;
 
+/// The blurred eighth of `src` that frosted copies are made from. The
+/// desktop makes it once per picture and screen size; dimming then only
+/// darkens this small grid ([`Frost::new`]), and the wallpaper's own blur
+/// is lost in the frost's much stronger one.
+pub fn frost_grid(src: &Canvas) -> Grid {
+    Grid::new(src, K).blurred(3, 3)
+}
+
+impl Frost {
+    /// The frosted copy of a `w` x `h` picture from its [`frost_grid`],
+    /// darkened by `dim` per cent, with `tint` (alpha in the top byte).
+    pub fn new(w: usize, h: usize, g: &Grid, dim: u32, tint: Color) -> Frost {
+        let keep = keep_of(dim);
+        let ta = tint >> 24;
+        let tc = [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
+        let px =
+            g.px.iter()
+                .map(|&p| {
+                    let p = darken(p, keep);
+                    let mut o = 0;
+                    for (k, sh_) in [16u32, 8, 0].iter().enumerate() {
+                        let v = (p >> sh_) & 0xff;
+                        o = (o << 8) | ((v * (255 - ta) + tc[k] * ta) / 255);
+                    }
+                    o
+                })
+                .collect();
+        Frost {
+            w,
+            h,
+            sw: g.sw,
+            sh: g.sh,
+            px,
+        }
+    }
+}
+
 /// Makes the frosted copy of `src` with `tint` (alpha in the top byte).
 pub fn frost(src: &Canvas, tint: Color) -> Frost {
-    let (w, h) = (src.width, src.height);
-    let (sw, sh) = (w.div_ceil(K), h.div_ceil(K));
-    let mut small = vec![0u32; sw * sh];
-    for sy in 0..sh {
-        for sx in 0..sw {
-            let mut acc = [0u32; 3];
-            let mut n = 0;
-            for y in sy * K..((sy + 1) * K).min(h) {
-                for x in sx * K..((sx + 1) * K).min(w) {
-                    let p = src.pixels[y * w + x];
-                    acc[0] += (p >> 16) & 0xff;
-                    acc[1] += (p >> 8) & 0xff;
-                    acc[2] += p & 0xff;
-                    n += 1;
-                }
-            }
-            let n = n.max(1);
-            small[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
-        }
-    }
-    for _ in 0..3 {
-        box_blur(&mut small, sw, sh, 3);
-    }
-    let ta = tint >> 24;
-    let tc = [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
-    for p in small.iter_mut() {
-        let mut o = 0;
-        for (k, sh_) in [16u32, 8, 0].iter().enumerate() {
-            let v = (*p >> sh_) & 0xff;
-            o = (o << 8) | ((v * (255 - ta) + tc[k] * ta) / 255);
-        }
-        *p = o;
-    }
-    Frost {
-        w,
-        h,
-        sw,
-        sh,
-        px: small,
-    }
+    Frost::new(src.width, src.height, &frost_grid(src), 0, tint)
 }
 
 impl Frost {
@@ -633,5 +683,46 @@ mod tests {
         let b = c.bounds();
         f.copy_to(&mut c, b);
         assert_eq!(c.pixels[450 * 1600 + 10], f.get(10, 450));
+    }
+
+    #[test]
+    fn dimming_and_blur_from_the_kept_grids() {
+        let mut src = Canvas::new(320, 180);
+        draw_builtin(&mut src, "waves");
+        // No blur and no dimming: the picture itself.
+        assert_eq!(soften(&src, None, 0).pixels, src.pixels);
+        // Dimming by 50 % halves every channel (within rounding).
+        let half = soften(&src, None, 50);
+        for (d, s) in half.pixels.iter().zip(&src.pixels) {
+            for sh in [16, 8, 0] {
+                let (a, b) = ((d >> sh) & 0xff, ((s >> sh) & 0xff) / 2);
+                assert!(a.abs_diff(b) <= 1);
+            }
+        }
+        // Blur smooths: neighbours differ less than in the picture.
+        let g = blur_grid(&src, 60);
+        let soft = soften(&src, Some(&g), 0);
+        let step = |c: &Canvas| -> u32 {
+            c.pixels
+                .windows(2)
+                .map(|w| ((w[0] >> 8) & 0xff).abs_diff((w[1] >> 8) & 0xff))
+                .sum()
+        };
+        assert!(step(&soft) < step(&src));
+        // The frost dimmed from the grid of the picture matches the frost
+        // of the dimmed and blurred picture closely.
+        let tint = 0x58000000;
+        let fg = frost_grid(&src);
+        let a = Frost::new(320, 180, &fg, 40, tint);
+        let b = frost(&soften(&src, Some(&g), 40), tint);
+        for y in (0..180).step_by(7) {
+            for x in (0..320).step_by(7) {
+                let (p, q) = (a.get(x, y), b.get(x, y));
+                for sh in [16, 8, 0] {
+                    let d = ((p >> sh) & 0xff).abs_diff((q >> sh) & 0xff);
+                    assert!(d <= 6, "({}, {}): {:06x} {:06x}", x, y, p, q);
+                }
+            }
+        }
     }
 }

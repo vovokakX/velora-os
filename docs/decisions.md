@@ -1800,3 +1800,45 @@ back at the bottom edge (a strip of about 40 points under it), with Super
 and while a menu is open. NOT IMPLEMENTED: changing keyboard layouts (the
 kernel knows English and Russian with Alt+Shift), shortcuts of one's own,
 changing the screen resolution (the firmware chooses it), sound.
+
+## D61. Эффекты обоев считаются при смене, а не на кадре / Wallpaper effects are made on change, not per frame
+
+**2026-11-28**
+
+**RU.** Затемнение, размытие и матовая копия обоев (под панелью и меню)
+делаются, только когда меняется картинка, размер экрана, тема,
+затемнение или размытие (`WallKey`); готовая картинка хранится в
+`Desktop::wall`, кадр её только копирует. Каждый шаг делается, только если
+изменилось то, от чего он зависит: картинка в размере экрана и маленькая
+сетка для матовой копии (восьмая часть, размыта) — при новой картинке или
+размере; сетка размытия (уменьшение в 2–12 раз и размытие) — при новом
+уровне размытия; затемнение — одним проходом вместе с билинейным
+увеличением сетки. Матовая копия при затемнении получается затемнением её
+маленькой сетки: размытие обоев теряется в её гораздо более сильном
+(разница с полным пересчётом не больше 6 из 255, тест). Изменение только
+затемнения или размытия не перерисовывает содержимое окон и не запускает
+переход по всему экрану (раньше каждый шаг ползунка начинал переход на
+320 мс). На хосте в 1920x1080 шаг ползунка занимает 15,8 мс вместо 33,7
+(8,4 мс пересчёт, 7,3 мс перерисовка экрана); в покое с эффектами кадры
+ничего не рисуют, как и без них (тест `wallpaper_effects_are_made_once`,
+пример `bench`). Память не растёт: хранятся исходная картинка (пока эффекты
+включены) и две маленькие сетки.
+
+**EN.** Dimming, blur and the frosted copy of the wallpaper (under the panel
+and the menus) are made only when the picture, the screen size, the theme,
+dimming or blur change (`WallKey`); the finished picture is kept in
+`Desktop::wall` and a frame only copies it. Each step is done only when what
+it depends on changed: the picture at the screen's size and the small grid
+for the frosted copy (an eighth, blurred) for a new picture or size; the
+blur grid (averaged down 2 to 12 times and blurred) for a new blur level;
+dimming in one pass together with the bilinear scaling up of the grid. The
+frosted copy is dimmed by dimming its small grid: the wallpaper's blur is
+lost in its much stronger one (at most 6 of 255 off a full remake, tested).
+A change of dimming or blur alone does not draw the windows' content again
+and starts no cross-fade of the whole screen (before, each slider step
+started a 320 ms one). On the host at 1920x1080 a slider step takes 15.8 ms
+instead of 33.7 (8.4 ms to remake, 7.3 ms to redraw the screen); at rest
+with the effects on frames draw nothing, as without them (test
+`wallpaper_effects_are_made_once`, example `bench`). Memory does not grow:
+the original picture (while the effects are on) and two small grids are
+kept.
