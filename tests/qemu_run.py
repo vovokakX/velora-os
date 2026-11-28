@@ -32,6 +32,9 @@ Modes:
   clicks Boot velora-uitest.iso (./build.sh --uitest) with a USB tablet:
          every interactive element of the graphical installer is clicked
          through QMP and must react (tests/uiclick.py).
+  lumiperf  The Live desktop (Lumi) with a USB tablet: memory and
+         processor time at rest, frames while a window is dragged,
+         memory after 50 windows opened and closed (--resolution).
   fps    Boot velora-uitest.iso with a USB tablet, turn the frame counter
          on (F12) and print frames per second while the pointer moves and
          while screens change (--resolution).
@@ -562,6 +565,8 @@ def run(args):
             return run_lumi(args, work)
         if args.mode == "fps":
             return run_fps(args, work)
+        if args.mode == "lumiperf":
+            return run_lumiperf(args, work)
         if args.mode == "net":
             return run_net(args, work)
         if args.mode == "usb":
@@ -1439,6 +1444,138 @@ def run_lumi(args, work):
     return r
 
 
+def wait_match(s, pattern, timeout=60.0):
+    """Like Session.wait, for a regular expression; returns the match."""
+    rx = re.compile(pattern)
+    end = min(s.deadline, time.monotonic() + timeout)
+    while time.monotonic() < end:
+        for i, line, unfinished in s.lines():
+            m = rx.search(line, s.offset if i == s.mark else 0)
+            if m and not unfinished:
+                s.mark, s.offset = i + 1, 0
+                return m
+        if s.proc.poll() is not None:
+            return None
+        time.sleep(0.05)
+    return None
+
+
+PS_LUMI = r"^\s*\d+\s+\d+\s+\S+\s+\d+\s+([\d.]+) (B|KiB|MiB|GiB)\s+(\d+)\.(\d\d)\s+running\s+lumi\s*$"
+STATS = r"lumi: stats wakeups (\d+) frames (\d+) busy (\d+) ms"
+DRAG = r"lumi: drag (\d+) frames in (\d+) ms \((\d+) fps\), frame avg ([\d.]+) ms max ([\d.]+) ms"
+
+
+def run_lumiperf(args, work):
+    """Measurements of Lumi for its PR (Live system, key 3, a USB tablet
+    through QMP): memory and processor time of the lumi process from ps
+    and Lumi's own counters (Ctrl+Alt+F12) at rest for 30 s with a
+    terminal open; frames while a window is dragged in circles for 6 s;
+    memory after two and after 50 more windows opened and closed (half
+    terminals, half Files). Prints one line per measurement."""
+    import math
+    import uiclick
+    w, h = (int(v) for v in args.resolution.split("x"))
+    qmp_port = free_port()
+    extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h),
+             "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
+             "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % qmp_port]
+    units = {"B": 1 / 1048576, "KiB": 1 / 1024, "MiB": 1, "GiB": 1024}
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        qmp = uiclick.Qmp(qmp_port)
+
+        def ps():
+            s.type("ps > /dev/console\n")
+            m = wait_match(s, PS_LUMI, timeout=30)
+            assert m, "no lumi line in ps"
+            ticks = int(m.group(3)) * 100 + int(m.group(4))
+            return float(m.group(1)) * units[m.group(2)], ticks, time.monotonic()
+
+        def stats():
+            s.keys(["ctrl-alt-f12"])
+            m = wait_match(s, STATS, timeout=30)
+            assert m, "no stats line after Ctrl+Alt+F12"
+            return [int(v) for v in m.groups()]
+
+        def cycle(n):
+            for i in range(n):
+                s.keys(["ctrl-alt-t"] if i % 2 == 0 else ["meta_l-e"])
+                assert s.wait("lumi: open ", timeout=30), "no window opened (%d)" % i
+                time.sleep(0.6)
+                s.keys(["alt-f4"])
+                assert s.wait("lumi: close ", timeout=30), "the window did not close (%d)" % i
+                time.sleep(0.5)
+
+        try:
+            assert s.wait("velora-start: menu", timeout=120), "no start menu"
+            qmp.connect()
+            s.keys(["3"])
+            assert s.wait("lumi: login screen", timeout=120), "no Lumi login screen"
+            time.sleep(1.0)
+            s.type("velora\n")
+            assert s.wait("lumi: session user", timeout=60), "no session"
+            time.sleep(2.0)
+            s.keys(["meta_l"])
+            assert s.wait("lumi: app menu", timeout=30), "Super did not open the app menu"
+            s.type("term\n")
+            assert s.wait("lumi: open ", timeout=30), "no terminal"
+            time.sleep(3.0)
+            mem0, t0, at0 = ps()
+            st0 = stats()
+            time.sleep(30.0)
+            st1 = stats()
+            mem1, t1, at1 = ps()
+            secs = at1 - at0
+            print("qemu_run: lumiperf idle %.0f s: lumi %.1f MiB, processor %.2f s (%.2f %%), "
+                  "wakeups %d, frames %d, busy %d ms"
+                  % (secs, mem1, (t1 - t0) / 100, (t1 - t0) / secs, st1[0] - st0[0],
+                     st1[1] - st0[1], st1[2] - st0[2]))
+            # Drag the maximized terminal by its title bar in circles.
+            s.keys(["meta_l-up"])
+            time.sleep(1.5)
+            qmp.move(w // 2, 12, w, h)
+            time.sleep(0.3)
+            qmp.button(True)
+            t_start = time.monotonic()
+            n = 0
+            while time.monotonic() - t_start < 6.0:
+                a = (time.monotonic() - t_start) * 2.5
+                qmp.move(int(w / 2 + w * 0.2 * (math.cos(a) - 1)), int(h / 3 + h * 0.2 * math.sin(a)), w, h)
+                n += 1
+                time.sleep(max(0.0, n / 120 - (time.monotonic() - t_start)))
+            qmp.button(False)
+            m = wait_match(s, DRAG, timeout=30)
+            assert m, "no drag line"
+            print("qemu_run: lumiperf drag: %s frames in %s ms = %s fps, frame avg %s ms, max %s ms "
+                  "(pointer positions sent: %d)" % (m.group(1), m.group(2), m.group(3), m.group(4),
+                                                    m.group(5), n))
+            time.sleep(1.0)
+            cycle(2)
+            time.sleep(1.0)
+            mem2, _, _ = ps()
+            cycle(50)
+            time.sleep(2.0)
+            mem3, _, _ = ps()
+            print("qemu_run: lumiperf windows: lumi %.1f MiB with a terminal, %.1f MiB after 2 windows "
+                  "opened and closed, %.1f MiB after 50 more" % (mem0, mem2, mem3))
+            lumi_shot(reader, monitor, "perf-end")
+            monitor.command("system_powerdown")
+            wait_exit(proc)
+        except AssertionError as e:
+            if proc.poll() is None:
+                lumi_shot(reader, monitor, "failure")
+            return fail(str(e))
+        finally:
+            qmp.close()
+        return 0
+
+    r = run_once(args, work, {}, args.log, check, extra=extra)
+    if r == 0:
+        print("qemu_run: PASS (Lumi measured at %s)" % args.resolution)
+    return r
+
+
 def run_fps(args, work):
     """Frame rate of the graphical installer: the counter (F12) is turned
     on, then the pointer circles over the window (a USB tablet through
@@ -1886,7 +2023,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks", "fps", "lumi"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks", "fps", "lumi", "lumiperf"])
     p.add_argument("--resolution", default="1280x720", help="screen size for the gui mode")
     p.add_argument("--disk-type", choices=["virtio", "sata", "nvme"], default="virtio",
                    help="how the install disk is connected (gui mode)")

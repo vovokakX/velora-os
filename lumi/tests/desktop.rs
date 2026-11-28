@@ -284,3 +284,31 @@ fn every_frame_of_window_animations_matches_a_full_redraw() {
     p.wait(400);
     assert_eq!(p.a.titles().len(), 1);
 }
+
+/// A program in a terminal window crashes: its window closes, the crash
+/// is logged with its reason, the rest of the desktop goes on.
+#[test]
+fn a_crashing_program_closes_only_its_window() {
+    let mut r = Run::new(1024, 640);
+    r.login();
+    r.d.launch(AppId::Terminal, &mut r.h, &mut r.f);
+    r.d.launch(AppId::Files, &mut r.h, &mut r.f);
+    r.wait(300);
+    assert_eq!(r.titles().len(), 2);
+    // 128 + 14: a page fault.
+    r.h.terms[0].borrow_mut().exit = Some(142);
+    r.wait(400);
+    assert_eq!(r.titles(), vec!["Домашняя папка"]);
+    assert!(
+        r.h.log.iter().any(|l| l
+            == "lumi: program ended in Терминал (status 142, crashed: exception 14: page fault)"),
+        "{:?}",
+        r.h.log
+    );
+    // Still working: a new terminal opens and takes input.
+    r.d.launch(AppId::Terminal, &mut r.h, &mut r.f);
+    r.wait(300);
+    r.typed("ok");
+    r.wait(50);
+    assert_eq!(r.h.terms[1].borrow().written, b"ok");
+}

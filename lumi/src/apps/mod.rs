@@ -228,6 +228,10 @@ pub trait App {
     fn alive(&self) -> bool {
         true
     }
+    /// The exit status of its program once it has ended, if known.
+    fn exit_status(&self) -> Option<i64> {
+        None
+    }
     /// The window is closing.
     fn close(&mut self, _host: &mut dyn Host) {}
     /// The window got a new size; `r` is the content rectangle.

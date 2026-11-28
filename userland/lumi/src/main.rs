@@ -6,7 +6,9 @@
 //!
 //! Progress lines ("lumi: ready", "lumi: session user", ...) go to the
 //! console, which also reaches the serial port; the QEMU tests follow
-//! them.
+//! them. They also go to /var/log/lumi.log with the time, as do panics.
+//! If Lumi crashes, the kernel starts it again with `--crashed STATUS`
+//! (three crashes in a minute: the console login).
 
 #![no_std]
 #![no_main]
@@ -17,6 +19,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use velora_auth::{parse_passwd, shadow_hash, verify_password};
 use velora_lumi::apps::Assets;
 use velora_lumi::config::{self, Config};
@@ -32,6 +35,95 @@ use vlibc::{Errno, display, fs, io, println, process, term, time};
 vlibc::main!(main);
 
 const FONT_DIR: &str = "/usr/share/fonts";
+const LOG_FILE: &str = "/var/log/lumi.log";
+const LOG_OLD: &str = "/var/log/lumi.log.1";
+/// The log starts again (the old one kept as lumi.log.1) past this size.
+const LOG_MAX: u64 = 256 * 1024;
+/// Descriptor of the log, `u64::MAX` if it could not be opened.
+static LOG_FD: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Opens the log for appending while Lumi still runs as root. The
+/// descriptor stays open after login; programs Lumi starts get only
+/// descriptors 0, 1 and 2.
+fn open_log() {
+    let _ = fs::mkdir("/var", 0o755);
+    let _ = fs::mkdir("/var/log", 0o755);
+    if fs::stat(LOG_FILE).is_ok_and(|s| s.size > LOG_MAX) {
+        let _ = fs::remove(LOG_OLD);
+        let _ = fs::rename(LOG_FILE, LOG_OLD);
+    }
+    let fl = fs::flags::WRITE | fs::flags::CREATE | fs::flags::APPEND;
+    if let Ok(f) = fs::File::open_with(LOG_FILE, fl, 0o644) {
+        LOG_FD.store(f.fd(), Ordering::Relaxed);
+        core::mem::forget(f);
+    }
+}
+
+/// A line of the log: "2026-11-28 12:42:01 UTC <text>".
+fn log_file(text: &str) {
+    let fd = LOG_FD.load(Ordering::Relaxed);
+    if fd == u64::MAX {
+        return;
+    }
+    let mut buf = Line::default();
+    if let Ok(t) = time::realtime() {
+        let l = velora_lumi::tz::local("UTC", t.as_secs() as i64);
+        let _ = core::fmt::Write::write_fmt(
+            &mut buf,
+            format_args!(
+                "{}-{:02}-{:02} {:02}:{:02}:{:02} UTC ",
+                l.year, l.month, l.day, l.hour, l.minute, l.second
+            ),
+        );
+    }
+    let _ = core::fmt::Write::write_str(&mut buf, text);
+    let _ = core::fmt::Write::write_str(&mut buf, "\n");
+    let _ = io::write_all(fd, buf.bytes());
+}
+
+/// A line built without the heap (also for panics).
+struct Line {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl Default for Line {
+    fn default() -> Self {
+        Line {
+            buf: [0; 512],
+            len: 0,
+        }
+    }
+}
+
+impl Line {
+    fn bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl core::fmt::Write for Line {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        // Keep room for the newline; cut long text at a char boundary.
+        let room = self.buf.len() - 1 - self.len;
+        let mut n = s.len().min(room);
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        Ok(())
+    }
+}
+
+/// Writes a panic to the log before Lumi ends (the kernel starts it
+/// again).
+fn panic_to_log(info: &core::panic::PanicInfo) {
+    let mut msg = Line::default();
+    let _ = core::fmt::Write::write_fmt(&mut msg, format_args!("lumi: panic: {}", info));
+    let text = core::str::from_utf8(msg.bytes()).unwrap_or("lumi: panic");
+    log_file(text);
+}
 /// Time between frames while something moves (60 per second), in us.
 const FRAME_US: u64 = 16_667;
 
@@ -48,6 +140,7 @@ struct PtyTerm {
     master: u64,
     pid: u64,
     done: bool,
+    status: Option<i64>,
 }
 
 impl Term for PtyTerm {
@@ -58,7 +151,7 @@ impl Term for PtyTerm {
         match io::read(self.master, buf) {
             Ok(0) => {
                 self.done = true;
-                let _ = process::wait(self.pid);
+                self.status = process::wait(self.pid).ok();
                 TermRead::Closed
             }
             Ok(n) => TermRead::Data(n),
@@ -78,8 +171,12 @@ impl Term for PtyTerm {
         if !self.done {
             let _ = process::kill(self.pid, 130);
             self.done = true;
-            let _ = process::wait(self.pid);
+            self.status = process::wait(self.pid).ok();
         }
+    }
+
+    fn status(&self) -> Option<i64> {
+        self.status
     }
 }
 
@@ -163,6 +260,7 @@ impl Host for System {
                 master,
                 pid,
                 done: false,
+                status: None,
             })),
             Err(e) => {
                 let _ = fs::close(master);
@@ -264,6 +362,7 @@ impl Host for System {
 
     fn log(&mut self, line: &str) {
         println!("{}", line);
+        log_file(line);
     }
 }
 
@@ -385,6 +484,24 @@ impl Stats {
 
 fn main() -> i32 {
     let t0 = us();
+    open_log();
+    vlibc::set_panic_hook(panic_to_log);
+    let args = vlibc::env::args();
+    let crashed = args
+        .iter()
+        .position(|a| a == "--crashed")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<i64>().ok());
+    match crashed {
+        Some(st) => {
+            let why =
+                velora_lumi::host::crash_reason(st).unwrap_or_else(|| format!("status {}", st));
+            let line = format!("lumi: started again after a crash (status {}: {})", st, why);
+            println!("{}", line);
+            log_file(&line);
+        }
+        None => log_file("lumi: started"),
+    }
     let cfg = load_config();
     if cfg.session == "console" {
         println!("lumi: session=console in {}", config::SYSTEM_FILE);
@@ -489,8 +606,10 @@ fn main() -> i32 {
                 process::yield_now();
             }
         } else {
+            // Nothing moves: sleep until input, terminal output or the
+            // next timer (the clock's minute at the latest).
             let wake = d.wake_at() * 1000;
-            let ms = (wake.saturating_sub(now) / 1000).clamp(1, 1000);
+            let ms = (wake.saturating_sub(now) / 1000).clamp(1, 60_000);
             display::input_wait(ms);
         }
     }

@@ -16,6 +16,8 @@ use core::cell::RefCell;
 pub struct TermLog {
     pub written: Vec<u8>,
     pub killed: bool,
+    /// Set by a test: the program ends by itself with this status.
+    pub exit: Option<i64>,
 }
 
 pub struct FakeHost {
@@ -104,7 +106,7 @@ struct FakeTerm {
 
 impl Term for FakeTerm {
     fn read(&mut self, buf: &mut [u8]) -> TermRead {
-        if self.log.borrow().killed {
+        if self.log.borrow().killed || self.log.borrow().exit.is_some() {
             return TermRead::Closed;
         }
         if self.pending.is_empty() {
@@ -126,6 +128,10 @@ impl Term for FakeTerm {
 
     fn kill(&mut self) {
         self.log.borrow_mut().killed = true;
+    }
+
+    fn status(&self) -> Option<i64> {
+        self.log.borrow().exit
     }
 }
 

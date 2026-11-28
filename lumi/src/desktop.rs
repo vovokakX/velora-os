@@ -1621,7 +1621,14 @@ impl Desktop {
             }
         }
         if self.mode == Mode::Session && now >= self.net_next {
-            self.net_next = now + 3000;
+            // Often while there is no address yet (DHCP), else now and
+            // then: nothing tells Lumi when the network changes.
+            self.net_next = now
+                + if self.net.present && self.net.ip.is_none() {
+                    3000
+                } else {
+                    30_000
+                };
             let n = host.net();
             if n != self.net {
                 self.net = n;
@@ -1653,11 +1660,24 @@ impl Desktop {
                 }
             }
             if !self.windows[i].closing && !self.windows[i].app.alive() {
-                let id = self.windows[i].id;
-                host.log(&alloc::format!(
-                    "lumi: program ended in {}",
-                    self.windows[i].title
-                ));
+                // The program ended or crashed: only its window goes.
+                let w = &self.windows[i];
+                let id = w.id;
+                let line = match w.app.exit_status() {
+                    Some(st) => match crate::host::crash_reason(st) {
+                        Some(why) => alloc::format!(
+                            "lumi: program ended in {} (status {}, crashed: {})",
+                            w.title,
+                            st,
+                            why
+                        ),
+                        None => {
+                            alloc::format!("lumi: program ended in {} (status {})", w.title, st)
+                        }
+                    },
+                    None => alloc::format!("lumi: program ended in {}", w.title),
+                };
+                host.log(&line);
                 self.close_window(id, host);
             }
             if !self.windows[i].closing
@@ -1708,6 +1728,9 @@ impl Desktop {
         }
         if let Some(at) = self.overlay_wake() {
             t = t.min(at);
+        }
+        if self.mode == Mode::Session && self.net.present && self.net.ip.is_none() {
+            t = t.min(self.net_next);
         }
         t.max(self.now + 1)
     }
