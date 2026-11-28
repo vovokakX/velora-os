@@ -51,6 +51,12 @@ pub enum Icon {
     FolderPlus,
     Copy,
     Disk,
+    /// A monitor on a stand.
+    Display,
+    /// A window with its title bar.
+    Window,
+    /// The screen with a bar at the bottom (the panel).
+    Dock,
 }
 
 /// Point (u, v) of a 24-unit icon grid, in 1/256 pixel.
@@ -340,6 +346,30 @@ pub fn draw(c: &mut Canvas, icon: Icon, x: i32, y: i32, size: i32, color: Color,
             let (cx, cy) = g.p(10, 10);
             c.stroke_circle_fx(cx, cy, g.len(6), w, color);
             line(c, g.p(15, 15), g.p(21, 21));
+        }
+        Icon::Display => {
+            let pts = [g.p(3, 4), g.p(21, 4), g.p(21, 16), g.p(3, 16)];
+            for i in 0..4 {
+                line(c, pts[i], pts[(i + 1) % 4]);
+            }
+            line(c, g.p(12, 16), g.p(12, 20));
+            line(c, g.p(8, 20), g.p(16, 20));
+        }
+        Icon::Window => {
+            let pts = [g.p(3, 5), g.p(21, 5), g.p(21, 19), g.p(3, 19)];
+            for i in 0..4 {
+                line(c, pts[i], pts[(i + 1) % 4]);
+            }
+            line(c, g.p(3, 9), g.p(21, 9));
+            let (dx, dy) = g.p(17, 7);
+            c.fill_circle_fx(dx, dy, w * 6 / 10, color);
+        }
+        Icon::Dock => {
+            let pts = [g.p(3, 4), g.p(21, 4), g.p(21, 20), g.p(3, 20)];
+            for i in 0..4 {
+                line(c, pts[i], pts[(i + 1) % 4]);
+            }
+            line(c, g.p(8, 16), g.p(16, 16));
         }
         Icon::Close => {
             line(c, g.p(6, 6), g.p(18, 18));
