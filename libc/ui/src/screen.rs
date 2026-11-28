@@ -9,6 +9,11 @@
 //! a frame shows whole (double buffering) without the cost of copying the
 //! whole screen. The mouse pointer is drawn on the way to video memory and
 //! never into the canvas, so moving it costs two small copies.
+//!
+//! Reading input moves the pointer position but does not draw it: the
+//! program shows it once a frame ([`Screen::present`] or
+//! [`Screen::show_pointer`]) where the last report put it, and every
+//! movement read in between adds up.
 
 use crate::canvas::Canvas;
 use crate::geom::Rect;
@@ -36,6 +41,8 @@ pub struct Screen {
     pub speed: i32,
     /// Times the pointer was moved on the screen (for frame counters).
     pub pointer_moves: u32,
+    /// Pointer reports read from the device (for frame counters).
+    pub pointer_reports: u32,
     buttons: u8,
     pointer: Option<(Image, i32, i32)>,
     /// Where the pointer is on the screen now.
@@ -68,6 +75,7 @@ impl Screen {
             pointer_y: h as i32 / 2,
             speed: 256,
             pointer_moves: 0,
+            pointer_reports: 0,
             buttons: 0,
             pointer: None,
             shown: None,
@@ -186,6 +194,7 @@ impl Screen {
         }
         let (mut dx, mut dy) = (0i32, 0i32);
         let mut moved = false;
+        self.pointer_reports = self.pointer_reports.wrapping_add(packets.len() as u32);
         for (buttons, pdx, pdy, wheel, abs) in packets {
             if let Some((ax, ay)) = abs {
                 let (w, h) = (self.width() as i64, self.height() as i64);
@@ -218,7 +227,8 @@ impl Screen {
         out
     }
 
-    /// Applies the movement gathered so far and reports the position.
+    /// Applies the movement gathered so far and reports the position (the
+    /// pointer is drawn there by the next frame).
     fn flush_motion(&mut self, dx: &mut i32, dy: &mut i32, moved: &mut bool, out: &mut Vec<Event>) {
         if *dx != 0 || *dy != 0 {
             self.pointer_x = (self.pointer_x + *dx * self.speed / 256).clamp(0, self.width() - 1);
@@ -229,13 +239,21 @@ impl Screen {
         }
         if *moved {
             *moved = false;
-            self.pointer_moves = self.pointer_moves.wrapping_add(1);
             out.push(Event::MouseMove {
                 x: self.pointer_x,
                 y: self.pointer_y,
             });
-            self.present(Rect::default());
         }
+    }
+
+    /// Draws the pointer where input put it, if it is shown elsewhere;
+    /// true when it moved.
+    pub fn show_pointer(&mut self) -> bool {
+        if self.pointer_rect() == self.shown {
+            return false;
+        }
+        self.present(Rect::default());
+        true
     }
 
     /// Shows `dirty` of the canvas (only the pixels that changed are
@@ -259,6 +277,9 @@ impl Screen {
         }
         if let Some(r) = now {
             self.draw_pointer(r.intersect(bounds));
+        }
+        if now != self.shown {
+            self.pointer_moves = self.pointer_moves.wrapping_add(1);
         }
         self.shown = now;
     }
