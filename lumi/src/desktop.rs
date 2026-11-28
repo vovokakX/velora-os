@@ -1773,8 +1773,18 @@ impl Desktop {
                     _ => {}
                 }
             }
+            if !self.windows[i].closing
+                && let Some(changed) = self.render_window(i, host, fonts, &mut actions)
+            {
+                let w = &self.windows[i];
+                if w.anim.is_none() && !w.minimized {
+                    let r = changed.offset(w.rect.x, w.rect.y);
+                    self.add_damage(r);
+                }
+            }
             if !self.windows[i].closing && !self.windows[i].app.alive() {
-                // The program ended or crashed: only its window goes.
+                // The program ended or crashed (seen while reading its output
+                // just now): only its window goes.
                 let w = &self.windows[i];
                 let id = w.id;
                 let line = match w.app.exit_status() {
@@ -1793,15 +1803,6 @@ impl Desktop {
                 };
                 host.log(&line);
                 self.close_window(id, host);
-            }
-            if !self.windows[i].closing
-                && let Some(changed) = self.render_window(i, host, fonts, &mut actions)
-            {
-                let w = &self.windows[i];
-                if w.anim.is_none() && !w.minimized {
-                    let r = changed.offset(w.rect.x, w.rect.y);
-                    self.add_damage(r);
-                }
             }
             i += 1;
         }

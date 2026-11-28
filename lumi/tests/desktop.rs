@@ -297,6 +297,10 @@ fn a_crashing_program_closes_only_its_window() {
     assert_eq!(r.titles().len(), 2);
     // 128 + 14: a page fault.
     r.h.terms[0].borrow_mut().exit = Some(142);
+    // At rest Lumi draws no more frames: the frame that reads the end
+    // must already close the window.
+    r.step(&[]);
+    assert_eq!(r.titles(), vec!["Домашняя папка"]);
     r.wait(400);
     assert_eq!(r.titles(), vec!["Домашняя папка"]);
     assert!(
