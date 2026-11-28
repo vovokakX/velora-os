@@ -1399,7 +1399,8 @@ def last_areas(reader):
 
 def run_lumi(args, work):
     """The Live system with the Lumi desktop (key 3 in the start menu):
-    the login screen, the app menu, a terminal running vsh, the power
+    the login screen, the app menu, a terminal running vsh, Plume,
+    /var/log/lumi.log, Lumi started again after a crash, the power
     button. Prints Lumi's memory use at the login screen and on the empty
     desktop; screenshots go to build/logs/lumi-*.png."""
     w, h = (int(v) for v in args.resolution.split("x"))
@@ -1430,6 +1431,23 @@ def run_lumi(args, work):
             # Plume asks about the unsaved text: n leaves without saving.
             s.keys(["n"])
             assert s.wait("lumi: program ended in Plume", timeout=30), "Plume did not end"
+            # The log, then Lumi "crashes" (killed with the status of a
+            # page fault): the kernel starts it again at the login screen.
+            s.keys(["ctrl-alt-t"])
+            assert s.wait("lumi: open ", timeout=30), "Ctrl+Alt+T did not open a terminal"
+            time.sleep(2.0)
+            s.type("cat /var/log/lumi.log > /dev/console\n")
+            assert s.wait("UTC lumi: session user", timeout=30), "no session line in /var/log/lumi.log"
+            s.type("ps > /dev/console\n")
+            m = wait_match(s, r"^\s*(\d+)\s+\d+\s+\S+\s+\d+\s+.*running\s+lumi\s*$", timeout=30)
+            assert m, "no lumi in ps"
+            s.type("kill -s 142 %s\n" % m.group(1))
+            assert s.wait("lumi crashed (status 142); starting it again", timeout=30), \
+                "the kernel did not start Lumi again"
+            assert s.wait("lumi: started again after a crash (status 142: exception 14: page fault)",
+                          timeout=60), "Lumi did not note the crash"
+            assert s.wait("lumi: login screen", timeout=60), "no login screen after the crash"
+            lumi_shot(reader, monitor, "after-crash")
             monitor.command("system_powerdown")
             wait_exit(proc)
         except AssertionError as e:
@@ -1534,6 +1552,8 @@ def run_lumiperf(args, work):
             # Drag the maximized terminal by its title bar in circles.
             s.keys(["meta_l-up"])
             time.sleep(1.5)
+            _, td0, _ = ps()
+            time.sleep(1.0)
             qmp.move(w // 2, 12, w, h)
             time.sleep(0.3)
             qmp.button(True)
@@ -1547,9 +1567,11 @@ def run_lumiperf(args, work):
             qmp.button(False)
             m = wait_match(s, DRAG, timeout=30)
             assert m, "no drag line"
+            _, td1, _ = ps()
             print("qemu_run: lumiperf drag: %s frames in %s ms = %s fps, frame avg %s ms, max %s ms "
-                  "(pointer positions sent: %d)" % (m.group(1), m.group(2), m.group(3), m.group(4),
-                                                    m.group(5), n))
+                  "(pointer positions sent: %d); processor %.2f s from just before to just after"
+                  % (m.group(1), m.group(2), m.group(3), m.group(4), m.group(5), n,
+                     (td1 - td0) / 100))
             time.sleep(1.0)
             cycle(2)
             time.sleep(1.0)

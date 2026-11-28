@@ -1661,3 +1661,142 @@ lose sharpness. PNGs from `assets/wallpapers` go to `/usr/share/wallpapers`
 (and with it to the installed system) and appear in the choice together with
 `~/Pictures`. They are scaled to fill: the middle is kept, the extra edges
 are cut; down by area averaging, up bilinearly.
+
+## D57. Где окно было на экране / Where a window was on the screen
+
+**2026-11-28**
+
+**RU.** Каждое окно помнит, где последний кадр показал его вместе с тенью
+(`Win::drawn`), и был ли у него фокус (тень темнее). После ввода, анимаций и
+действий приложений `sync_windows` сравнивает это с тем, где окно будет
+сейчас, и отмечает к перерисовке старое и новое место; при закрытии —
+место, где окно было видно в последний раз. Раньше «прошлое» место
+анимации считалось по времени нового кадра, то есть совпадало с новым, и
+кольцо между кадрами закрывающегося или сворачивающегося окна оставалось на
+рабочем столе («призраки»); сдвиг тени вниз тоже выходил за отмеченную
+область. Тест на хосте ведёт два рабочих стола одним вводом — один рисует
+по областям, другой целиком — и сравнивает их попиксельно после каждого
+кадра. Ctrl+Alt+D закрашивает каждую перерисованную область цветом кадра:
+в простое картинка не меняется, при перетаскивании видно ровно старое и
+новое место окна.
+
+**EN.** Every window remembers where the last frame showed it with its
+shadow (`Win::drawn`) and whether it had the focus (the shadow is darker).
+After input, animations and app actions `sync_windows` compares this with
+where the window is now and marks the old and the new place for drawing;
+when a window closes, the place where it was last seen. Before, the
+"previous" place of an animation was computed at the new frame's time, so
+it equalled the new one, and the ring between frames of a closing or
+minimizing window stayed on the desktop ("ghosts"); the shadow's downward
+offset was outside the marked area too. A host test runs two desktops with
+the same input, one drawing by areas and one drawing everything, and
+compares them pixel by pixel after every frame. Ctrl+Alt+D tints every
+redrawn area with the frame's colour: at rest the picture stays the same,
+while dragging exactly the old and new place of the window are drawn.
+
+## D58. Покой без кадров, не больше 60 кадров в секунду / Rest without frames, at most 60 frames a second
+
+**2026-11-28**
+
+**RU.** В покое Lumi ждёт ввода, вывода псевдотерминала или ближайшего
+таймера (минута часов, анимация) — раньше он просыпался не реже раза в
+секунду. Курсор терминала мигает только в окне с фокусом и перестаёт через
+10 с после ввода или вывода, как в GNOME. Сеть проверяется раз в 3 с, пока
+ждёт адреса, потом раз в 30 с. Кадры идут не чаще чем раз в 16,7 мс: ввод
+между кадрами сразу двигает указатель и ждёт следующего кадра, который
+берёт его весь. Раньше каждый пакет ввода давал кадр, а ввод, пришедший во
+время рисования, — ещё один, и окно под мышью с 120 отчётами в секунду
+собиралось до двух раз на отчёт. Ядро тикает 100 раз в секунду, поэтому
+ожидание следующего кадра — сон до тика, пока он помещается, потом
+`yield`. Время процессора по процессам (`ProcEntry::cpu_ticks`, столбец
+TIME в `ps`) — тики таймера потоков процесса.
+
+**EN.** At rest Lumi waits for input, pseudo-terminal output or the next
+timer (the clock's minute, an animation); before, it woke at least once a
+second. The terminal's cursor blinks only in the focused window and stops
+10 s after input or output, as in GNOME. The network is checked every 3 s
+while it waits for an address, then every 30 s. Frames come at most every
+16.7 ms: input between frames moves the pointer at once and waits for the
+next frame, which takes all of it. Before, every burst of input gave a
+frame and input that came while drawing another one, so a window under a
+mouse with 120 reports a second was composed up to twice per report. The
+kernel ticks 100 times a second, so waiting for the next frame sleeps to the
+tick while that fits, then yields. Processor time per process
+(`ProcEntry::cpu_ticks`, the TIME column of `ps`) is the timer ticks of its
+threads.
+
+## D59. Устойчивость Lumi / Resilience of Lumi
+
+**2026-11-28**
+
+**RU.** Программы терминала — отдельные процессы: если такая программа
+падает (статус 101 — паника, 128 + вектор — исключение процессора),
+закрывается только её окно, а причина пишется в журнал. Встроенные
+приложения работают в процессе Lumi (D52), поэтому их паника — падение
+Lumi. Ядро запускает упавший Lumi снова с `--crashed STATUS` (экран
+входа); после трёх падений за минуту — консольный вход, чтобы не было
+цикла. Статус 0 — выход из сеанса, 2 — нет экрана или шрифтов. Журнал
+`/var/log/lumi.log` (в Live-системе `/var` в памяти, установщик создаёт
+`/var/log`) Lumi открывает ещё от root и держит открытым после входа;
+программы получают только дескрипторы 0–2. Паника пишется туда через
+`vlibc::set_panic_hook` без кучи. Больше 256 КиБ — старый журнал
+становится `lumi.log.1`. Пароль меняет `passwd --serve USER`: Lumi
+запускает его от root до входа и говорит с ним через канал; он меняет
+только пароль этого пользователя и только по верному старому — как
+setuid-программа `passwd` в других системах. Утечки проверяет тест на
+хосте со считающим аллокатором: 50 окон всех приложений возвращают память
+до байта.
+
+**EN.** Terminal programs are separate processes: when one crashes (status
+101: a panic, 128 + vector: a processor exception) only its window closes
+and the reason goes to the log. Built-in apps run in the process of Lumi
+(D52), so their panic is a crash of Lumi. The kernel starts a crashed Lumi
+again with `--crashed STATUS` (the login screen); after three crashes in a
+minute, the console login, so there is no loop. Status 0 is a logout, 2 no
+screen or fonts. Lumi opens the log `/var/log/lumi.log` (in the Live system
+`/var` is in memory; the installer creates `/var/log`) while still root and
+keeps it open after login; programs get only descriptors 0–2. Panics are
+written there through `vlibc::set_panic_hook` without the heap. Past 256 KiB
+the old log becomes `lumi.log.1`. `passwd --serve USER` changes the
+password: Lumi starts it as root before login and talks to it through a
+pipe; it changes only this user's password and only with the right old one,
+like a setuid `passwd` elsewhere. A host test with a counting allocator
+checks leaks: 50 windows of every app give back their memory to the byte.
+
+## D60. Настройки в ~/.config/lumi и скрытие панели / Settings in ~/.config/lumi and panel hiding
+
+**2026-11-28**
+
+**RU.** Настройки пользователя — `~/.config/lumi/settings.conf` (старый
+`~/.config/velora/desktop.conf` читается, если нового нет), формат
+`ключ=значение`, как у установщика; его ключи да/нет читаются в новом виде,
+незнакомые ключи и комментарии сохраняются. Всё применяется сразу, файл
+пишется через 0,4 с после последнего изменения (ползунок не пишет его на
+каждом шаге). Масштаб интерфейса меняется без перезапуска: окна получают
+новые виджеты и раскладываются заново. Затемнение и размытие обоев
+считаются один раз при смене (размытие — усреднением в 2–12 раз и
+билинейным увеличением); исходная картинка хранится рядом, только пока они
+включены. Панель: «умное скрытие» (по умолчанию) прячет её, когда окно
+заходит на её место, «автоскрытие» — всегда, «всегда видна» — никогда; при
+скрытой панели окнам доступен весь экран. Панель уезжает через 0,5 с после
+ухода указателя и возвращается у нижнего края (полоса около 40 точек под
+ней), по Super и пока открыто меню. NOT IMPLEMENTED: смена раскладок
+клавиатуры (ядро знает английскую и русскую с Alt+Shift), свои сочетания
+клавиш, смена разрешения экрана (его выбирает прошивка), звук.
+
+**EN.** The user's settings are `~/.config/lumi/settings.conf` (the old
+`~/.config/velora/desktop.conf` is read if there is no new one), in the
+`key=value` form of the installer; its yes/no keys are read in the new form,
+unknown keys and comments are kept. Everything applies at once, and the
+file is written 0.4 s after the last change (a slider does not write it at
+every step). The interface scale changes without a restart: windows get new
+widgets and lay out again. Wallpaper dimming and blur are computed once per
+change (blur by averaging down 2 to 12 times and scaling up bilinearly); the
+original picture is kept beside it only while they are on. The panel:
+"smart hiding" (the default) hides it when a window comes onto its place,
+"autohide" always, "always shown" never; with a hiding panel windows get the
+whole screen. The panel slides away 0.5 s after the pointer leaves and comes
+back at the bottom edge (a strip of about 40 points under it), with Super
+and while a menu is open. NOT IMPLEMENTED: changing keyboard layouts (the
+kernel knows English and Russian with Alt+Shift), shortcuts of one's own,
+changing the screen resolution (the firmware chooses it), sound.

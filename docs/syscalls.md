@@ -60,7 +60,7 @@
 | 29 | `statfs(path, path_len, out)` | пишет `FsStat`: размер блока, блоки, свободные блоки, inode, тип ФС, только чтение | `ENOENT`, `EFAULT` |
 | 32 | `getcwd(buf, len)` | пишет рабочий каталог (без NUL), возвращает длину | `EINVAL` (мал буфер), `EFAULT` |
 | 33 | `getuid()` | `uid | gid << 32` | — |
-| 34 | `proclist(buf, len)` | записи `ProcEntry` (72 байта): pid, родитель, uid, состояние, потоки, память, имя | `EFAULT` |
+| 34 | `proclist(buf, len)` | записи `ProcEntry` (72 байта): pid, родитель, uid, состояние, потоки, время процессора (тики таймера, 100 в секунду), память, имя | `EFAULT` |
 | 35 | `chmod(path, path_len, mode)` | права файла; владелец или root | `EPERM`, `EROFS`, `ENOENT` |
 | 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
@@ -262,7 +262,7 @@ first), 18 `dup2(old, new)`, 19 `chdir(path, len)`, 20 `kill(pid, status)`
 `SysInfo`), 23 `reboot(cmd)` (root only: 0 restart, 1 power off via ACPI S5;
 file system data is synced first), 24 `setuid(uid, gid)` (root only, one
 way), 32 `getcwd(buf, len)`, 33 `getuid()` (`uid | gid << 32`), 34
-`proclist(buf, len)` (72-byte `ProcEntry` records), 35 `chmod`, 36 `chown`
+`proclist(buf, len)` (72-byte `ProcEntry` records with the processor time in timer ticks), 35 `chmod`, 36 `chown`
 (root only), 37 `dup(fd)`, 38 `tty(op, arg)` (0 mode: `RAW` 1, `NO_ECHO` 2;
 1 the process Ctrl+C ends; 2 size `cols << 32 | rows`; 3 cell size in
 pixels `width << 32 | height`, `ENODEV` without a screen). The console has a
