@@ -149,12 +149,21 @@ else
     DISP="sdl"
 fi
 
+# Sound: Intel HDA; DirectSound on Windows, PulseAudio or ALSA through
+# QEMU's default elsewhere.
+if [ "$WINDOWS" = 1 ]; then
+    AUDIO=(-audiodev dsound,id=snd0)
+else
+    AUDIO=(-audiodev "${VELORA_AUDIO:-pa},id=snd0")
+fi
+AUDIO+=(-device intel-hda -device hda-duplex,audiodev=snd0)
+
 ARGS=(-machine q35 -m 1G -smp 4 "${ACCEL[@]}"
     -drive "if=pflash,format=raw,readonly=on,file=$CODE"
     -drive "if=pflash,format=raw,file=build/run-vars.fd"
     -drive "if=none,id=disk0,format=raw,file=build/run-disk.img" "${DISK_DEV[@]}"
     -netdev user,id=n0 -device e1000,netdev=n0
-    -device qemu-xhci -device usb-kbd -device usb-tablet
+    -device qemu-xhci -device usb-kbd -device usb-tablet "${AUDIO[@]}"
     -vga none -device "VGA,xres=$W,yres=$H,vgamem_mb=64"
     -display "$DISP" -serial file:build/run-serial.log -no-reboot)
 [ "$FULL" = 1 ] && ARGS+=(-full-screen)
