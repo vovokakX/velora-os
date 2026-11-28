@@ -6,7 +6,7 @@
 use crate::apps::tr;
 use crate::desktop::{Desktop, Exit};
 use crate::host::{Host, Power, UserInfo};
-use crate::{gfx, tz};
+use crate::tz;
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_ui::anim;
@@ -246,7 +246,7 @@ impl Desktop {
         let t = self.theme;
         let ru = self.ru();
         let area = c.frame();
-        gfx::copy(c, &self.frost, area);
+        self.frost.copy_to(c, area);
         c.fill_rect(area, if t.dark { 0x38000000 } else { 0x30000000 });
         let white = 0xffffffff;
         let soft = 0xd0ffffff;

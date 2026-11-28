@@ -49,6 +49,8 @@ pub struct Config {
     pub region: String,
     /// `ru` or `en` (from the system language).
     pub language: String,
+    /// `lumi` or `console` (the console login instead of Lumi).
+    pub session: String,
     /// The lines of the file it was read from (to keep other keys).
     lines: Vec<String>,
 }
@@ -66,6 +68,7 @@ impl Default for Config {
             accent: Some(0),
             region: String::from("UA"),
             language: String::from("ru"),
+            session: String::from("lumi"),
             lines: Vec::new(),
         }
     }
@@ -119,6 +122,7 @@ impl Config {
                     }
                 }
                 "region" if !v.is_empty() => self.region = String::from(v),
+                "session" if !v.is_empty() => self.session = String::from(v),
                 _ => {}
             }
         }

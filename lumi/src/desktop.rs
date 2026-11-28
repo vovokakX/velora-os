@@ -170,7 +170,6 @@ pub(crate) struct Popover {
 pub(crate) struct Switcher {
     pub(crate) order: Vec<u32>,
     pub(crate) sel: usize,
-    pub(crate) t0: u64,
 }
 
 pub struct Desktop {
@@ -181,7 +180,7 @@ pub struct Desktop {
     pub theme: Theme,
     pub assets: Assets,
     pub(crate) wall: Canvas,
-    pub(crate) frost: Canvas,
+    pub(crate) frost: wallpaper::Frost,
     wall_key: (String, bool),
     pub mode: Mode,
     pub(crate) windows: Vec<Win>,
@@ -248,7 +247,7 @@ impl Desktop {
             theme,
             assets,
             wall: Canvas::new(1, 1),
-            frost: Canvas::new(1, 1),
+            frost: wallpaper::frost(&Canvas::new(8, 8), 0),
             wall_key: (String::new(), false),
             mode: Mode::Login,
             windows: Vec::new(),
@@ -1072,7 +1071,7 @@ impl Desktop {
 
     // --- input ------------------------------------------------------------
 
-    fn to_window(&mut self, id: u32, ev: Event) {
+    fn send_to_window(&mut self, id: u32, ev: Event) {
         if let Some(i) = self.win_index(id) {
             let r = self.windows[i].rect;
             let ev = match ev {
@@ -1338,7 +1337,7 @@ impl Desktop {
             && let Some(old) = self.hover_win
         {
             // Leaving a window: its widgets lose the hover.
-            self.to_window(
+            self.send_to_window(
                 old,
                 Event::MouseMove {
                     x: -10000,
@@ -1348,7 +1347,7 @@ impl Desktop {
         }
         self.hover_win = target;
         if let Some(id) = target {
-            self.to_window(id, Event::MouseMove { x, y });
+            self.send_to_window(id, Event::MouseMove { x, y });
         }
     }
 
@@ -1400,8 +1399,8 @@ impl Desktop {
             }
             _ => {
                 self.capture = Some(id);
-                self.to_window(id, Event::MouseMove { x, y });
-                self.to_window(id, Event::MouseButton { down: true });
+                self.send_to_window(id, Event::MouseMove { x, y });
+                self.send_to_window(id, Event::MouseButton { down: true });
             }
         }
     }
@@ -1444,7 +1443,7 @@ impl Desktop {
             }
         }
         if let Some(id) = self.capture.take() {
-            self.to_window(id, Event::MouseButton { down: false });
+            self.send_to_window(id, Event::MouseButton { down: false });
         }
     }
 
@@ -1503,7 +1502,7 @@ impl Desktop {
                 Event::Wheel(_) | Event::RightButton { .. } => {
                     let (x, y) = self.mouse;
                     if let Some((id, Edge::Resize(0), None)) = self.hit(x, y) {
-                        self.to_window(id, *ev);
+                        self.send_to_window(id, *ev);
                     }
                 }
                 Event::Key {
@@ -1511,7 +1510,7 @@ impl Desktop {
                 } if self.popover.is_some() => self.close_popover(),
                 Event::Key { .. } | Event::Chord { .. } => {
                     if let Some(id) = self.focused_window() {
-                        self.to_window(id, *ev);
+                        self.send_to_window(id, *ev);
                     }
                 }
                 _ => {}
@@ -1678,15 +1677,13 @@ impl Desktop {
         rects.sort_by_key(|r| r.y);
         for r in rects {
             let mut r = r;
-            loop {
-                let Some(i) = merged.iter().position(|m| {
-                    let u = m.union(r);
-                    let ua = u.w as i64 * u.h as i64;
-                    let sum = m.w as i64 * m.h as i64 + r.w as i64 * r.h as i64;
-                    !m.intersect(r).is_empty() || ua <= sum * 5 / 4
-                }) else {
-                    break;
-                };
+            // Join with any area it overlaps or nearly fills a box with.
+            while let Some(i) = merged.iter().position(|m| {
+                let u = m.union(r);
+                let ua = u.w as i64 * u.h as i64;
+                let sum = m.w as i64 * m.h as i64 + r.w as i64 * r.h as i64;
+                !m.intersect(r).is_empty() || ua <= sum * 5 / 4
+            }) {
                 r = merged.remove(i).union(r);
             }
             merged.push(r);
@@ -1743,7 +1740,7 @@ impl Desktop {
         let area = c.frame();
         let menu_full = self.launcher_progress() >= 1000;
         if menu_full {
-            gfx::copy(c, &self.frost, area);
+            self.frost.copy_to(c, area);
         } else {
             gfx::copy(c, &self.wall, area);
             self.draw_windows(c);
@@ -1795,7 +1792,7 @@ impl Desktop {
         let Some(s) = self.snap else {
             return;
         };
-        let a = self.tw.value(0x5000, 255, self.dur(160) as u32) as u32;
+        let a = self.tw.value(0x5000, 255, self.dur(160)) as u32;
         let r = s.inset(self.s(8));
         let rad = self.radius();
         c.fill_rrect(r, rad, fade(self.theme.accent, (a * 60 / 255) as u8));

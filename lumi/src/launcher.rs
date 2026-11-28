@@ -6,7 +6,6 @@
 
 use crate::apps::{self, AppId, MENU, tr};
 use crate::desktop::Desktop;
-use crate::gfx;
 use crate::host::Host;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -220,7 +219,7 @@ impl Desktop {
         let area = c.frame();
         let t = self.theme;
         let a = p * 255 / 1000;
-        gfx::mix(c, &self.frost, area, a);
+        self.frost.mix_to(c, area, a);
         let dim = if t.dark { 0x30000000u32 } else { 0x20000000 };
         c.fill_rect(area, fade(dim, (((dim >> 24) * a) / 255) as u8));
         let ru = self.ru();

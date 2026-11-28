@@ -4,7 +4,7 @@
 
 use crate::apps::{self, AppId, PINNED, tr};
 use crate::desktop::{Desktop, Exit, PopKind, Popover, Switcher};
-use crate::gfx::{self, Corner};
+use crate::gfx::Corner;
 use crate::host::{Host, Power};
 use crate::tz;
 use alloc::string::String;
@@ -27,7 +27,6 @@ pub(crate) enum Item {
 
 /// Tween keys.
 const HOVER: u64 = 0x100;
-const APPEAR: u64 = 0x300;
 const TIP: u64 = 0x400;
 const POP: u64 = 0x500;
 const POP_HOVER: u64 = 0x600;
@@ -223,7 +222,7 @@ impl Desktop {
         );
         let corner = Corner::new(rad);
         if self.cfg.transparency {
-            gfx::copy_rounded(c, &self.frost, r, &corner, alpha);
+            self.frost.rounded_to(c, r, &corner, alpha);
             c.fill_rrect(r, rad, fade(t.window, (150 * alpha / 255) as u8));
         } else {
             c.fill_rrect(r, rad, fade(t.window, alpha as u8));
@@ -590,7 +589,7 @@ impl Desktop {
         );
         let corner = Corner::new(rad);
         if self.cfg.transparency {
-            gfx::copy_rounded(c, &self.frost, r, &corner, a);
+            self.frost.rounded_to(c, r, &corner, a);
             c.fill_rrect(r, rad, fade(t.window, (190 * a / 255) as u8));
         } else {
             c.fill_rrect(r, rad, fade(t.window, a as u8));
@@ -808,11 +807,7 @@ impl Desktop {
                 }
                 let sel = if order.len() > 1 { 1 } else { 0 };
                 self.tw.set(SWITCH, 0);
-                self.switcher = Some(Switcher {
-                    order,
-                    sel,
-                    t0: self.now,
-                });
+                self.switcher = Some(Switcher { order, sel });
                 if self.launcher.is_some() {
                     self.launcher = None;
                     self.damage_all();
@@ -877,7 +872,7 @@ impl Desktop {
         );
         let corner = Corner::new(rad);
         if self.cfg.transparency {
-            gfx::copy_rounded(c, &self.frost, r, &corner, a);
+            self.frost.rounded_to(c, r, &corner, a);
             c.fill_rrect(r, rad, fade(t.window, (200 * a / 255) as u8));
         } else {
             c.fill_rrect(r, rad, fade(t.window, a as u8));

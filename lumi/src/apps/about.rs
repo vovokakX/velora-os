@@ -130,11 +130,9 @@ impl App for About {
             s(4),
         );
         cx.c.fill_rrect(bar, bar.h / 2, t.progress_track);
-        let used = if self.info.mem_total > 0 {
-            (bar.w as u64 * self.info.mem_used / self.info.mem_total) as i32
-        } else {
-            0
-        };
+        let used = (bar.w as u64 * self.info.mem_used)
+            .checked_div(self.info.mem_total)
+            .unwrap_or(0) as i32;
         cx.c.fill_rrect(
             Rect::new(bar.x, bar.y, used.max(bar.h), bar.h),
             bar.h / 2,

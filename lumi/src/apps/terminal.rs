@@ -45,6 +45,8 @@ pub struct TerminalApp {
     blink_next: u64,
     was_focused: bool,
     mouse: (i32, i32),
+    /// Row the cursor was drawn on.
+    cursor_row: usize,
 }
 
 impl TerminalApp {
@@ -70,6 +72,7 @@ impl TerminalApp {
             blink_next: 0,
             was_focused: false,
             mouse: (0, 0),
+            cursor_row: 0,
         }
     }
 
@@ -377,7 +380,12 @@ impl App for TerminalApp {
             if self.scroll > 0 {
                 self.scroll = (self.scroll + scrolled).min(self.term.scrollback.len());
             }
-            let dirty = self.term.take_dirty();
+            let mut dirty = self.term.take_dirty();
+            // The row the cursor left shows it no more.
+            if let Some(d) = dirty.get_mut(self.cursor_row) {
+                *d = true;
+            }
+            self.cursor_row = self.term.row;
             if self.scroll > 0 && scrolled > 0 {
                 self.damage_all();
             } else {

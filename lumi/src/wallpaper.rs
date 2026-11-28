@@ -13,6 +13,7 @@ use crate::config::BUILTIN_WALLPAPERS;
 use alloc::vec;
 use alloc::vec::Vec;
 use velora_gfx::image::Image;
+use velora_ui::Rect;
 use velora_ui::canvas::{Canvas, Color};
 
 /// A curved sheet: the inside of a large circle (in a 1600 x 900 design
@@ -307,7 +308,7 @@ pub fn cover(img: &Image, w: usize, h: usize) -> Canvas {
                     }
                 }
                 let n = ((y1 - y0) * (x1 - x0)) as u32;
-                out.pixels[ty * w + tx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | acc[2] / n;
+                out.pixels[ty * w + tx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
             }
         }
     } else {
@@ -355,7 +356,7 @@ fn box_blur(px: &mut [u32], w: usize, h: usize, r: usize) {
                         acc[2] += p & 0xff;
                     }
                     let n = (hi - lo + 1) as u32;
-                    dst[base + i * step] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | acc[2] / n;
+                    dst[base + i * step] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
                 }
             }
         };
@@ -363,11 +364,23 @@ fn box_blur(px: &mut [u32], w: usize, h: usize, r: usize) {
     pass(&tmp, px, h, w, w, 1);
 }
 
-/// The frosted copy of `src`: blurred strongly and mixed with `tint`
-/// (alpha in the top byte).
-pub fn frost(src: &Canvas, tint: Color) -> Canvas {
+/// The frosted copy of a wallpaper: strongly blurred and mixed with a
+/// tint, kept at an eighth of the resolution (130 KiB for 1920 x 1080
+/// instead of 8 MiB) and scaled up bilinearly, with a little grain, as it
+/// is drawn.
+pub struct Frost {
+    pub w: usize,
+    pub h: usize,
+    sw: usize,
+    sh: usize,
+    px: Vec<u32>,
+}
+
+const K: usize = 8;
+
+/// Makes the frosted copy of `src` with `tint` (alpha in the top byte).
+pub fn frost(src: &Canvas, tint: Color) -> Frost {
     let (w, h) = (src.width, src.height);
-    const K: usize = 8;
     let (sw, sh) = (w.div_ceil(K), h.div_ceil(K));
     let mut small = vec![0u32; sw * sh];
     for sy in 0..sh {
@@ -384,7 +397,7 @@ pub fn frost(src: &Canvas, tint: Color) -> Canvas {
                 }
             }
             let n = n.max(1);
-            small[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | acc[2] / n;
+            small[sy * sw + sx] = (acc[0] / n) << 16 | (acc[1] / n) << 8 | (acc[2] / n);
         }
     }
     for _ in 0..3 {
@@ -392,37 +405,116 @@ pub fn frost(src: &Canvas, tint: Color) -> Canvas {
     }
     let ta = tint >> 24;
     let tc = [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
-    let mut out = Canvas::new(w, h);
-    for y in 0..h {
-        // Sample centres: pixel y is at small coordinate (y + 0.5)/K - 0.5.
+    for p in small.iter_mut() {
+        let mut o = 0;
+        for (k, sh_) in [16u32, 8, 0].iter().enumerate() {
+            let v = (*p >> sh_) & 0xff;
+            o = (o << 8) | ((v * (255 - ta) + tc[k] * ta) / 255);
+        }
+        *p = o;
+    }
+    Frost {
+        w,
+        h,
+        sw,
+        sh,
+        px: small,
+    }
+}
+
+impl Frost {
+    /// Pixels `x0..x1` of row `y`.
+    fn span(&self, y: usize, x0: usize, x1: usize, out: &mut [u32]) {
+        let (sw, sh) = (self.sw, self.sh);
         let fy = (((y * 2 + 1) * 128 / K) as i64 - 128).clamp(0, ((sh - 1) * 256) as i64);
         let (y0, wy) = ((fy >> 8) as usize, (fy & 255) as u32);
         let y1 = (y0 + 1).min(sh - 1);
-        for x in 0..w {
+        let (r0, r1) = (
+            &self.px[y0 * sw..y0 * sw + sw],
+            &self.px[y1 * sw..y1 * sw + sw],
+        );
+        for (i, x) in (x0..x1).enumerate() {
             let fx = (((x * 2 + 1) * 128 / K) as i64 - 128).clamp(0, ((sw - 1) * 256) as i64);
-            let (x0, wx) = ((fx >> 8) as usize, (fx & 255) as u32);
-            let x1 = (x0 + 1).min(sw - 1);
-            let (a, b, c, d) = (
-                small[y0 * sw + x0],
-                small[y0 * sw + x1],
-                small[y1 * sw + x0],
-                small[y1 * sw + x1],
-            );
+            let (a0, wx) = ((fx >> 8) as usize, (fx & 255) as u32);
+            let a1 = (a0 + 1).min(sw - 1);
+            let (a, b, c, d) = (r0[a0], r0[a1], r1[a0], r1[a1]);
+            let g = hash(x as u32, y as u32);
             let mut o = 0u32;
-            for (k, sh_) in [16u32, 8, 0].iter().enumerate() {
-                let ch = |p: u32| (p >> sh_) & 0xff;
+            for (k, s) in [16u32, 8, 0].iter().enumerate() {
+                let ch = |p: u32| (p >> s) & 0xff;
                 let top = ch(a) * (256 - wx) + ch(b) * wx;
                 let bot = ch(c) * (256 - wx) + ch(d) * wx;
                 let v = (top * (256 - wy) + bot * wy) >> 16;
-                let v = (v * (255 - ta) + tc[k] * ta) / 255;
                 // A touch of grain hides the steps of the gradient.
-                let n = (hash(x as u32, y as u32) >> (k * 8)) & 3;
+                let n = (g >> (k * 8)) & 3;
                 o = o << 8 | (v + n).saturating_sub(1).min(255);
             }
-            out.pixels[y * w + x] = o;
+            out[i] = o;
         }
     }
-    out
+
+    /// One pixel (for tests).
+    pub fn get(&self, x: usize, y: usize) -> u32 {
+        let mut o = [0u32; 1];
+        self.span(y, x, x + 1, &mut o);
+        o[0]
+    }
+
+    /// Copies `r` into `dst` (a canvas of the same size), inside its clip.
+    pub fn copy_to(&self, dst: &mut Canvas, r: Rect) {
+        self.mix_to(dst, r, 255);
+    }
+
+    /// Mixes `r` over `dst` by `t` / 255.
+    pub fn mix_to(&self, dst: &mut Canvas, r: Rect, t: u32) {
+        let r = r
+            .intersect(dst.clip())
+            .intersect(Rect::new(0, 0, self.w as i32, self.h as i32));
+        if r.is_empty() || t == 0 {
+            return;
+        }
+        let mut row = vec![0u32; r.w as usize];
+        for y in r.y..r.bottom() {
+            self.span(y as usize, r.x as usize, r.right() as usize, &mut row);
+            let base = y as usize * dst.width + r.x as usize;
+            let d = &mut dst.pixels[base..base + r.w as usize];
+            if t >= 255 {
+                d.copy_from_slice(&row);
+            } else {
+                for (p, s) in d.iter_mut().zip(&row) {
+                    *p = velora_ui::canvas::blend(*p, *s, t);
+                }
+            }
+        }
+    }
+
+    /// Copies the rounded rectangle `r` into `dst`: frosted glass under
+    /// the panel and the menus.
+    pub fn rounded_to(&self, dst: &mut Canvas, r: Rect, corner: &crate::gfx::Corner, alpha: u32) {
+        let area = r
+            .intersect(dst.clip())
+            .intersect(Rect::new(0, 0, self.w as i32, self.h as i32));
+        if area.is_empty() || alpha == 0 {
+            return;
+        }
+        let mut row = vec![0u32; area.w as usize];
+        for y in area.y..area.bottom() {
+            self.span(y as usize, area.x as usize, area.right() as usize, &mut row);
+            let base = y as usize * dst.width;
+            for (i, x) in (area.x..area.right()).enumerate() {
+                let cov = corner.at(x - r.x, y - r.y, r.w, r.h) * alpha / 255;
+                if cov == 0 {
+                    continue;
+                }
+                let d = &mut dst.pixels[base + x as usize];
+                *d = if cov >= 255 {
+                    row[i]
+                } else {
+                    velora_ui::canvas::blend(*d, row[i], cov)
+                };
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -460,9 +552,10 @@ mod tests {
         assert_eq!(big.pixels[450 * 1600 + 700], 200 << 16);
         assert_eq!(big.pixels[450 * 1600 + 900], 200);
         let f = frost(&big, 0x80000000);
-        assert!(
-            (f.pixels[450 * 1600 + 10] >> 16) & 0xff < 120,
-            "frost darkens"
-        );
+        assert!((f.get(10, 450) >> 16) & 0xff < 120, "frost darkens");
+        let mut c = Canvas::new(1600, 900);
+        let b = c.bounds();
+        f.copy_to(&mut c, b);
+        assert_eq!(c.pixels[450 * 1600 + 10], f.get(10, 450));
     }
 }
