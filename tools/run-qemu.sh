@@ -93,7 +93,6 @@ done
 [ -n "$CODE" ] && [ -n "$VARS" ] || { echo "run-qemu.sh: OVMF firmware not found (set OVMF_CODE and OVMF_VARS)" >&2; exit 1; }
 
 mkdir -p build
-[ -f build/run-vars.fd ] || cp "$VARS" build/run-vars.fd
 if [ "$FRESH" = 1 ] || [ ! -f build/run-disk.img ]; then
     rm -f build/run-disk.img
     if [ -n "$QEMU_IMG" ]; then
@@ -162,6 +161,10 @@ ARGS=(-machine q35 -m 1G -smp 4 "${ACCEL[@]}"
 
 echo "run-qemu.sh: ${W}x${H}, $ACCEL_NAME, $DISK disk, $DISPLAY_KIND window; serial output in build/run-serial.log"
 while :; do
+    # Fresh firmware variables every start: boot entries saved by an
+    # earlier run (the ISO first, say) made the firmware stop in its
+    # shell instead of booting the installed disk.
+    cp "$VARS" build/run-vars.fd
     MEDIA=()
     [ "$ISO" = 1 ] && MEDIA=(-cdrom velora.iso)
     "$QEMU" "${ARGS[@]}" "${MEDIA[@]}"
