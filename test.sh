@@ -48,6 +48,9 @@ for bus in sata nvme; do
     "$PY" tests/qemu_run.py gui --disk-type "$bus" --timeout 1500         --screens "build/logs/installer-screens-$bus" --log "build/logs/gui-$bus.log"
 done
 
+echo "==> the Lumi desktop: login, app menu, terminal, Plume"
+"$PY" tests/qemu_run.py lumi --resolution 1920x1080 --timeout 600 --log build/logs/lumi.log
+
 echo "==> every element of the graphical installer clicked with a USB tablet"
 ./build.sh --uitest
 "$PY" tests/qemu_run.py clicks --timeout 900

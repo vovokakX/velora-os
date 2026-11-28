@@ -558,6 +558,8 @@ def run(args):
             return run_gui(args, work)
         if args.mode == "clicks":
             return run_clicks(args, work)
+        if args.mode == "lumi":
+            return run_lumi(args, work)
         if args.mode == "fps":
             return run_fps(args, work)
         if args.mode == "net":
@@ -932,11 +934,12 @@ def check_installed_disk(path, after):
 
 
 def choose_live(s):
-    """The Live image starts with the start menu (velora-start); key 3
-    chooses the Live system and the login prompt follows."""
+    """The Live image starts with the start menu (velora-start); key 4
+    chooses the Live system with the console login (3 is the Lumi
+    desktop) and the login prompt follows."""
     assert s.wait("velora-start: menu", timeout=120), "no start menu"
-    s.keys(["3"])
-    assert s.wait("velora-start: live", timeout=30), "the start menu did not choose the Live system"
+    s.keys(["4"])
+    assert s.wait("velora-start: live console", timeout=30), "the start menu did not choose the Live system"
 
 
 def login(s, user, password, prompt):
@@ -972,12 +975,14 @@ def install_step1(proc, reader, monitor, deadline):
             s.type("secret\n")
             assert s.wait("Repeat the password:"), "no password repeat prompt"
             s.type("secret\n")
+        assert s.wait("Start the Lumi desktop"), "no question about the desktop"
+        s.type("y\n")
         assert s.wait("Type 'yes' to erase vd0"), "no confirmation question"
         s.type("no\n")
         assert s.wait("Nothing was changed."), "refusal not confirmed"
         print("qemu_run: interactive installer refused without changes")
         s.type("SETUP_ROOT_PASSWORD=rootpw1 SETUP_USER_PASSWORD=annapw1 "
-               "velora-setup --auto --disk vd0 --user anna --yes\n")
+               "velora-setup --auto --disk vd0 --user anna --yes --console\n")
         if not s.wait("Installation complete.", timeout=300):
             raise AssertionError("installation did not complete")
         print("qemu_run: unattended installation complete")
@@ -1134,18 +1139,59 @@ def disk_partition(n):
     return "%sp%d" % (INSTALL_BUS[install_bus][1], n)
 
 
+def lumi_shot(reader, monitor, name):
+    """A screenshot of Lumi in the log directory (build/logs/lumi-*.png)."""
+    time.sleep(1.0)
+    path = os.path.join(os.path.dirname(reader.log.name) or ".", "lumi-%s.png" % name)
+    w, h, rgb = screendump(monitor, path + ".ppm")
+    write_png(path, w, h, rgb)
+    os.remove(path + ".ppm")
+    print("qemu_run: screenshot %s" % path)
+
+
+def lumi_session(s, reader, monitor, user, password, checks=()):
+    """The installed system starts Lumi: a wrong password, then the right
+    one; the app menu with the Super key; a terminal found by typing in
+    it; commands whose output goes to the console (`> /dev/console`), as
+    the terminal's own text is not on the serial port; the terminal's
+    program ends with `exit` and its window closes."""
+    assert s.wait("lumi: login screen", timeout=120), "no Lumi login screen"
+    lumi_shot(reader, monitor, "login")
+    s.type("wrong\n")
+    assert s.wait("lumi: login failed", timeout=60), "a wrong password was not refused"
+    s.type(password + "\n")
+    assert s.wait("lumi: session " + user, timeout=60), "no session for " + user
+    lumi_shot(reader, monitor, "desktop")
+    s.keys(["meta_l"])
+    assert s.wait("lumi: app menu", timeout=30), "Super did not open the app menu"
+    lumi_shot(reader, monitor, "app-menu")
+    s.type("term\n")
+    assert s.wait("lumi: open ", timeout=30), "the app menu did not start the terminal"
+    time.sleep(2.0)
+    s.type("whoami > /dev/console\n")
+    assert s.wait(user, timeout=30), "the terminal did not run vsh as " + user
+    for command, expect in checks:
+        s.type(command + " > /dev/console\n")
+        assert s.wait(expect, timeout=30), "no '%s' from: %s" % (expect, command)
+    lumi_shot(reader, monitor, "terminal")
+    s.type("exit\n")
+    assert s.wait("lumi: program ended", timeout=30), "the terminal window did not close"
+    print("qemu_run: Lumi: login, app menu, terminal")
+
+
 def gui_step2(proc, reader, monitor, deadline):
-    """Boot from the disk: the user and the settings of the installer."""
+    """Boot from the disk: Lumi, the user and the settings of the
+    installer."""
     s = Session(proc, reader, monitor, deadline)
     try:
         assert s.wait("root: VeloraFS on " + disk_partition(2)), "root was not mounted from the disk"
-        login(s, "anna", "annapw1", "anna@velora")
-        s.run("cat /etc/velora/desktop.conf", "pointer=blade")
-        s.run("cat /etc/velora/locale.conf", "region=UA")
-        s.run("cat /etc/velora/keyboard.conf", "layouts=ru,us")
-        s.type("exit\n")
-        login(s, "root", "rootpw1", "root@velora")
-        s.type("shutdown\n")
+        lumi_session(s, reader, monitor, "anna", "annapw1", (
+            ("cat /etc/velora/desktop.conf", "pointer=blade"),
+            ("cat /etc/velora/locale.conf", "region=UA"),
+            ("cat /etc/velora/keyboard.conf", "layouts=ru,us"),
+        ))
+        # The power button.
+        monitor.command("system_powerdown")
         wait_exit(proc)
     except AssertionError as e:
         return fail(str(e))
@@ -1195,10 +1241,10 @@ def gui_step4(proc, reader, monitor, deadline):
     s = Session(proc, reader, monitor, deadline)
     try:
         assert s.wait("root: VeloraFS on " + disk_partition(2)), "root was not mounted from the disk"
-        login(s, "boris", "borispw1", "boris@velora")
-        s.type("exit\n")
-        login(s, "root", "rootpw2", "root@velora")
-        s.type("shutdown\n")
+        assert s.wait("lumi: login screen", timeout=120), "no Lumi login screen"
+        s.type("borispw1\n")
+        assert s.wait("lumi: session boris", timeout=60), "no session for boris"
+        monitor.command("system_powerdown")
         wait_exit(proc)
     except AssertionError as e:
         return fail(str(e))
@@ -1344,6 +1390,53 @@ def last_areas(reader):
         if m:
             return uiclick.Report(m).areas
     return {}
+
+
+def run_lumi(args, work):
+    """The Live system with the Lumi desktop (key 3 in the start menu):
+    the login screen, the app menu, a terminal running vsh, the power
+    button. Prints Lumi's memory use at the login screen and on the empty
+    desktop; screenshots go to build/logs/lumi-*.png."""
+    w, h = (int(v) for v in args.resolution.split("x"))
+    extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h)]
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        try:
+            assert s.wait("velora-start: menu", timeout=120), "no start menu"
+            s.keys(["3"])
+            assert s.wait("velora-start: live desktop", timeout=30), "the menu did not choose the desktop"
+            assert s.wait("lumi: ready", timeout=120), "Lumi did not start"
+            lumi_session(s, reader, monitor, "user", "velora", (
+                ("echo Lumi-$((1+1))", "Lumi-"),
+                ("ps", "lumi"),
+                ("mem", "used"),
+            ))
+            # Plume in its own window from the app menu; Ctrl+X ends it.
+            s.keys(["meta_l"])
+            assert s.wait("lumi: app menu", timeout=30), "Super did not open the app menu"
+            s.type("plume\n")
+            assert s.wait("lumi: open Plume", timeout=30), "the app menu did not start Plume"
+            time.sleep(2.0)
+            s.type("Lumi")
+            lumi_shot(reader, monitor, "plume")
+            s.keys(["ctrl-x"])
+            time.sleep(0.5)
+            # Plume asks about the unsaved text: n leaves without saving.
+            s.keys(["n"])
+            assert s.wait("lumi: program ended in Plume", timeout=30), "Plume did not end"
+            monitor.command("system_powerdown")
+            wait_exit(proc)
+        except AssertionError as e:
+            if proc.poll() is None:
+                lumi_shot(reader, monitor, "failure")
+            return fail(str(e))
+        return 0
+
+    r = run_once(args, work, {}, args.log, check, extra=extra)
+    if r == 0:
+        print("qemu_run: PASS (Lumi at %s)" % args.resolution)
+    return r
 
 
 def run_fps(args, work):
@@ -1793,7 +1886,7 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks", "fps"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks", "fps", "lumi"])
     p.add_argument("--resolution", default="1280x720", help="screen size for the gui mode")
     p.add_argument("--disk-type", choices=["virtio", "sata", "nvme"], default="virtio",
                    help="how the install disk is connected (gui mode)")
