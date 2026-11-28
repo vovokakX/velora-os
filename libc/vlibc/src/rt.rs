@@ -3,6 +3,17 @@
 use crate::{env, process};
 use core::arch::naked_asm;
 use core::panic::PanicInfo;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// The program's panic hook (a `fn(&PanicInfo)`), 0 for none.
+static PANIC_HOOK: AtomicUsize = AtomicUsize::new(0);
+
+/// Sets a function the panic handler calls after printing the message
+/// and before the program ends with status 101, for example to write the
+/// message to the program's own log.
+pub fn set_panic_hook(hook: fn(&PanicInfo)) {
+    PANIC_HOOK.store(hook as usize, Ordering::Relaxed);
+}
 
 unsafe extern "Rust" {
     /// Defined by the program through `vlibc::main!`.
@@ -35,5 +46,12 @@ extern "C" fn start_rust(sp: *const u64) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     crate::eprintln!("panic: {}", info);
+    let hook = PANIC_HOOK.swap(0, Ordering::Relaxed);
+    if hook != 0 {
+        // SAFETY: only `set_panic_hook` stores here, from a
+        // `fn(&PanicInfo)`; swapping to 0 runs it once even if it panics.
+        let hook: fn(&PanicInfo) = unsafe { core::mem::transmute(hook) };
+        hook(info);
+    }
     process::exit(101)
 }

@@ -33,6 +33,7 @@ pub mod time;
 #[cfg(feature = "cabi")]
 pub mod cabi;
 
+pub use rt::set_panic_hook;
 pub use velora_abi as abi;
 
 /// An error number from the kernel (positive, e.g. `EFAULT` = 14).

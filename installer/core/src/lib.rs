@@ -373,6 +373,8 @@ pub fn install<D: BlockIo>(
             ("/tmp", 0o1777),
             ("/dev", 0o755),
             ("/mnt", 0o755),
+            ("/var", 0o755),
+            ("/var/log", 0o755),
         ] {
             w.mkdir(d, m, 0, 0).map_err(e)?;
         }

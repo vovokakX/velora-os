@@ -118,7 +118,7 @@ cargo run -q -p mkinitrd --release -- \
     --file "usr/share/fonts/Inter-Medium.ttf=build/fonts/subset/Inter-Medium.ttf:644" \
     --file "usr/share/fonts/Inter-SemiBold.ttf=build/fonts/subset/Inter-SemiBold.ttf:644" \
     --file "usr/share/fonts/JetBrainsMono-Regular.ttf=build/fonts/subset/JetBrainsMono-Regular.ttf:644" \
-    --dir "usr/share/wallpapers" --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
+    --dir "usr/share/wallpapers" --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700" --dir "var"
 
 # 4. Bootloader config.
 CONF="$BUILD/limine-${OUT%.iso}.conf"
