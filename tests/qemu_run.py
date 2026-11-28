@@ -1364,7 +1364,10 @@ def run_fps(args, work):
     w, h = (int(v) for v in args.resolution.split("x"))
     qmp_port = free_port()
     extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h),
-             "-device", "qemu-xhci,id=xhci" + (",msi=off,msix=off" if args.xhci_polled else ""),
+             # nec-usb-xhci has had the msi and msix switches for long;
+             # qemu-xhci only since QEMU 10 (CI runs 9.1).
+             "-device", ("nec-usb-xhci,id=xhci,msi=off,msix=off" if args.xhci_polled
+                         else "qemu-xhci,id=xhci"),
              "-device", "usb-tablet,bus=xhci.0",
              "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % qmp_port]
     disk = os.path.join(work, "install.img")
