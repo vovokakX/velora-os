@@ -10,12 +10,12 @@
 | ttf-parser 0.25.1, hashbrown 0.15.5, foldhash 0.1.5, allocator-api2 0.2.22, equivalent 1.0.3, core_maths 0.1.1, libm 0.2.16 | — | MIT, MIT OR Apache-2.0 (используется MIT / used under MIT); foldhash — Zlib | Зависимости fontdue без std. Версии закреплены в `Cargo.lock`, исходники берутся с crates.io. / Dependencies of fontdue without std; versions pinned in `Cargo.lock`, sources from crates.io. |
 
 Тексты лицензий: [docs/licenses/](licenses/) (`INTER.txt`, `JETBRAINS-MONO.txt`, библиотеки Rust —
-`RUST-CRATES.txt`). В ISO они лежат в `/licenses` (`inter.txt`, `jetbrains-mono.txt`,
+`RUST-CRATES.txt`). В ISO они лежат в `/licenses` (`inter.txt`, `jetbrains.txt`,
 `crates.txt`).
 
 License texts: [docs/licenses/](licenses/) (`INTER.txt`, `JETBRAINS-MONO.txt`; the Rust libraries in
 `RUST-CRATES.txt`); in the ISO they are under `/licenses` (`inter.txt`,
-`jetbrains-mono.txt`, `crates.txt`).
+`jetbrains.txt`, `crates.txt`).
 
 Остальной код проекта написан для Velora OS и распространяется по
 GPL-3.0-or-later.

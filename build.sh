@@ -123,7 +123,7 @@ cargo run -q -p mkiso --release -- \
     --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
     --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
     --file "licenses/inter.txt=docs/licenses/INTER.txt" \
-    --file "licenses/jetbrains-mono.txt=docs/licenses/JETBRAINS-MONO.txt" \
+    --file "licenses/jetbrains.txt=docs/licenses/JETBRAINS-MONO.txt" \
     --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 
 # 6. Image for USB drives (release build only): GPT + FAT32 EFI partition.
@@ -140,7 +140,7 @@ if [ "$OUT" = "velora.iso" ]; then
         --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
         --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
         --file "licenses/inter.txt=docs/licenses/INTER.txt" \
-        --file "licenses/jetbrains-mono.txt=docs/licenses/JETBRAINS-MONO.txt" \
+        --file "licenses/jetbrains.txt=docs/licenses/JETBRAINS-MONO.txt" \
         --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 fi
 
