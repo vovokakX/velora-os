@@ -172,7 +172,7 @@ impl FileSystem for DevFs {
                     let Some(m) = crate::input::pop_mouse() else {
                         break;
                     };
-                    buf[n..n + P].copy_from_slice(&m.packet());
+                    buf[n..n + P].copy_from_slice(&crate::input::packet(&m));
                     n += P;
                 }
                 Ok(n)

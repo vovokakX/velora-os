@@ -509,7 +509,7 @@ fn pointer_events_become_packets() {
         wheel: 1,
         abs: None,
     };
-    let p = rel.packet();
+    let p = crate::input::packet(&rel);
     assert_eq!(p.len(), pointer::PACKET);
     assert_eq!((p[0], p[1], p[2] as i8), (0, 1, 1));
     assert_eq!(i16::from_le_bytes([p[4], p[5]]), -3);
@@ -518,7 +518,7 @@ fn pointer_events_become_packets() {
         abs: Some((32767, 100)),
         ..MouseEvent::default()
     };
-    let p = abs.packet();
+    let p = crate::input::packet(&abs);
     assert_eq!(p[0], pointer::ABSOLUTE);
     assert_eq!(i16::from_le_bytes([p[4], p[5]]) as i32, pointer::ABS_MAX);
     assert_eq!(i16::from_le_bytes([p[6], p[7]]), 100);
