@@ -178,6 +178,17 @@ pub fn watchdog(frame: &crate::arch::x86_64::idt::InterruptFrame) {
             frame.rip, frame.rflags
         );
         let _ = crate::panic::write_backtrace(w, frame.rip, frame.rbp);
+        for c in 1..crate::smp::online() {
+            match crate::smp::where_is(c) {
+                Some((rip, rbp, flags)) => {
+                    let _ = writeln!(w, "CPU {} was at RIP {:#x} RFLAGS {:#x}", c, rip, flags);
+                    let _ = crate::panic::write_backtrace(w, rip, rbp);
+                }
+                None => {
+                    let _ = writeln!(w, "CPU {} did not answer", c);
+                }
+            }
+        }
         crate::sched::debug_dump(w);
         crate::smp::debug_dump(w);
     });

@@ -85,6 +85,27 @@ mod trace {
     }
     pub static WAITING: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(u64::MAX) }; MAX_CPUS];
 
+    /// Asks CPU `index` through an NMI where it is: RIP, RBP and RFLAGS.
+    pub fn where_is(index: usize) -> Option<(u64, u64, u64)> {
+        let id = apic_id(index)?;
+        WHERE_RIP.store(0, Ordering::SeqCst);
+        WHERE_REQUEST.store(true, Ordering::SeqCst);
+        apic::send_nmi(id);
+        let end = cpu::rdtsc() + crate::time::tsc_hz() / 10;
+        while WHERE_RIP.load(Ordering::SeqCst) == 0 && cpu::rdtsc() < end {
+            core::hint::spin_loop();
+        }
+        WHERE_REQUEST.store(false, Ordering::SeqCst);
+        let rip = WHERE_RIP.load(Ordering::SeqCst);
+        (rip != 0).then(|| {
+            (
+                rip,
+                WHERE_RBP.load(Ordering::SeqCst),
+                WHERE_FLAGS.load(Ordering::SeqCst),
+            )
+        })
+    }
+
     pub fn dump() -> ! {
         if DUMPING.swap(true, Ordering::SeqCst) {
             cpu::halt_forever();
@@ -157,7 +178,7 @@ fn trace(op: u64, depth: u64) {
 fn trace(_op: u64, _depth: u64) {}
 
 #[cfg(feature = "ktest")]
-pub use trace::answer_where;
+pub use trace::{answer_where, where_is};
 static OWNER: AtomicU64 = AtomicU64::new(NO_OWNER);
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(0);
 static SERVING: AtomicU64 = AtomicU64::new(0);
