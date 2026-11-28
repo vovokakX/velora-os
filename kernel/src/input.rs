@@ -23,6 +23,8 @@ static QUEUE: SpinLock<Queue> = SpinLock::new(Queue {
 });
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static READERS: WaitQueue = WaitQueue::new();
+/// Programs waiting for any input (`input_wait`).
+static ANY: WaitQueue = WaitQueue::new();
 
 /// Adds an event. When the queue is full the event is dropped and counted.
 pub fn push(ev: KeyEvent) {
@@ -40,6 +42,7 @@ pub fn push(ev: KeyEvent) {
     drop(q);
     if sched::is_running() {
         READERS.wake_all();
+        ANY.wake_all();
     }
 }
 
@@ -74,6 +77,18 @@ pub fn key_packet(ev: &KeyEvent) -> [u8; velora_abi::key::PACKET] {
         K::PageUp => key::PAGE_UP,
         K::PageDown => key::PAGE_DOWN,
         K::Space => key::SPACE,
+        K::F1 => key::F1,
+        K::F2 => key::F1 + 1,
+        K::F3 => key::F1 + 2,
+        K::F4 => key::F1 + 3,
+        K::F5 => key::F1 + 4,
+        K::F6 => key::F1 + 5,
+        K::F7 => key::F1 + 6,
+        K::F8 => key::F1 + 7,
+        K::F9 => key::F1 + 8,
+        K::F10 => key::F1 + 9,
+        K::F11 => key::F1 + 10,
+        K::F12 => key::F12,
         _ if ev.ch.is_some_and(|c| !c.is_control()) => key::CHAR,
         _ => key::OTHER,
     };
@@ -196,6 +211,34 @@ pub fn push_mouse(ev: MouseEvent) {
     let tail = (q.head + q.len) % MOUSE_CAPACITY;
     q.buf[tail] = ev;
     q.len += 1;
+    drop(q);
+    if sched::is_running() {
+        ANY.wake_all();
+    }
+}
+
+/// Waits until a key or mouse event is queued or `timeout_ms` passes;
+/// true if one is waiting. For graphical programs, which read the devices
+/// without waiting and must also keep drawing.
+pub fn wait_any(timeout_ms: u64) -> bool {
+    let deadline_tsc = cpu::rdtsc() + crate::time::tsc_hz() * timeout_ms / 1000;
+    // The next tick at the earliest (as `sleep_ms`); the TSC decides when
+    // the time is really up.
+    let deadline_tick =
+        crate::time::ticks() + (timeout_ms * crate::time::TICK_HZ).div_ceil(1000).max(1);
+    let was = cpu::irq_save();
+    let result = loop {
+        cpu::disable_interrupts();
+        if QUEUE.lock().len > 0 || MOUSE.lock().len > 0 {
+            break true;
+        }
+        if cpu::rdtsc() >= deadline_tsc || !sched::is_running() {
+            break false;
+        }
+        ANY.wait(Some(deadline_tick));
+    };
+    cpu::irq_restore(was);
+    result
 }
 
 pub fn pop_mouse() -> Option<MouseEvent> {

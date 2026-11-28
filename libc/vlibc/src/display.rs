@@ -34,6 +34,14 @@ pub fn release() -> Result<(), Errno> {
     Ok(())
 }
 
+/// Waits up to `timeout_ms` for a key or pointer event; true if one is
+/// waiting. The kernel's clock ticks every 10 ms, so the wait ends on a
+/// tick unless input arrives first.
+pub fn input_wait(timeout_ms: u64) -> bool {
+    // SAFETY: no pointers.
+    unsafe { crate::sys::syscall1(nr::INPUT_WAIT, timeout_ms) == 1 }
+}
+
 /// Size, kind and model of `/dev/NAME`.
 pub fn disk_info(path: &str) -> Result<DiskInfo, Errno> {
     let mut d = DiskInfo {

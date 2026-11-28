@@ -50,6 +50,11 @@ pub trait BlockDevice: Send + Sync {
         None
     }
 
+    /// The whole disk this device is on (its own name for a disk).
+    fn disk_name(&self) -> String {
+        String::from(self.name())
+    }
+
     /// Releases the driver's request lock so the panic log can be
     /// written even if the panic happened in the middle of a request.
     ///
@@ -109,6 +114,10 @@ impl BlockDevice for Partition {
 
     fn partition_guid(&self) -> Option<[u8; 16]> {
         Some(self.guid)
+    }
+
+    fn disk_name(&self) -> String {
+        String::from(self.disk.name())
     }
 
     unsafe fn force_unlock(&self) {
@@ -178,6 +187,17 @@ pub fn devices() -> Vec<Arc<dyn BlockDevice>> {
 
 pub fn find(name: &str) -> Option<Arc<dyn BlockDevice>> {
     DEVICES.lock().iter().find(|d| d.name() == name).cloned()
+}
+
+/// The disk the kernel was loaded from (a USB drive with the Live system,
+/// or the disk of an installed system); None after a boot from a CD.
+pub fn boot_disk() -> Option<String> {
+    let guid = crate::boot::info().boot_partition?;
+    DEVICES
+        .lock()
+        .iter()
+        .find(|d| d.partition_guid() == Some(guid))
+        .map(|d| d.disk_name())
 }
 
 /// Polls `done` until it returns true or about `timeout_ms` pass.

@@ -62,7 +62,10 @@ pub mod nr {
     pub const FTRUNCATE: u64 = 28;
     /// statfs(path, path_len, out: *mut FsStat) -> 0
     pub const STATFS: u64 = 29;
-    // 30, 31: mount and umount (stage 9).
+    // 30: mount (not implemented).
+    /// umount(path, path_len) -> 0 (root only): unmounts a disk mounted
+    /// at boot under /mnt. `EBUSY` while files on it are open.
+    pub const UMOUNT: u64 = 31;
     /// getcwd(buf, len) -> length of the path (no NUL)
     pub const GETCWD: u64 = 32;
     /// getuid() -> uid | gid << 32
@@ -103,6 +106,10 @@ pub mod nr {
     pub const DISPLAY: u64 = 50;
     /// diskinfo(path, path_len, out: *mut DiskInfo) -> 0
     pub const DISKINFO: u64 = 51;
+    /// input_wait(timeout_ms) -> 1 when a key or pointer event is waiting
+    /// (on `/dev/keyboard`, `/dev/pointer` or `/dev/mouse`), 0 after the
+    /// timeout. Returns at once if one is already waiting.
+    pub const INPUT_WAIT: u64 = 52;
 }
 
 /// Error numbers (returned negated).
@@ -308,6 +315,11 @@ pub mod disk_kind {
     pub const NVME: u32 = 3;
     pub const USB: u32 = 4;
     pub const PARTITION: u32 = 5;
+    /// Flag added to the kind of the disk the system was started from
+    /// (and of its partitions).
+    pub const BOOT: u32 = 0x100;
+    /// The kind without flags.
+    pub const MASK: u32 = 0xff;
 }
 
 /// `/dev/keyboard`: key presses and releases as 8-byte packets, for
@@ -339,6 +351,9 @@ pub mod key {
     pub const SPACE: u16 = 14;
     /// A key that types a character (see `ch`).
     pub const CHAR: u16 = 15;
+    /// F1 ... F12 are `F1 + n - 1`.
+    pub const F1: u16 = 16;
+    pub const F12: u16 = 27;
 }
 
 /// `/dev/pointer`: every mouse and tablet event as an 8-byte packet;

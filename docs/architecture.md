@@ -649,8 +649,9 @@ image choose "3" in the menu.
   кадр рисуется в родном разрешении экрана (D49). Текст — смешивание в
   линейном свете и привязка высоты строчных букв к пикселям
   (`Fonts::snapped_size`).
-- Темы: тёмная, светлая и полуночная, у каждой акцентный цвет
-  (`Theme::with_accent`, по умолчанию `theme::AMBER`); `Theme::mix`
+- Темы: тёмная, светлая и Velora Gamers, у каждой акцентный цвет
+  (`Theme::with_accent`, по умолчанию `theme::AMBER`, у Gamers
+  `theme::NEON_VIOLET`) и цвет деталей (`Theme::detail`); `Theme::mix`
   смешивает две темы.
 - `libc/ui/src/anim.rs`: кривые ease-in-out, `Tweens` (значения, которые
   плавно доходят до новой цели) и `Transition` (затухание или сдвиг между
@@ -665,11 +666,19 @@ image choose "3" in the menu.
 - `tools/run-qemu.sh`: ручной запуск с usb-tablet и окном без растяжения в
   Windows. Тест `clicks` (`velora-uitest.iso`, `tests/uiclick.py`) щёлкает
   каждый элемент установщика.
+- Кадры по изменениям (D50): `Ui::plan` решает, пропустить кадр,
+  перерисовать часть (`Canvas::set_frame`) или весь экран; `velora-start`
+  держит не больше 60 кадров в секунду и ждёт ввод вызовом `input_wait`.
+  Смешивание и заливки идут по два пикселя (`canvas::blend_span`). F12 —
+  счётчик кадров; `qemu_run.py fps` меряет его в 1920x1080.
+- Диски для установки: `live::disks` (шина, подключён ли, диск загрузки),
+  `live::release` отключает разделы (`umount`). Ядро узнаёт диск загрузки
+  по GUID раздела от Limine (`block::boot_disk`).
 
 The installer window is drawn at a scale step from 1x to 4x
 (`installer/gui::SCALES`) in the screen's own resolution (D49). Text is
 blended in linear light and the x-height is snapped to whole pixels
-(`Fonts::snapped_size`). The dark, light and midnight themes each have an
+(`Fonts::snapped_size`). The dark, light and Velora Gamers themes each have an
 accent colour (`Theme::with_accent`, `theme::AMBER` by default); `Theme::mix`
 blends two themes. `libc/ui/src/anim.rs` has ease-in-out curves, `Tweens`
 (values that move smoothly to a new target) and `Transition` (a fade or a
@@ -682,4 +691,13 @@ and xHCI reads tablets and mice that are not boot devices in report protocol
 (`Function::Pointer`); `/dev/pointer` gives 8-byte packets.
 `tools/run-qemu.sh` runs QEMU by hand with a USB tablet and, on Windows, a
 window that is not stretched. The `clicks` test (`velora-uitest.iso`,
-`tests/uiclick.py`) clicks every element of the installer.
+`tests/uiclick.py`) clicks every element of the installer. Frames follow
+changes (D50): `Ui::plan` decides whether a frame is skipped, drawn in part
+(`Canvas::set_frame`) or whole; `velora-start` draws at most 60 frames a
+second and waits for input with `input_wait`. Blending and fills work on two
+pixels at a time (`canvas::blend_span`). F12 shows a frame counter, and
+`qemu_run.py fps` measures it at 1920x1080. The third theme is Velora Gamers
+(`theme::GAMERS`, accent `NEON_VIOLET`, details `Theme::detail`). Disks for
+installing: `live::disks` (bus, mounted or not, boot disk) and
+`live::release`, which unmounts the partitions (`umount`); the kernel finds
+the boot disk from the partition GUID Limine reports (`block::boot_disk`).

@@ -5,6 +5,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_vfs::{BlockIo, FsError};
+use vlibc::abi::{disk_kind, errno};
 use vlibc::fs::{self, File, flags, mode, whence};
 use vlibc::{Errno, display, process, time};
 
@@ -14,15 +15,20 @@ const SHARE: &str = "/usr/lib/velora";
 /// Programs of the Live system that are not installed.
 const LIVE_ONLY: [&str; 4] = ["velora-setup", "velora-installer", "velora-start", "vtest"];
 
-/// A disk the system can be installed on.
+/// A whole disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Disk {
     pub name: String,
     pub size: u64,
     /// Model name ("" if the device has none).
     pub model: String,
-    /// Something from it is mounted under /mnt.
+    /// How it is connected: "virtio", "SATA", "NVMe", "USB" or "".
+    pub bus: &'static str,
+    /// Something from it is mounted under /mnt (the kernel mounts every
+    /// file system it knows at boot); [`release`] unmounts it.
     pub in_use: bool,
+    /// The system was started from this disk: it cannot be erased.
+    pub boot: bool,
 }
 
 /// True when running from the Live image (the root is the initramfs).
@@ -54,7 +60,8 @@ pub fn disks() -> Vec<Disk> {
             })
         })
         .map(|(name, size)| {
-            let model = display::disk_info(&format!("/dev/{}", name))
+            let info = display::disk_info(&format!("/dev/{}", name)).ok();
+            let model = info
                 .map(|d| {
                     let end = d
                         .model
@@ -64,11 +71,14 @@ pub fn disks() -> Vec<Disk> {
                     String::from_utf8_lossy(&d.model[..end]).into_owned()
                 })
                 .unwrap_or_default();
+            let kind = info.map_or(0, |d| d.kind);
             Disk {
                 name: name.clone(),
                 size: *size,
                 model,
-                in_use: in_use(name),
+                bus: bus_name(kind & disk_kind::MASK),
+                in_use: !mounted(name).is_empty(),
+                boot: kind & disk_kind::BOOT != 0,
             }
         })
         .collect();
@@ -76,16 +86,50 @@ pub fn disks() -> Vec<Disk> {
     out
 }
 
-/// Disks with something mounted from them under /mnt.
-fn in_use(disk: &str) -> bool {
-    fs::read_dir("/mnt").is_ok_and(|d| {
-        d.flatten().any(|e| {
+fn bus_name(kind: u32) -> &'static str {
+    match kind {
+        disk_kind::VIRTIO => "virtio",
+        disk_kind::SATA => "SATA",
+        disk_kind::NVME => "NVMe",
+        disk_kind::USB => "USB",
+        _ => "",
+    }
+}
+
+/// What is mounted from `disk` under /mnt ("/mnt/vd0p1", ...).
+pub fn mounted(disk: &str) -> Vec<String> {
+    let Ok(d) = fs::read_dir("/mnt") else {
+        return Vec::new();
+    };
+    d.flatten()
+        .filter(|e| {
             e.name == disk
-                || e.name
-                    .strip_prefix(disk)
-                    .is_some_and(|r| r.starts_with('p'))
+                || e.name.strip_prefix(disk).is_some_and(|r| {
+                    r.len() > 1 && r.starts_with('p') && r[1..].bytes().all(|b| b.is_ascii_digit())
+                })
         })
-    })
+        .map(|e| format!("/mnt/{}", e.name))
+        .collect()
+}
+
+/// Unmounts everything mounted from `disk`, so it can be erased. Fails
+/// for the disk the system was started from and while files on it are
+/// open (the message names the mount).
+pub fn release(disk: &str) -> Result<(), String> {
+    if disks().iter().any(|d| d.name == disk && d.boot) {
+        return Err(format!("{}: the system was started from this disk", disk));
+    }
+    fs::sync().map_err(|e| format!("sync: {}", e.name()))?;
+    for m in mounted(disk) {
+        fs::umount(&m).map_err(|e| {
+            if e.0 == errno::EBUSY {
+                format!("{} is busy: files on it are open", m)
+            } else {
+                format!("cannot unmount {}: {}", m, e.name())
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// A whole disk opened through devfs.

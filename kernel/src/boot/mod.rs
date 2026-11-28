@@ -63,6 +63,9 @@ pub struct BootInfo {
     pub boot_time: Option<i64>,
     modules: [Module; MAX_MODULES],
     module_count: usize,
+    /// GPT GUID of the partition the kernel was loaded from (None when it
+    /// came from a CD or the network).
+    pub boot_partition: Option<[u8; 16]>,
 }
 
 impl BootInfo {
@@ -107,6 +110,7 @@ static INFO: RacyCell<BootInfo> = RacyCell::new(BootInfo {
     boot_time: None,
     modules: [EMPTY_MODULE; MAX_MODULES],
     module_count: 0,
+    boot_partition: None,
 });
 
 const EMPTY_MODULE: Module = Module {
@@ -177,6 +181,11 @@ pub fn capture() -> Result<(), &'static str> {
         }
     }
     info.boot_time = limine::DATE_AT_BOOT.response().map(|d| d.timestamp);
+    info.boot_partition = limine::EXECUTABLE_FILE
+        .response()
+        .and_then(|r| r.file())
+        .filter(|f| f.media_type == limine::MEDIA_GENERIC && f.gpt_part_uuid != [0; 16])
+        .map(|f| f.gpt_part_uuid);
     CAPTURED.store(true, Ordering::SeqCst);
     Ok(())
 }

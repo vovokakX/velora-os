@@ -21,7 +21,7 @@ import socket
 import time
 
 POPUP_ROW = 0x70000000
-BACK, CONTINUE = 900, 901
+BACK, CONTINUE, REFRESH = 900, 901, 902
 
 REPORT = re.compile(
     r"velora-start: ui (\w+) state=([0-9a-f]+) focus=(\S+) popup=(\S+) hit=(\S+) "
@@ -196,6 +196,15 @@ class Walker:
         self.checked += 1
         return r
 
+    def check_hit(self, ident, what):
+        """A click on a button that changes no choice (Refresh): it must
+        take the click."""
+        r = self.click(ident, what)
+        if r.hit != str(ident):
+            raise AssertionError("%s (%d): the click went to %s" % (what, ident, r.hit))
+        self.checked += 1
+        return r
+
     def check_focus(self, ident, what):
         """A click that focuses a widget (lists, text fields)."""
         r = self.click(ident, what)
@@ -296,9 +305,10 @@ def walk(s, qmp, size, shots=None):
     for i in (60, 61, 62, 63):
         k.check_value(i, "option %d" % (i - 60))
         k.check_value(i, "option %d" % (i - 60))
-    for i in range(76, 69, -1):
+    for i in range(77, 69, -1):
         k.check_value(i, "accent %d" % (i - 70))
     k.go(CONTINUE, "disk")
+    k.check_hit(REFRESH, "Refresh")
     for i in (82, 81, 80):
         k.check_value(i, "partitioning mode %d" % (i - 80))
     k.check_value(82, "expert mode")

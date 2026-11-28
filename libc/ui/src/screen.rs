@@ -34,6 +34,8 @@ pub struct Screen {
     pub pointer_y: i32,
     /// Pointer speed: pixels per mouse count, times 256.
     pub speed: i32,
+    /// Times the pointer was moved on the screen (for frame counters).
+    pub pointer_moves: u32,
     buttons: u8,
     pointer: Option<(Image, i32, i32)>,
     /// Where the pointer is on the screen now.
@@ -65,6 +67,7 @@ impl Screen {
             pointer_x: w as i32 / 2,
             pointer_y: h as i32 / 2,
             speed: 256,
+            pointer_moves: 0,
             buttons: 0,
             pointer: None,
             shown: None,
@@ -138,6 +141,7 @@ impl Screen {
                         key::PAGE_UP => Key::PageUp,
                         key::PAGE_DOWN => Key::PageDown,
                         key::SPACE => Key::Space,
+                        key::F1..=key::F12 => Key::F((code - key::F1 + 1) as u8),
                         key::CHAR => match char::from_u32(ch) {
                             Some(c) => Key::Char(c),
                             None => continue,
@@ -225,6 +229,7 @@ impl Screen {
         }
         if *moved {
             *moved = false;
+            self.pointer_moves = self.pointer_moves.wrapping_add(1);
             out.push(Event::MouseMove {
                 x: self.pointer_x,
                 y: self.pointer_y,
@@ -291,12 +296,11 @@ impl Screen {
             let row = y as usize * w;
             let (mut a, mut b) = (row + r.x as usize, row + r.right() as usize);
             if !force {
-                let cur = &self.canvas.pixels[a..b];
-                let old = &self.front[a..b];
-                let Some(first) = cur.iter().zip(old).position(|(p, q)| p != q) else {
+                let Some((first, last)) =
+                    changed_span(&self.canvas.pixels[a..b], &self.front[a..b])
+                else {
                     continue;
                 };
-                let last = cur.iter().zip(old).rposition(|(p, q)| p != q).unwrap();
                 b = a + last + 1;
                 a += first;
             }
@@ -340,6 +344,31 @@ impl Screen {
             }
         }
     }
+}
+
+/// The first and last index where `cur` and `old` differ (None if they
+/// are equal), comparing two pixels at a time.
+fn changed_span(cur: &[u32], old: &[u32]) -> Option<(usize, usize)> {
+    let pair = |s: &[u32], i: usize| s[i] as u64 | (s[i + 1] as u64) << 32;
+    let n = cur.len();
+    let mut i = 0;
+    while i + 1 < n && pair(cur, i) == pair(old, i) {
+        i += 2;
+    }
+    while i < n && cur[i] == old[i] {
+        i += 1;
+    }
+    if i >= n {
+        return None;
+    }
+    let mut j = n;
+    while j >= i + 2 && pair(cur, j - 2) == pair(old, j - 2) {
+        j -= 2;
+    }
+    while cur[j - 1] == old[j - 1] {
+        j -= 1;
+    }
+    Some((i, j - 1))
 }
 
 impl Drop for Screen {

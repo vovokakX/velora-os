@@ -77,7 +77,9 @@
 | 48 | `ping(ip, seq, timeout_ms)` | эхо-запрос ICMP; возвращает время ответа в микросекундах | `ETIMEDOUT`, `ENETUNREACH`, `ENETDOWN` |
 | 49 | `shutdown(fd)` | TCP: закрыть передачу (FIN), приём продолжается | `ENOTCONN` |
 | 50 | `display(op, arg)` | экран для графических программ: `0` — пишет `DisplayInfo` (ширина, высота, байт в строке, бит на пиксель, сдвиги каналов) по адресу `arg`; `1` — отображает framebuffer в процесс (write-combining) и забирает экран у консоли, возвращает адрес; `2` — отдаёт экран консоли. Экран принадлежит одному процессу; после его выхода консоль показывается снова | `ENODEV` (нет экрана), `EBUSY` (экран у другого процесса), `EINVAL` |
-| 51 | `diskinfo(path, path_len, out)` | пишет `DiskInfo` (64 байта) о `/dev/ИМЯ`: размер, сектор, вид (virtio, SATA, NVMe, USB, раздел), модель | `ENODEV`, `EFAULT` |
+| 51 | `diskinfo(path, path_len, out)` | пишет `DiskInfo` (64 байта) о `/dev/ИМЯ`: размер, сектор, вид (virtio, SATA, NVMe, USB, раздел), модель. У диска, с которого запущена система, и его разделов к виду добавлен флаг `disk_kind::BOOT` (0x100) | `ENODEV`, `EFAULT` |
+| 52 | `input_wait(timeout_ms)` | ждёт события клавиатуры или указателя (в `/dev/keyboard`, `/dev/pointer`, `/dev/mouse`) не дольше `timeout_ms` (до 60 с); 1 — событие есть, 0 — время вышло. Сразу возвращает 1, если событие уже ждёт | — |
+| 31 | `umount(path, path_len)` | только root: отключает файловую систему, подключённую при загрузке в `/mnt/…`, сначала записав её данные; журнал паники перестаёт писаться на неё | `EPERM`, `EBUSY` (открыты файлы), `EACCES` (не `/mnt/…`), `EINVAL` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
@@ -159,7 +161,6 @@ ESPIPE 29, EROFS 30, ENAMETOOLONG 36, ENOSYS 38, ENOTEMPTY 39, EUCLEAN 117`
 | № | Вызов | Этап |
 |---|---|---|
 | 30 | `mount(source, target, type)` | позже (установщику не понадобился, см. D34) |
-| 31 | `umount(target)` | позже |
 
 Изменения фиксируются здесь и в [decisions.md](decisions.md).
 
@@ -179,7 +180,14 @@ back. One process owns the screen; the console shows again when it exits
 (`ENODEV` without a screen, `EBUSY` if another process owns it).
 `diskinfo(path, len, out)` (51) writes `DiskInfo` (64 bytes) about
 `/dev/NAME`: size, sector size, kind (virtio, SATA, NVMe, USB, partition) and
-model. `/dev/keyboard` gives key presses and releases as 8-byte packets
+model; the disk the system was started from and its partitions get the
+`disk_kind::BOOT` flag (0x100) added to the kind. `input_wait(timeout_ms)`
+(52) waits up to `timeout_ms` (at most 60 s) for a key or pointer event on
+`/dev/keyboard`, `/dev/pointer` or `/dev/mouse` and returns 1 (an event is
+waiting, also at once) or 0 (time out). `umount(path, len)` (31, root only)
+unmounts a file system mounted at boot under `/mnt/...` after writing its
+data; the panic log stops using it (`EPERM`, `EBUSY` while files are open,
+`EACCES` outside `/mnt`). Key packets have codes F1 ... F12 (16 ... 27). `/dev/keyboard` gives key presses and releases as 8-byte packets
 (`velora_abi::key`: key code, Shift/Ctrl/Alt flags, character) without
 waiting; keys read there do not reach the console. `/dev/mouse` gives 4-byte
 packets (buttons, dx, dy, wheel: positive away from the user) from USB and
@@ -192,7 +200,7 @@ numbers: ENOTSOCK 88, EDESTADDRREQ 89, EADDRINUSE 98, ENETDOWN 100,
 ENETUNREACH 101, ECONNRESET 104, EISCONN 106, ENOTCONN 107, ETIMEDOUT 110,
 ECONNREFUSED 111, EPIPE 32. Stage 9
 added 39 `getrandom(buf, len)` (up to 256 random bytes: RDRAND when present,
-mixed with the TSC). 30 `mount` and 31 `umount` stay reserved (decision D34). Numbers and
+mixed with the TSC). 30 `mount` stays reserved (decision D34); 31 `umount` exists since D50. Numbers and
 error codes are defined in the `velora-abi` crate (`kernel/abi`), shared by
 the kernel and the future vlibc.
 

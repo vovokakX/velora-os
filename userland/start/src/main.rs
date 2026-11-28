@@ -23,6 +23,7 @@
 
 extern crate alloc;
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use velora_install::live::{self, LiveSource};
@@ -31,13 +32,13 @@ use velora_installer_gui::{Action, App, Assets, DiskEntry};
 use velora_ui::image::{Picture, Pointer};
 use velora_ui::screen::Screen;
 use velora_ui::text::Fonts;
-use velora_ui::ui::{Event, one_key_per_frame};
+use velora_ui::ui::{Event, Key, Redraw};
 use velora_ui::{Rect, Ui};
 
-/// Time between frames of an animation (about 60 per second).
-const FRAME_MS: u64 = 16;
+/// Time between frames (60 per second), in microseconds.
+const FRAME_US: u64 = 16_667;
 use vlibc::fs::File;
-use vlibc::{env, fs, println, process, time};
+use vlibc::{display, env, fs, println, process, time};
 
 vlibc::main!(main);
 
@@ -45,6 +46,134 @@ const FONT_DIR: &str = "/usr/share/fonts";
 
 fn ms() -> u64 {
     time::monotonic().map_or(0, |d| d.as_millis() as u64)
+}
+
+fn us() -> u64 {
+    time::monotonic().map_or(0, |d| d.as_micros() as u64)
+}
+
+/// The frame counter shown with F12: frames and pointer moves per
+/// second, the average and longest frame. While it is on, a line goes to
+/// the console every second ("velora-start: fps 60 frame 3.2 ms ...").
+#[derive(Default)]
+struct Fps {
+    on: bool,
+    /// Start of the current second (us).
+    since: u64,
+    frames: u32,
+    pointer: u32,
+    /// The screen's pointer move count at the start of the second.
+    pointer_base: u32,
+    total_us: u64,
+    max_us: u64,
+    /// Start of the last frame (us) and whether it was animating: the
+    /// gaps between frames of an animation show the frame rate it gets.
+    last_start: u64,
+    animating: bool,
+    gaps: u32,
+    gap_total: u64,
+    gap_max: u64,
+    /// The text of the last finished second.
+    text: String,
+}
+
+impl Fps {
+    fn toggle(&mut self, pointer_moves: u32) {
+        self.on = !self.on;
+        *self = Fps {
+            on: self.on,
+            since: us(),
+            pointer_base: pointer_moves,
+            text: String::from("fps --"),
+            ..Fps::default()
+        };
+        println!(
+            "velora-start: fps counter {}",
+            if self.on { "on" } else { "off" }
+        );
+    }
+
+    /// Counts a frame that started at `start` and took `took` us;
+    /// `animating`: another frame of an animation follows.
+    fn frame(&mut self, start: u64, took: u64, animating: bool) {
+        self.frames += 1;
+        self.total_us += took;
+        self.max_us = self.max_us.max(took);
+        if self.animating && self.last_start > 0 {
+            let gap = start - self.last_start;
+            self.gaps += 1;
+            self.gap_total += gap;
+            self.gap_max = self.gap_max.max(gap);
+        }
+        self.animating = animating;
+        self.last_start = start;
+    }
+
+    /// Closes the second if it is over; true when the text changed.
+    /// `pointer_moves` is the screen's count of pointer moves.
+    fn tick(&mut self, pointer_moves: u32) -> bool {
+        let now = us();
+        if !self.on || now < self.since + 1_000_000 {
+            return false;
+        }
+        self.pointer = pointer_moves.wrapping_sub(self.pointer_base);
+        self.pointer_base = pointer_moves;
+        let secs = (now - self.since) as f32 / 1e6;
+        let avg = if self.frames > 0 {
+            self.total_us as f32 / self.frames as f32 / 1000.0
+        } else {
+            0.0
+        };
+        let anim = if self.gaps > 0 {
+            alloc::format!(
+                "anim {:.1} fps  gap max {:.1} ms",
+                self.gaps as f32 * 1e6 / self.gap_total as f32,
+                self.gap_max as f32 / 1000.0
+            )
+        } else {
+            String::from("anim --")
+        };
+        self.text = alloc::format!(
+            "{:.0} fps  {:.1} ms  max {:.1} ms  pointer {:.0}/s  {}",
+            self.frames as f32 / secs,
+            avg,
+            self.max_us as f32 / 1000.0,
+            self.pointer as f32 / secs,
+            anim,
+        );
+        println!("velora-start: fps {}", self.text);
+        self.since = now;
+        self.frames = 0;
+        self.total_us = 0;
+        self.max_us = 0;
+        self.gaps = 0;
+        self.gap_total = 0;
+        self.gap_max = 0;
+        true
+    }
+
+    /// The counter in the top left corner of the screen.
+    fn draw(&self, c: &mut velora_ui::Canvas, fonts: &mut Fonts) -> Rect {
+        let r = Self::area();
+        if !self.on {
+            return r;
+        }
+        c.fill_rrect(r, 8, 0xd0000000);
+        fonts.draw(
+            c,
+            velora_ui::text::Weight::Medium,
+            15,
+            r.x + 10,
+            r.y + 21,
+            &self.text,
+            0xffffffff,
+        );
+        r
+    }
+
+    fn area() -> Rect {
+        Rect::new(8, 8, 600, 30)
+    }
 }
 
 fn load_fonts() -> Option<Fonts> {
@@ -76,12 +205,25 @@ struct Gui {
     ui: Ui,
     fonts: Fonts,
     assets: Assets,
-    queue: alloc::collections::VecDeque<Vec<Event>>,
+    /// Input waiting for frames: at most one key, click or wheel step per
+    /// frame (widgets take keys while they draw); pointer moves within a
+    /// frame are merged.
+    queue: VecDeque<Vec<Event>>,
     pointer: Option<(usize, bool)>,
     animate: bool,
     uitest: bool,
     /// The last test report, printed again only when it changes.
     reported: String,
+    fps: Fps,
+}
+
+/// How a frame is drawn: its area (the whole screen or a part) and when
+/// it started (us).
+struct Frame {
+    area: Rect,
+    start: u64,
+    /// The frame counter was switched on or off: the next frame is whole.
+    toggled: bool,
 }
 
 impl Gui {
@@ -97,50 +239,169 @@ impl Gui {
             ui,
             fonts,
             assets,
-            queue: alloc::collections::VecDeque::new(),
+            queue: VecDeque::new(),
             pointer: None,
             animate,
             uitest,
             reported: String::new(),
+            fps: Fps::default(),
         };
         g.set_pointer(0, false);
         Ok(g)
     }
 
-    /// Starts a frame: the clock for animations, then the input.
-    fn begin(&mut self, events: &[Event]) {
-        self.ui.set_time(ms());
-        self.ui.begin(events);
+    fn bounds(&self) -> Rect {
+        self.screen.canvas.bounds()
     }
 
-    /// Input for the next frame. Without an animation it waits for input;
-    /// during one it waits until the next frame is due (`due`, in ms).
-    fn wait(&mut self, animating: bool, due: u64) -> Vec<Event> {
-        if animating {
-            self.next_events_until(due)
+    /// Decides what the frame for `events` draws: `full` (or a plan of
+    /// the whole screen) draws everything, else only the widgets that
+    /// change. None when nothing changes: the frame is skipped (the
+    /// pointer already moved).
+    fn plan(&mut self, events: &[Event], full: bool) -> Option<Rect> {
+        let counter = self.fps.tick(self.screen.pointer_moves);
+        let toggles = events.iter().any(|e| {
+            matches!(
+                e,
+                Event::Key {
+                    key: Key::F(12),
+                    ..
+                }
+            )
+        });
+        let plan = if full || toggles {
+            Redraw::All
         } else {
-            self.next_events(u64::MAX / 4)
+            self.ui.plan(events, ms())
+        };
+        let area = match plan {
+            Redraw::All => return Some(self.bounds()),
+            Redraw::Area(r) => r.intersect(self.bounds()),
+            Redraw::Nothing => Rect::default(),
+        };
+        let area = if counter && self.fps.on {
+            if area.is_empty() {
+                Fps::area()
+            } else {
+                area.union(Fps::area())
+            }
+        } else {
+            area
+        };
+        if area.is_empty() {
+            self.ui.track_pointer(events);
+            // A skipped frame ends what the counter takes for an animation.
+            self.fps.animating = false;
+            None
+        } else {
+            Some(area)
         }
     }
 
-    /// Input until `due` (ms on the clock), or an empty frame then. The
-    /// timer ticks every 10 ms, so the last part is waited by yielding.
-    fn next_events_until(&mut self, due: u64) -> Vec<Event> {
-        loop {
-            if let Some(e) = self.queue.pop_front() {
-                return e;
+    /// Starts a frame that draws `area`: the clock for animations, then
+    /// the input. F12 turns the frame counter on and off.
+    fn begin(&mut self, events: &[Event], area: Rect) -> Frame {
+        let mut toggled = false;
+        for e in events {
+            if let Event::Key {
+                key: Key::F(12), ..
+            } = e
+            {
+                self.fps.toggle(self.screen.pointer_moves);
+                toggled = true;
             }
+        }
+        self.screen.canvas.set_frame(area);
+        self.ui.set_time(ms());
+        self.ui.begin(events);
+        Frame {
+            area,
+            start: us(),
+            toggled,
+        }
+    }
+
+    /// Shows the frame (with the frame counter, if it is on).
+    fn present(&mut self, f: &Frame) {
+        self.fps.draw(&mut self.screen.canvas, &mut self.fonts);
+        self.screen.present(f.area);
+        let b = self.bounds();
+        self.screen.canvas.set_frame(b);
+        let animating = self.ui.animating();
+        self.fps.frame(f.start, us() - f.start, animating);
+    }
+
+    /// Adds input read from the devices to the queue.
+    fn queue_events(&mut self, events: Vec<Event>) {
+        let is_move = |e: &Event| matches!(e, Event::MouseMove { .. });
+        for e in events {
+            match self.queue.back_mut() {
+                Some(batch) if is_move(&e) && batch.last().is_some_and(is_move) => {
+                    *batch.last_mut().unwrap() = e;
+                }
+                Some(batch) if is_move(&e) || batch.iter().all(is_move) => batch.push(e),
+                _ => self.queue.push_back(alloc::vec![e]),
+            }
+        }
+    }
+
+    /// Input for the next frame, at most 60 frames a second: it returns
+    /// when input is waiting and the frame is due (`due`, us since boot),
+    /// or empty at `due` while something moves. Otherwise it sleeps until
+    /// input comes; the kernel wakes it at once (`input_wait`). The
+    /// pointer moves on the screen as soon as its events are read.
+    fn next_frame(&mut self, animating: bool, due: u64) -> Vec<Event> {
+        loop {
             let polled = self.screen.poll();
             if !polled.is_empty() {
-                self.queue.extend(one_key_per_frame(&polled));
+                self.queue_events(polled);
+            }
+            let now = us();
+            let busy = animating || !self.queue.is_empty();
+            if busy {
+                if now >= due {
+                    return self.queue.pop_front().unwrap_or_default();
+                }
+                // The timer ticks every 10 ms: sleep while a tick fits
+                // before the frame, then yield.
+                if due - now > 10_500 {
+                    display::input_wait(1);
+                } else {
+                    process::yield_now();
+                }
                 continue;
             }
-            let now = ms();
-            if now >= due {
+            if self.fps.on {
+                let second = self.fps.since + 1_000_000;
+                if now >= second {
+                    return Vec::new();
+                }
+                display::input_wait((second - now).div_ceil(1000));
+            } else {
+                display::input_wait(1000);
+            }
+        }
+    }
+
+    /// Input for the start menu: like [`Gui::next_frame`], but returns
+    /// empty at `until` (us) for its countdown.
+    fn next_frame_until(&mut self, animating: bool, due: u64, until: u64) -> Vec<Event> {
+        loop {
+            let polled = self.screen.poll();
+            if !polled.is_empty() {
+                self.queue_events(polled);
+            }
+            let now = us();
+            let busy = animating || !self.queue.is_empty();
+            if busy && now >= due {
+                return self.queue.pop_front().unwrap_or_default();
+            }
+            if !busy && now >= until {
                 return Vec::new();
             }
-            if due - now > 10 {
-                time::sleep_ms(1);
+            let next = if busy { due } else { until };
+            if next.saturating_sub(now) > 10_500 {
+                display::input_wait(((next - now) / 1000).clamp(1, 1000));
             } else {
                 process::yield_now();
             }
@@ -188,30 +449,6 @@ impl Gui {
         let (img, hx, hy) = self.assets.pointers[i.min(2)].at(size.max(12));
         self.screen.set_pointer(Some((img, hx, hy)));
         self.screen.speed = (scale as i32).max(256);
-    }
-
-    /// The next input for a frame: waits up to `wait_ms` (0: do not wait).
-    fn next_events(&mut self, wait_ms: u64) -> Vec<Event> {
-        let end = ms() + wait_ms;
-        loop {
-            if let Some(e) = self.queue.pop_front() {
-                return e;
-            }
-            let polled = self.screen.poll();
-            if !polled.is_empty() {
-                self.queue.extend(one_key_per_frame(&polled));
-                continue;
-            }
-            if ms() >= end {
-                return Vec::new();
-            }
-            time::sleep_ms(10);
-        }
-    }
-
-    fn present(&mut self) {
-        let full = Rect::new(0, 0, self.screen.width(), self.screen.height());
-        self.screen.present(full);
     }
 }
 
@@ -271,37 +508,40 @@ fn menu(gui: &mut Gui) -> Mode {
     let mut reported = false;
     gui.set_pointer(0, false);
     let mut events = Vec::new();
-    let mut second = ms() + 1000;
+    let mut second = us() + 1_000_000;
+    // The countdown changes text outside the widgets: whole frames then.
+    let mut full = true;
     loop {
-        let start = ms();
-        gui.begin(&events);
-        let (chosen, again) = ch.draw(
-            &mut gui.ui,
-            &mut gui.screen.canvas,
-            &mut gui.fonts,
-            &mut gui.assets,
-        );
-        gui.present();
-        if !reported {
-            reported = true;
-            println!("velora-start: menu");
-        }
-        if let Some(m) = chosen {
-            println!("velora-start: chose {}", m.name());
-            return m;
-        }
-        if again {
-            events.clear();
-            continue;
-        }
-        let left = second.saturating_sub(ms());
-        events = if gui.ui.animating() {
-            gui.next_events_until((start + FRAME_MS).min(second))
+        if let Some(area) = gui.plan(&events, full) {
+            let f = gui.begin(&events, area);
+            let (chosen, again) = ch.draw(
+                &mut gui.ui,
+                &mut gui.screen.canvas,
+                &mut gui.fonts,
+                &mut gui.assets,
+            );
+            gui.present(&f);
+            if !reported {
+                reported = true;
+                println!("velora-start: menu");
+            }
+            if let Some(m) = chosen {
+                println!("velora-start: chose {}", m.name());
+                return m;
+            }
+            full = again || f.toggled;
+            if again {
+                events.clear();
+                continue;
+            }
+            events = gui.next_frame_until(gui.ui.animating(), f.start + FRAME_US, second);
         } else {
-            gui.next_events(left)
-        };
-        if events.is_empty() && ms() >= second {
-            second += 1000;
+            full = false;
+            events = gui.next_frame_until(false, 0, second);
+        }
+        if events.is_empty() && us() >= second {
+            second += 1_000_000;
+            full = true;
             if let Some(m) = ch.tick() {
                 println!("velora-start: chose {} (countdown)", m.name());
                 return m;
@@ -310,42 +550,57 @@ fn menu(gui: &mut Gui) -> Mode {
     }
 }
 
-fn disk_entries() -> Vec<DiskEntry> {
-    live::disks()
-        .into_iter()
-        .filter(|d| !d.in_use)
-        .map(|d| DiskEntry {
+/// The disks to offer (all but the one the system was started from) and
+/// that one's name.
+fn disk_entries() -> (Vec<DiskEntry>, Option<String>) {
+    let mut boot = None;
+    let mut out = Vec::new();
+    for d in live::disks() {
+        if d.boot {
+            boot = Some(d.name);
+            continue;
+        }
+        out.push(DiskEntry {
             name: d.name,
             size: d.size,
             model: d.model,
-        })
-        .collect()
+            bus: String::from(d.bus),
+            in_use: d.in_use,
+        });
+    }
+    (out, boot)
 }
 
 /// The graphical installer; returns when the user leaves it.
 fn installer(gui: &mut Gui) {
-    let mut app = App::new(disk_entries());
+    let (disks, boot) = disk_entries();
+    let mut app = App::new(disks);
+    app.boot_disk = boot;
     app.animate = gui.animate;
     let mut shown = None;
     let mut events = Vec::new();
+    let mut full = true;
     loop {
         let (p, large) = app.pointer();
         gui.set_pointer(p, large);
+        let Some(area) = gui.plan(&events, full) else {
+            events = gui.next_frame(false, 0);
+            continue;
+        };
         let before = app.screen;
-        let t = ms();
-        gui.begin(&events);
+        let f = gui.begin(&events, area);
         let (action, again) = app.draw(
             &mut gui.ui,
             &mut gui.screen.canvas,
             &mut gui.fonts,
             &mut gui.assets,
         );
-        gui.present();
-        let took = ms() - t;
-        if took > 1000 {
+        gui.present(&f);
+        let took = us() - f.start;
+        if took > 1_000_000 {
             println!(
                 "velora-start: slow frame {} ms ({})",
-                took,
+                took / 1000,
                 app.screen.name()
             );
         }
@@ -359,6 +614,7 @@ fn installer(gui: &mut Gui) {
         if !again && !animating && action == Action::None {
             gui.report(app.screen.name(), app.state_digest());
         }
+        full = again || f.toggled || action != Action::None || app.screen != before;
         match action {
             Action::Quit => return,
             Action::Reboot => {
@@ -371,13 +627,21 @@ fn installer(gui: &mut Gui) {
                 events.clear();
                 continue;
             }
+            Action::Rescan => {
+                let (disks, boot) = disk_entries();
+                println!("velora-start: {} disk(s) found", disks.len());
+                app.set_disks(disks);
+                app.boot_disk = boot;
+                events.clear();
+                continue;
+            }
             Action::None => {}
         }
         if again {
             events.clear();
             continue;
         }
-        events = gui.wait(animating, t + FRAME_MS);
+        events = gui.next_frame(animating, f.start + FRAME_US);
     }
 }
 
@@ -389,6 +653,11 @@ fn install(gui: &mut Gui, app: &mut App) {
         return;
     };
     println!("velora-start: installing on {}", disk.name);
+    if let Err(e) = live::release(&disk.name) {
+        println!("velora-start: {}", e);
+        app.finish(Err(e));
+        return;
+    }
     let dev = match live::open_disk(&disk.name) {
         Ok(d) => d,
         Err(e) => {
@@ -410,14 +679,15 @@ fn install(gui: &mut Gui, app: &mut App) {
                 println!("velora-start: phase {:?} {}%", p.phase, p.permille / 10);
             }
             last = (Some(p.phase), p.permille);
-            gui.begin(&[]);
+            let b = gui.bounds();
+            let f = gui.begin(&[], b);
             app.draw(
                 &mut gui.ui,
                 &mut gui.screen.canvas,
                 &mut gui.fonts,
                 &mut gui.assets,
             );
-            gui.present();
+            gui.present(&f);
         };
         velora_install::install(dev, &plan, &mut LiveSource, &mut draw)
     };

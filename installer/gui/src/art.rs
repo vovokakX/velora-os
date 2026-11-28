@@ -66,11 +66,15 @@ pub fn drive(c: &mut Canvas, r: Rect, t: &Theme) {
     c.fill_circle(lx, ly, (r.h / 22).max(2), lerp(body, 0xffffffff, 120));
 }
 
-/// Gradient colours of the theme previews (dark, light, midnight).
+/// Gradient colours of the theme previews (dark, light, Velora Gamers).
 pub fn theme_colors(i: usize) -> (Color, Color, Color) {
     match i {
         1 => (rgb(236, 236, 240), rgb(160, 160, 168), rgb(250, 250, 252)),
-        2 => (rgb(48, 58, 140), rgb(88, 70, 190), rgb(220, 220, 255)),
+        2 => (
+            rgb(0x15, 0x13, 0x1f),
+            rgb(0xa8, 0x55, 0xf7),
+            rgb(0xf4, 0xf2, 0xff),
+        ),
         _ => (rgb(26, 26, 30), rgb(70, 70, 76), rgb(230, 230, 234)),
     }
 }

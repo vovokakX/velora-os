@@ -72,6 +72,8 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
             _ => -errno::EINVAL,
         },
         nr::DISKINFO => diskinfo(a0, a1, a2),
+        nr::INPUT_WAIT => crate::input::wait_any(a0.min(60_000)) as i64,
+        nr::UMOUNT => files::umount(a0, a1),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -237,7 +239,12 @@ fn diskinfo(path: u64, len: u64, out: u64) -> i64 {
     let mut info = velora_abi::DiskInfo {
         size_bytes: d.size_bytes(),
         sector_size: d.sector_size() as u32,
-        kind: d.kind(),
+        kind: d.kind()
+            | if crate::drivers::block::boot_disk().as_deref() == Some(d.disk_name().as_str()) {
+                velora_abi::disk_kind::BOOT
+            } else {
+                0
+            },
         model: [0; 48],
     };
     let model = d.model();

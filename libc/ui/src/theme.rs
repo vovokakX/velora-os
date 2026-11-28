@@ -1,6 +1,7 @@
-//! Colours of the themes: dark (graphite), light and midnight, each with
-//! an accent colour for switches that are on, selections, the keyboard
-//! focus, progress and the step marks.
+//! Colours of the themes: dark (graphite), light and Velora Gamers, each
+//! with an accent colour for switches that are on, selections, the
+//! keyboard focus, progress and the step marks, and a detail colour for
+//! small marks (the text cursor, the spinner of a running step).
 
 use crate::canvas::{Color, lerp, rgb, rgba};
 
@@ -44,6 +45,9 @@ pub struct Theme {
     /// The accent and the colour of marks drawn on it.
     pub accent: Color,
     pub on_accent: Color,
+    /// Small details: the text cursor, the spinner of a running step.
+    /// It follows the accent unless the theme has its own.
+    pub detail: Color,
 }
 
 impl Theme {
@@ -51,6 +55,9 @@ impl Theme {
     /// `0xAARRGGBB`). Marks on it are dark on light accents.
     pub fn with_accent(mut self, accent: Color) -> Theme {
         let a = 0xff00_0000 | accent;
+        if self.detail == self.accent {
+            self.detail = a;
+        }
         self.accent = a;
         self.on_accent = if luminance(a) > 140 {
             rgb(24, 22, 20)
@@ -115,6 +122,7 @@ impl Theme {
             warning: m(a.warning, b.warning),
             accent: m(a.accent, b.accent),
             on_accent: m(a.on_accent, b.on_accent),
+            detail: m(a.detail, b.detail),
         }
     }
 }
@@ -157,6 +165,7 @@ pub const DARK: Theme = Theme {
     warning: rgb(255, 181, 71),
     accent: AMBER,
     on_accent: rgb(24, 22, 20),
+    detail: AMBER,
 };
 
 pub const LIGHT: Theme = Theme {
@@ -189,40 +198,49 @@ pub const LIGHT: Theme = Theme {
     warning: rgb(176, 98, 0),
     accent: AMBER,
     on_accent: rgb(24, 22, 20),
+    detail: AMBER,
 };
 
-/// Dark blue-violet.
-pub const MIDNIGHT: Theme = Theme {
+/// Velora Gamers: near-black with a violet tint, a neon violet accent
+/// and a cold cyan for small details.
+pub const GAMERS: Theme = Theme {
     dark: true,
-    backdrop: rgb(13, 14, 28),
-    backdrop_glow: rgba(140, 150, 255, 14),
-    window: rgb(26, 28, 48),
-    window_border: rgba(170, 180, 255, 40),
-    shadow: rgba(0, 0, 10, 160),
-    sidebar: rgb(22, 24, 42),
-    wave: rgba(150, 160, 255, 12),
-    text: rgb(236, 238, 250),
-    text_dim: rgb(190, 194, 220),
-    text_faint: rgb(122, 126, 160),
-    field: rgb(36, 39, 64),
-    field_hover: rgb(45, 48, 76),
-    field_pressed: rgb(31, 34, 56),
-    field_border: rgba(170, 180, 255, 30),
-    selected: rgb(56, 60, 94),
-    scrollbar: rgb(112, 118, 160),
-    primary: rgb(232, 234, 248),
-    primary_hover: rgb(248, 249, 255),
-    primary_pressed: rgb(204, 208, 230),
-    on_primary: rgb(22, 24, 42),
-    track_off: rgb(62, 66, 100),
-    knob: rgb(255, 255, 255),
-    knob_off: rgb(160, 164, 196),
-    progress_track: rgb(52, 56, 90),
-    error: rgb(255, 138, 140),
-    warning: rgb(255, 181, 71),
-    accent: AMBER,
-    on_accent: rgb(24, 22, 20),
+    backdrop: rgb(0x0b, 0x0a, 0x12),
+    backdrop_glow: rgba(0xa8, 0x55, 0xf7, 12),
+    window: rgb(0x15, 0x13, 0x1f),
+    window_border: rgb(0x2a, 0x25, 0x40),
+    shadow: rgba(0, 0, 0, 170),
+    // Between the backdrop and the panels.
+    sidebar: rgb(0x10, 0x0e, 0x18),
+    wave: rgba(0xa8, 0x55, 0xf7, 8),
+    text: rgb(0xf4, 0xf2, 0xff),
+    text_dim: rgb(0xa3, 0x9d, 0xbd),
+    text_faint: rgb(0x8f, 0x89, 0xab),
+    field: rgb(0x1e, 0x1b, 0x2c),
+    field_hover: rgb(0x26, 0x22, 0x38),
+    field_pressed: rgb(0x1a, 0x17, 0x27),
+    field_border: rgb(0x2a, 0x25, 0x40),
+    selected: rgb(0x2c, 0x27, 0x45),
+    scrollbar: rgb(0x4e, 0x47, 0x70),
+    primary: rgb(0xf4, 0xf2, 0xff),
+    primary_hover: rgb(0xff, 0xff, 0xff),
+    primary_pressed: rgb(0xd8, 0xd3, 0xee),
+    on_primary: rgb(0x15, 0x13, 0x1f),
+    track_off: rgb(0x33, 0x2d, 0x4d),
+    knob: rgb(0xff, 0xff, 0xff),
+    knob_off: rgb(0xa3, 0x9d, 0xbd),
+    progress_track: rgb(0x2a, 0x25, 0x40),
+    error: rgb(0xff, 0x6b, 0x81),
+    warning: rgb(0xff, 0xb5, 0x47),
+    accent: NEON_VIOLET,
+    on_accent: rgb(255, 255, 255),
+    detail: CYAN,
 };
+
+/// The accent of Velora Gamers.
+pub const NEON_VIOLET: Color = rgb(0xa8, 0x55, 0xf7);
+/// The detail colour of Velora Gamers.
+pub const CYAN: Color = rgb(0x38, 0xe1, 0xff);
 
 #[cfg(test)]
 mod tests {
@@ -242,5 +260,60 @@ mod tests {
         assert!(luminance(half.window) > luminance(DARK.window));
         assert!(luminance(half.window) < luminance(LIGHT.window));
         assert_ne!(DARK.neutral().accent, AMBER);
+        // The detail colour follows the accent, unless the theme has its own.
+        assert_eq!(DARK.with_accent(0x3f7ee8).detail, 0xff3f7ee8);
+        assert_eq!(GAMERS.with_accent(0x3f7ee8).detail, CYAN);
+    }
+
+    /// WCAG contrast ratio of two opaque colours.
+    fn contrast(a: Color, b: Color) -> f64 {
+        let lum = |c: Color| {
+            let ch = |v: u32| {
+                let v = v as f64 / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch((c >> 16) & 0xff) + 0.7152 * ch((c >> 8) & 0xff) + 0.0722 * ch(c & 0xff)
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn gamers_palette_and_text_contrast() {
+        let t = GAMERS;
+        assert_eq!(t.backdrop, 0xff0b0a12);
+        assert_eq!(t.window, 0xff15131f);
+        assert_eq!(t.window_border, 0xff2a2540);
+        assert_eq!(t.text, 0xfff4f2ff);
+        assert_eq!(t.text_dim, 0xffa39dbd);
+        assert_eq!(t.accent, 0xffa855f7);
+        assert_eq!(t.detail, 0xff38e1ff);
+        // Every text colour on every surface text is drawn on: 4.5:1 or more.
+        for (name, fg) in [
+            ("text", t.text),
+            ("text_dim", t.text_dim),
+            ("text_faint", t.text_faint),
+            ("error", t.error),
+            ("warning", t.warning),
+        ] {
+            for (bg_name, bg) in [
+                ("window", t.window),
+                ("sidebar", t.sidebar),
+                ("field", t.field),
+                ("field_hover", t.field_hover),
+                ("backdrop", t.backdrop),
+            ] {
+                let r = contrast(fg, bg);
+                assert!(r >= 4.5, "{} on {}: {:.2}", name, bg_name, r);
+            }
+        }
+        assert!(contrast(t.text, t.selected) >= 4.5);
+        assert!(contrast(t.text_dim, t.selected) >= 4.5);
+        assert!(contrast(t.on_primary, t.primary) >= 4.5);
+        assert!(contrast(t.on_primary, t.primary_hover) >= 4.5);
     }
 }

@@ -26,10 +26,15 @@ Modes:
          pipe (ASCII logo); the screenshot is kept in build/logs.
   gui    The start menu and every screen of the graphical installer with
          the keyboard, installation, boot from the disk (--resolution,
-         --screens, --screens-only).
+         --screens, --screens-only). --disk-type virtio|sata|nvme connects
+         the disk; --reinstall then boots the Live system again with the
+         installed (and mounted) disk, installs over it and boots it.
   clicks Boot velora-uitest.iso (./build.sh --uitest) with a USB tablet:
          every interactive element of the graphical installer is clicked
          through QMP and must react (tests/uiclick.py).
+  fps    Boot velora-uitest.iso with a USB tablet, turn the frame counter
+         on (F12) and print frames per second while the pointer moves and
+         while screens change (--resolution).
 
 Environment overrides: QEMU (binary), OVMF_CODE, OVMF_VARS, VELORA_ACCEL,
 VELORA_QEMU_EXTRA (extra QEMU arguments, e.g. "-trace virtio*"),
@@ -115,12 +120,23 @@ FS_DISK_SIZE = 128 * 1024 * 1024
 FS_HALF = FS_DISK_SIZE // 2
 
 
+# How the install disk is connected (the gui mode's --disk-type) and the
+# name the kernel gives it.
+INSTALL_BUS = {
+    "virtio": ("virtio-blk-pci,drive=dinstall,disable-legacy=on", "vd0"),
+    "sata": ("ide-hd,drive=dinstall,bus=ide.1", "sd0"),
+    "nvme": ("nvme,serial=velora1,drive=dinstall", "nvme0n1"),
+}
+install_bus = "virtio"
+
+
 def disk_args(kind, path):
     drive = "if=none,id=d%s,file=%s,format=raw" % (kind, path)
+    virtio_opts = os.environ.get("VELORA_VIRTIO_OPTS", "")
     device = {
-        "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
-        "fs": "virtio-blk-pci,drive=dfs,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
-        "install": "virtio-blk-pci,drive=dinstall,disable-legacy=on" + os.environ.get("VELORA_VIRTIO_OPTS", ""),
+        "virtio": "virtio-blk-pci,drive=dvirtio,disable-legacy=on" + virtio_opts,
+        "fs": "virtio-blk-pci,drive=dfs,disable-legacy=on" + virtio_opts,
+        "install": INSTALL_BUS[install_bus][0] + (virtio_opts if install_bus == "virtio" else ""),
         "ahci": "ide-hd,drive=dahci,bus=ide.1",
         "nvme": "nvme,serial=velora0,drive=dnvme",
     }[kind]
@@ -542,6 +558,8 @@ def run(args):
             return run_gui(args, work)
         if args.mode == "clicks":
             return run_clicks(args, work)
+        if args.mode == "fps":
+            return run_fps(args, work)
         if args.mode == "net":
             return run_net(args, work)
         if args.mode == "usb":
@@ -844,6 +862,7 @@ def run_usb(args, work):
             # The drive the system booted from is seen over USB, and its
             # EFI partition (with /boot/velora) gets the panic log.
             assert s.wait("usb: storage usb0"), "the USB drive was not found"
+            assert s.wait("boot disk: usb0"), "the drive the system started from was not recognised"
             assert s.wait("panic log: /mnt/usb0p1/velora-panic.log"), \
                 "no panic log on the USB drive"
             choose_live(s)
@@ -858,6 +877,11 @@ def run_usb(args, work):
             s.run("ls /mnt/usb0p1/boot", "initramfs.tar", exact=True)
             s.type("exit\n")
             login(s, "root", "velora", "root@velora")
+            # The installer does not erase the drive the system runs from.
+            s.run("SETUP_ROOT_PASSWORD=x1 SETUP_USER_PASSWORD=x2 "
+                  "velora-setup --auto --disk usb0 --user anna --yes",
+                  "the system was started from usb0; it cannot be erased")
+            print("qemu_run: the installer refused to erase the boot drive")
             # QEMU runs with -no-reboot, so a restart ends it.
             s.type("reboot\n")
             assert s.wait("Velora OS: restarting"), "reboot did not start"
@@ -1062,8 +1086,9 @@ def gui_step1(args, shots):
             gui_screen(s, monitor, shots, "appearance")
             s.keys(["ret"])
             gui_screen(s, monitor, shots, "disk")
-            # Expert mode with the keyboard: Tab to the radio group, Down x2.
-            s.keys(["tab", "tab", "down", "down", "tab", "tab", "ret"])
+            # Expert mode with the keyboard: Tab to the radio group, Down x2,
+            # then Tab past Refresh and Back to Continue.
+            s.keys(["tab", "tab", "down", "down", "tab", "tab", "tab", "ret"])
             gui_screen(s, monitor, shots, "partitions")
             # A 128 MiB EFI partition: Tab to the first list, Down.
             s.keys(["tab", "tab", "down", "tab", "tab", "tab", "tab", "ret"])
@@ -1081,7 +1106,8 @@ def gui_step1(args, shots):
             s.keys(["tab", "tab", "ret"])
             gui_screen(s, monitor, shots, "confirm")
             s.keys(["ret"])
-            assert s.wait("velora-start: installing on vd0", timeout=60), "installation did not start"
+            assert s.wait("velora-start: installing on " + INSTALL_BUS[install_bus][1], timeout=60), \
+                "installation did not start"
             assert s.wait("velora-start: phase CopyFiles", timeout=120), "no progress"
             gui_screen(s, monitor, shots, "installing", wait=False)
             if not s.wait("velora-start: installed", timeout=600):
@@ -1103,17 +1129,75 @@ def gui_step1(args, shots):
     return check
 
 
+def disk_partition(n):
+    """Name of partition n of the install disk (vd0p2, nvme0n1p2)."""
+    return "%sp%d" % (INSTALL_BUS[install_bus][1], n)
+
+
 def gui_step2(proc, reader, monitor, deadline):
     """Boot from the disk: the user and the settings of the installer."""
     s = Session(proc, reader, monitor, deadline)
     try:
-        assert s.wait("root: VeloraFS on vd0p2"), "root was not mounted from the disk"
+        assert s.wait("root: VeloraFS on " + disk_partition(2)), "root was not mounted from the disk"
         login(s, "anna", "annapw1", "anna@velora")
         s.run("cat /etc/velora/desktop.conf", "pointer=blade")
         s.run("cat /etc/velora/locale.conf", "region=UA")
         s.run("cat /etc/velora/keyboard.conf", "layouts=ru,us")
         s.type("exit\n")
         login(s, "root", "rootpw1", "root@velora")
+        s.type("shutdown\n")
+        wait_exit(proc)
+    except AssertionError as e:
+        return fail(str(e))
+    return 0
+
+
+def gui_reinstall(proc, reader, monitor, deadline):
+    """The Live system with the installed disk attached: the kernel mounts
+    its partitions at boot; the installer offers the disk anyway,
+    unmounts them and installs again (another user)."""
+    s = Session(proc, reader, monitor, deadline)
+    disk = INSTALL_BUS[install_bus][1]
+    try:
+        assert s.wait("velorafs on %s mounted at /mnt/%s" % (disk_partition(2), disk_partition(2)),
+                      timeout=120), "the installed disk was not mounted at boot"
+        assert s.wait("velora-start: menu", timeout=120), "no start menu"
+        s.keys(["1"])
+        assert s.wait("velora-start: screen welcome"), "no welcome screen"
+        for screen in ("location", "keyboard", "appearance", "disk", "user"):
+            s.keys(["ret"])
+            assert s.wait("velora-start: screen " + screen), "no %s screen" % screen
+        s.keys(["tab", "tab"])
+        s.type("boris")
+        for text in ("borispw1", "borispw1", "rootpw2", "rootpw2"):
+            s.keys(["tab"])
+            s.type(text)
+        s.keys(["tab", "tab", "ret"])
+        assert s.wait("velora-start: screen confirm"), "no confirmation screen"
+        s.keys(["ret"])
+        assert s.wait("velora-start: installing on " + disk, timeout=60), \
+            "the mounted disk was not offered or the installation did not start"
+        assert s.wait("/mnt/%s unmounted" % disk_partition(2), timeout=60), \
+            "the partitions of the disk were not unmounted"
+        if not s.wait("velora-start: installed", timeout=600):
+            raise AssertionError("the second installation did not finish")
+        print("qemu_run: installed again over the mounted disk")
+        s.keys(["ret"])
+        assert s.wait("velora-start: restarting", timeout=30), "Restart did not work"
+        wait_exit(proc)
+    except AssertionError as e:
+        return fail(str(e))
+    return 0
+
+
+def gui_step4(proc, reader, monitor, deadline):
+    """Boot from the disk installed again: the new user logs in."""
+    s = Session(proc, reader, monitor, deadline)
+    try:
+        assert s.wait("root: VeloraFS on " + disk_partition(2)), "root was not mounted from the disk"
+        login(s, "boris", "borispw1", "boris@velora")
+        s.type("exit\n")
+        login(s, "root", "rootpw2", "root@velora")
         s.type("shutdown\n")
         wait_exit(proc)
     except AssertionError as e:
@@ -1135,8 +1219,9 @@ def gui_screens_only(args, shots):
                 s.keys(["ret"])
             gui_screen(s, monitor, shots, "disk")
             # Manual mode: Tab to the radio group, Down; the radio buttons
-            # are separate stops, so three Tabs reach Continue.
-            s.keys(["tab", "tab", "down", "tab", "tab", "tab", "ret"])
+            # are separate stops, so four Tabs (past Refresh and Back)
+            # reach Continue.
+            s.keys(["tab", "tab", "down", "tab", "tab", "tab", "tab", "ret"])
             gui_screen(s, monitor, shots, "partitions")
             s.keys(["esc"])
             assert s.wait("velora-start: screen disk"), "Escape did not go back"
@@ -1150,6 +1235,8 @@ def gui_screens_only(args, shots):
 
 
 def run_gui(args, work):
+    global install_bus
+    install_bus = args.disk_type
     w, h = (int(v) for v in args.resolution.split("x"))
     display = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h)]
     shots = Shots(os.path.join(args.screens, args.resolution))
@@ -1163,7 +1250,9 @@ def run_gui(args, work):
         if r == 0:
             print("qemu_run: PASS (graphical installer screens at %s: %s)" % (args.resolution, shots.dir))
         return r
-    print("qemu_run: graphical install, step 1 of 2: installation at %s" % args.resolution)
+    steps = 4 if args.reinstall else 2
+    print("qemu_run: graphical install, step 1 of %d: installation at %s on a %s disk (%s)"
+          % (steps, args.resolution, args.disk_type, INSTALL_BUS[install_bus][1]))
     r = run_once(args, work, disks, base + "-1.log", gui_step1(args, shots), extra=display)
     if r != 0:
         return r
@@ -1175,11 +1264,24 @@ def run_gui(args, work):
     if esp_mib != 128:
         return fail("the EFI partition is %d MiB, the installer was told 128" % esp_mib)
     print("qemu_run: the expert layout was written (EFI partition 128 MiB)")
-    print("qemu_run: graphical install, step 2 of 2: boot from the disk")
+    print("qemu_run: graphical install, step 2 of %d: boot from the disk" % steps)
     r = run_once(args, work, disks, base + "-2.log", gui_step2, iso=None, extra=display)
-    if r == 0:
-        print("qemu_run: PASS (graphical installation, %d screenshots in %s, boot from disk)"
-              % (len(shots), shots.dir))
+    if r != 0:
+        return r
+    if args.reinstall:
+        print("qemu_run: graphical install, step 3 of 4: the Live system again, install over the mounted disk")
+        r = run_once(args, work, disks, base + "-3.log", gui_reinstall, extra=display)
+        if r != 0:
+            return r
+        problem = check_installed_disk(disk, "the second installation")
+        if problem:
+            return fail(problem)
+        print("qemu_run: graphical install, step 4 of 4: boot from the disk installed again")
+        r = run_once(args, work, disks, base + "-4.log", gui_step4, iso=None, extra=display)
+        if r != 0:
+            return r
+    print("qemu_run: PASS (graphical installation on a %s disk, %d screenshots in %s, boot from disk%s)"
+          % (args.disk_type, len(shots), shots.dir, ", installed again" if args.reinstall else ""))
     return r
 
 
@@ -1225,6 +1327,138 @@ def run_clicks(args, work):
     r = run_once(args, work, {"install": disk}, args.log, check, extra=extra)
     if r == 0:
         print("qemu_run: PASS (every element of the installer reacted to clicks at %s)" % args.resolution)
+    return r
+
+
+FPS_LINE = re.compile(r"velora-start: fps ([\d.]+) fps\s+([\d.]+) ms\s+max ([\d.]+) ms\s+pointer ([\d.]+)/s"
+                      r"(?:\s+anim ([\d.]+) fps\s+gap max ([\d.]+) ms)?")
+
+
+def last_areas(reader):
+    """The interactive areas of the last --uitest report."""
+    import uiclick
+    with reader.lock:
+        lines = [l for _, l in reader.lines]
+    for line in reversed(lines):
+        m = uiclick.REPORT.search(line)
+        if m:
+            return uiclick.Report(m).areas
+    return {}
+
+
+def run_fps(args, work):
+    """Frame rate of the graphical installer: the counter (F12) is turned
+    on, then the pointer circles over the window (a USB tablet through
+    QMP), and then screens change back and forth while it moves. Prints
+    frames per second, the average and longest frame and pointer moves
+    per second for each part. Needs velora-uitest.iso (its reports tell
+    where the buttons are)."""
+    import math
+    import uiclick
+    w, h = (int(v) for v in args.resolution.split("x"))
+    qmp_port = free_port()
+    extra = ["-vga", "none", "-device", "VGA,xres=%d,yres=%d,vgamem_mb=64" % (w, h),
+             "-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0",
+             "-qmp", "tcp:127.0.0.1:%d,server=on,wait=off" % qmp_port]
+    disk = os.path.join(work, "install.img")
+    with open(disk, "wb") as f:
+        f.truncate(INSTALL_DISK_SIZE)
+
+    def circle(qmp, seconds, rate, step=None):
+        t0 = time.monotonic()
+        n = 0
+        while True:
+            t = time.monotonic() - t0
+            if t >= seconds:
+                break
+            a = t * 2.5
+            qmp.move(int(w / 2 + w * 0.3 * math.cos(a)), int(h / 2 + h * 0.3 * math.sin(a)), w, h)
+            if step:
+                step(t)
+            n += 1
+            time.sleep(max(0.0, n / rate - (time.monotonic() - t0)))
+
+    def phase(reader, name, run):
+        start = time.monotonic() - reader.start
+        run()
+        end = time.monotonic() - reader.start
+        time.sleep(1.2)
+        with reader.lock:
+            lines = [l for t, l in reader.lines if start + 1.0 < t <= end + 0.2]
+        vals = [m.groups() for m in map(FPS_LINE.search, lines) if m]
+        if not vals:
+            raise AssertionError("no frame counter lines during '%s'" % name)
+        n = len(vals)
+        avg = [sum(float(v[i]) for v in vals) / n for i in range(4)]
+        worst = max(float(v[2]) for v in vals)
+        anim = [(float(v[4]), float(v[5])) for v in vals if v[4]]
+        anim_text = "anim --"
+        if anim:
+            anim_text = "anim %4.1f fps  gap max %4.1f ms" % (
+                sum(a for a, _ in anim) / len(anim), max(g for _, g in anim))
+        print("qemu_run: fps %-12s %5.1f fps  frame %5.1f ms  max %5.1f ms  pointer %5.0f/s  %s  (%d s)"
+              % (name, avg[0], avg[1], worst, avg[3], anim_text, n))
+
+    def check(proc, reader, monitor, deadline):
+        s = Session(proc, reader, monitor, deadline)
+        qmp = uiclick.Qmp(qmp_port)
+        try:
+            assert s.wait("usb: tablet", timeout=60), "the USB tablet was not found"
+            assert s.wait("velora-start: menu", timeout=120), "no start menu"
+            qmp.connect()
+            s.keys(["1"])
+            assert s.wait("velora-start: screen welcome"), "no welcome screen"
+            time.sleep(1.0)
+            s.keys(["f12"])
+            assert s.wait("velora-start: fps counter on"), "F12 did not turn the counter on"
+            phase(reader, "pointer", lambda: circle(qmp, 6, 250))
+            areas = last_areas(reader)
+            cont = areas.get(uiclick.CONTINUE)
+            assert cont, "no Continue button in the report"
+
+            def sweep():
+                # Back and forth over every widget of the screen: hover
+                # effects start and end all the time.
+                pts = [(r[0] + r[2] // 2, r[1] + r[3] // 2) for r in areas.values()]
+                t0 = time.monotonic()
+                n = 0
+                while time.monotonic() - t0 < 6:
+                    a, b = pts[n % len(pts)], pts[(n + 1) % len(pts)]
+                    for k in range(25):
+                        qmp.move(a[0] + (b[0] - a[0]) * k // 25, a[1] + (b[1] - a[1]) * k // 25, w, h)
+                        time.sleep(0.004)
+                    n += 1
+
+            phase(reader, "hover", sweep)
+            qmp.click(cont[0] + cont[2] // 2, cont[1] + cont[3] // 2, w, h)
+            assert s.wait("velora-start: screen location"), "Continue did not open Location"
+            time.sleep(1.0)
+            areas = last_areas(reader)
+            back, cont = areas.get(uiclick.BACK), areas.get(uiclick.CONTINUE)
+            assert back and cont, "no Back or Continue on Location"
+            state = {"n": 0}
+
+            def switch(t):
+                # A click every 0.45 s: Back, Continue, Back, ...
+                if t > 0.45 * state["n"]:
+                    b = back if state["n"] % 2 == 0 else cont
+                    state["n"] += 1
+                    qmp.move(b[0] + b[2] // 2, b[1] + b[3] // 2, w, h)
+                    qmp.button(True)
+                    qmp.button(False)
+
+            phase(reader, "transitions", lambda: circle(qmp, 6, 120, step=switch))
+            monitor.command("system_powerdown")
+            wait_exit(proc)
+        except AssertionError as e:
+            return fail(str(e))
+        finally:
+            qmp.close()
+        return 0
+
+    r = run_once(args, work, {"install": disk}, args.log, check, extra=extra)
+    if r == 0:
+        print("qemu_run: PASS (frame rate at %s measured)" % args.resolution)
     return r
 
 
@@ -1534,8 +1768,12 @@ def check_boot(proc, reader, monitor, deadline, max_seconds):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks"])
+    p.add_argument("mode", choices=["ktest", "boot", "install", "net", "usb", "gui", "clicks", "fps"])
     p.add_argument("--resolution", default="1280x720", help="screen size for the gui mode")
+    p.add_argument("--disk-type", choices=["virtio", "sata", "nvme"], default="virtio",
+                   help="how the install disk is connected (gui mode)")
+    p.add_argument("--reinstall", action="store_true",
+                   help="gui mode: then boot the Live system again and install over the mounted disk")
     p.add_argument("--screens", default=os.path.join("docs", "design", "installer-screens"),
                    help="where the gui mode saves its screenshots")
     p.add_argument("--screens-only", action="store_true",
@@ -1551,7 +1789,7 @@ def main():
     global TIMESTAMPS
     TIMESTAMPS = args.timestamps
     if not args.iso:
-        args.iso = {"ktest": "velora-test.iso", "clicks": "velora-uitest.iso"}.get(args.mode, "velora.iso")
+        args.iso = {"ktest": "velora-test.iso", "clicks": "velora-uitest.iso", "fps": "velora-uitest.iso"}.get(args.mode, "velora.iso")
     if not args.log:
         args.log = os.path.join("build", "logs", args.mode + ".log")
     sys.exit(run(args))
