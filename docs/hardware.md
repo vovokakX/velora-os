@@ -65,6 +65,7 @@
 | Сеть | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (проверены в QEMU), I217/I218/I219 (встроены во многие платы Intel; на железе не проверены). Realtek и Wi-Fi не поддерживаются |
 | Процессоры | все ядра (до 64): программы работают параллельно, код ядра — под общей блокировкой |
 | Питание | выключение и перезагрузка через ACPI; кнопка питания на ПК, где она фиксированное событие ACPI (обычно настольные ПК). У многих ноутбуков кнопка — метод AML, она не работает: выключайте командой `shutdown` |
+| Звук | Intel HDA (класс PCI 04:03): вывод 48 кГц, 16 бит, стерео через первый кодек с выходом; громкость, «без звука», выбор выхода (`/dev/mixer`). Проверено в QEMU (`intel-hda` + `hda-duplex`/`hda-output`). Кодеки ноутбуков (Realtek, Conexant и др.) находятся по тому же графу виджетов, но на железе не проверены; переключения на наушники при подключении нет, звука по HDMI нет |
 | USB | контроллеры xHCI: клавиатура, мышь (`/dev/mouse`, `/dev/pointer`), планшеты и мыши в report protocol (по report descriptor), флешки (разделы, FAT32). Только устройства на корневых портах, подключённые при загрузке: хабы и горячее подключение не поддерживаются |
 
 ### Если что-то пошло не так
@@ -156,6 +157,7 @@ example to edit `boot/limine.conf`.
 | Network | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (tested in QEMU), I217/I218/I219 (built into many Intel boards; untested on hardware). No Realtek, no Wi-Fi |
 | Processors | all cores (up to 64): programs run in parallel, kernel code under one lock |
 | Power | ACPI power off and restart; the power button on PCs where it is a fixed ACPI event (usually desktops). On many laptops the button is an AML method and does not work: use `shutdown` |
+| Sound | Intel HDA (PCI class 04:03): 48 kHz 16-bit stereo output through the first codec with an output; volume, mute, choice of output (`/dev/mixer`). Tested in QEMU (`intel-hda` + `hda-duplex`/`hda-output`). Laptop codecs (Realtek, Conexant and others) are found through the same widget graph but untested on hardware; no switch to headphones when they are plugged in, no HDMI audio |
 | USB | xHCI controllers: keyboard, mouse (`/dev/mouse`, `/dev/pointer`), tablets and mice in report protocol (from the report descriptor), flash drives (partitions, FAT32). Only devices on root ports present at boot: no hubs, no hot plugging |
 
 ### When something goes wrong

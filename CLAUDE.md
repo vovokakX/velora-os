@@ -180,9 +180,22 @@ Midnight (контраст текста не ниже 4.5:1 проверяет �
   (`Host::change_password`).
 - NOT IMPLEMENTED: смена раскладок из Настроек (раскладки PS/2 и USB живут
   в драйверах отдельно, нужен интерфейс в ядре), свои сочетания клавиш,
-  смена разрешения, звук. Встроенные приложения — в процессе Lumi, их
+  смена разрешения. Встроенные приложения — в процессе Lumi, их
   паника перезапускает Lumi. Процессор при перетаскивании не снизился
   (ожидание кадра заканчивается `yield`).
+- Звук (ветка `sound-hda`, D62): драйвер Intel HDA — crate `drivers/hda`
+  (`velora-hda`: команды, граф виджетов, путь к ЦАП, громкость, кольцевой
+  буфер, текст микшера; тесты с поддельным кодеком) и
+  `kernel/src/drivers/hda.rs` (CORB/RIRB опросом, после ответа сбрасывать
+  RIRBSTS; буфер 256 КиБ, поток `audio`). `/dev/audio` — сэмплы 48 кГц,
+  16 бит, стерео; `/dev/mixer` — `volume N`, `mute 0|1`, `output N`. Lumi:
+  окошко громкости на панели (`Desktop::volume_controls`, тест
+  `the_sound_window_sets_the_volume`), раздел «Звук» в Настройках, щелчок
+  и проверка звука — `lumi/src/sound.rs`; громкость в `settings.conf`
+  (`volume`, `mute`). Тесты QEMU `ktest` и `lumi` подключают `intel-hda` +
+  `hda-output` с `-audiodev wav`; ktest проверяет на хосте тон 440 Гц в WAV
+  (`check_audio`). `tools/run-qemu.sh` — `hda-duplex` с `dsound` в Windows
+  (в Linux `VELORA_AUDIO`, по умолчанию `pa`).
 - Снимки: `docs/design/lumi-screens/1920x1080/08`, `12`–`22`; PPM из
   примера `screens` переводятся в PNG функцией `write_png` из
   `tests/qemu_run.py`.
@@ -209,7 +222,7 @@ ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-
 наведение, смена экранов; проверяет MSI-X и частоту чтения указателя,
 `--xhci-polled` — опрос без MSI).
 ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D60. Тест `lumi` (Live-образ, пункт 3:
+(`velora-fsck --cat`). Решения D1–D62. Тест `lumi` (Live-образ, пункт 3:
 вход, меню по Super, терминал, Plume, журнал Lumi, перезапуск Lumi после
 падения, кнопка питания; снимки в
 `build/logs/lumi-*.png`, вывод команд терминала проверяется через
