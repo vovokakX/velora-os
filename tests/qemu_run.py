@@ -1060,12 +1060,12 @@ def write_png(path, w, h, rgb):
 # shows through it.
 CONSOLE_BG = (0x0b, 0x0e, 0x14)
 CONSOLE_FG = (0xc0, 0xca, 0xf5)
-# The mark of assets/velora-logo.png is 656x583 pixels (aspect 1.125).
-# Points inside it, as fractions of its size, at least 15 source pixels
-# away from any edge: on a stroke, and in the gaps.
-LOGO_ASPECT = 656 / 583
-LOGO_STROKES = [(0.498, 0.238), (0.498, 0.3), (0.2, 0.2), (0.8, 0.2), (0.46, 0.8), (0.42, 0.7)]
-LOGO_GAPS = [(0.498, 0.64), (0.223, 0.787), (0.75, 0.8), (0.65, 0.1), (0.35, 0.05)]
+# The mark (kernel/gfx/src/logo.rs) covers 160x142 units of its 200x200
+# grid, from (20, 34). Points inside it, as fractions of that size, at
+# least 6 units away from any edge: on a stroke, and in the gaps.
+LOGO_ASPECT = 160 / 142
+LOGO_STROKES = [(0.5, 0.18), (0.5, 0.32), (0.163, 0.113), (0.829, 0.113), (0.42, 0.746), (0.456, 0.887)]
+LOGO_GAPS = [(0.5, 0.549), (0.125, 0.817), (0.875, 0.817), (0.344, 0.042), (0.656, 0.042)]
 
 
 def check_logo(w, h, rgb):
