@@ -195,6 +195,7 @@ dependencies = [
  "velora-pci",
  "velora-rtc",
  "velora-tar",
+ "velora-tty",
  "velora-usb",
  "velora-vfs",
  "velorafs",
@@ -223,6 +224,13 @@ version = "0.16.0"
 [[package]]
 name = "velora-tar"
 version = "0.16.0"
+
+[[package]]
+name = "velora-tty"
+version = "0.16.0"
+dependencies = [
+ "velora-abi",
+]
 
 [[package]]
 name = "velora-ui"
