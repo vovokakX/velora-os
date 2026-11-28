@@ -78,7 +78,8 @@
 | 49 | `shutdown(fd)` | TCP: закрыть передачу (FIN), приём продолжается | `ENOTCONN` |
 | 50 | `display(op, arg)` | экран для графических программ: `0` — пишет `DisplayInfo` (ширина, высота, байт в строке, бит на пиксель, сдвиги каналов) по адресу `arg`; `1` — отображает framebuffer в процесс (write-combining) и забирает экран у консоли, возвращает адрес; `2` — отдаёт экран консоли. Экран принадлежит одному процессу; после его выхода консоль показывается снова | `ENODEV` (нет экрана), `EBUSY` (экран у другого процесса), `EINVAL` |
 | 51 | `diskinfo(path, path_len, out)` | пишет `DiskInfo` (64 байта) о `/dev/ИМЯ`: размер, сектор, вид (virtio, SATA, NVMe, USB, раздел), модель. У диска, с которого запущена система, и его разделов к виду добавлен флаг `disk_kind::BOOT` (0x100) | `ENODEV`, `EFAULT` |
-| 52 | `input_wait(timeout_ms)` | ждёт события клавиатуры или указателя (в `/dev/keyboard`, `/dev/pointer`, `/dev/mouse`) не дольше `timeout_ms` (до 60 с); 1 — событие есть, 0 — время вышло. Сразу возвращает 1, если событие уже ждёт | — |
+| 52 | `input_wait(timeout_ms)` | ждёт события клавиатуры или указателя (в `/dev/keyboard`, `/dev/pointer`, `/dev/mouse`) или нового вывода псевдотерминала не дольше `timeout_ms` (до 60 с); 1 — событие есть, 0 — время вышло. Сразу возвращает 1, если событие уже ждёт | — |
+| 53 | `pty(op, a, b)` | псевдотерминалы (D53): `0` — создаёт пару, пишет дескрипторы мастера и подчинённой стороны (`[u64; 2]`) по адресу `a`, размер `b` = столбцы << 32 \| строки; `1` — новый размер `b` для мастера `a`. Мастер читает вывод без ожидания (`EAGAIN` — пусто, 0 — подчинённая сторона закрыта) и пишет набранные байты; подчинённая сторона работает как консоль, вызовы `tty` процесса с ней в дескрипторе 0 действуют на неё | `EFAULT`, `EMFILE`, `EBADF`, `EINVAL` |
 | 31 | `umount(path, path_len)` | только root: отключает файловую систему, подключённую при загрузке в `/mnt/…`, сначала записав её данные; журнал паники перестаёт писаться на неё | `EPERM`, `EBUSY` (открыты файлы), `EACCES` (не `/mnt/…`), `EINVAL` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
@@ -109,8 +110,10 @@
   последовательности ANSI (`ESC [ A` и т. д.), Backspace — 0x7f. Так vsh
   сам редактирует строку.
 - `/dev/keyboard` — нажатия и отпускания клавиш пакетами по 8 байт
-  (`velora_abi::key`: код клавиши, флаги Shift/Ctrl/Alt, символ), для
-  графических программ. Чтение не ждёт. Клавиши, прочитанные там, консоль
+  (`velora_abi::key`: код клавиши, флаги Shift/Ctrl/Alt/Super, символ), для
+  графических программ. Клавиши-модификаторы приходят сами по себе
+  (`SHIFT_KEY` … `SUPER_KEY`, 28–31), Insert — 32; Ctrl+буква — код `CHAR`
+  с буквой и флагом Ctrl (D54). Чтение не ждёт. Клавиши, прочитанные там, консоль
   не получает. `/dev/mouse` — пакеты по 4 байта (кнопки, dx, dy, колесо:
   положительное — от себя) от мышей USB и PS/2. `/dev/pointer` — все
   события мышей и планшетов пакетами по 8 байт (`velora_abi::pointer`:
@@ -183,13 +186,21 @@ back. One process owns the screen; the console shows again when it exits
 model; the disk the system was started from and its partitions get the
 `disk_kind::BOOT` flag (0x100) added to the kind. `input_wait(timeout_ms)`
 (52) waits up to `timeout_ms` (at most 60 s) for a key or pointer event on
-`/dev/keyboard`, `/dev/pointer` or `/dev/mouse` and returns 1 (an event is
-waiting, also at once) or 0 (time out). `umount(path, len)` (31, root only)
+`/dev/keyboard`, `/dev/pointer` or `/dev/mouse`, or new pseudo-terminal
+output, and returns 1 (an event is waiting, also at once) or 0 (time out).
+`pty(op, a, b)` (53, D53): op 0 makes a pseudo-terminal of `b` = columns <<
+32 | rows and writes the master and slave descriptors (`[u64; 2]`) to `a`;
+op 1 gives master `a` the new size `b`. The master reads output without
+waiting (`EAGAIN`: none yet; 0: the slave side is closed) and writes typed
+bytes; the slave side works like the console, and the `tty` calls of a
+process with a slave as descriptor 0 act on it. `umount(path, len)` (31, root only)
 unmounts a file system mounted at boot under `/mnt/...` after writing its
 data; the panic log stops using it (`EPERM`, `EBUSY` while files are open,
 `EACCES` outside `/mnt`). Key packets have codes F1 ... F12 (16 ... 27). `/dev/keyboard` gives key presses and releases as 8-byte packets
-(`velora_abi::key`: key code, Shift/Ctrl/Alt flags, character) without
-waiting; keys read there do not reach the console. `/dev/mouse` gives 4-byte
+(`velora_abi::key`: key code, Shift/Ctrl/Alt/Super flags, character)
+without waiting; the modifier keys come on their own (`SHIFT_KEY` ...
+`SUPER_KEY`, 28-31), Insert is 32, Ctrl+letter is `CHAR` with the letter and
+the Ctrl flag (D54); keys read there do not reach the console. `/dev/mouse` gives 4-byte
 packets (buttons, dx, dy, wheel: positive away from the user) from USB and
 PS/2 mice. `/dev/pointer` gives every mouse and tablet event as an 8-byte
 packet (`velora_abi::pointer`: flags, buttons, wheel, x and y as `i16`; with

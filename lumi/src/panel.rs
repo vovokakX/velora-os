@@ -68,7 +68,7 @@ impl Desktop {
         }
     }
 
-    pub(crate) fn panel_rect(&self) -> Rect {
+    pub fn panel_rect(&self) -> Rect {
         let items = self.panel_items();
         let pad = self.s(7);
         let w: i32 = items.iter().map(|&i| self.item_w(i)).sum::<i32>() + 2 * pad;

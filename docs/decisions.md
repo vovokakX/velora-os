@@ -1419,3 +1419,245 @@ the mouse moves; `qemu_run.py fps` requires more than 150 pointer reads a
 second with interrupts (QMP sends 250 positions), at most 62 pointer moves
 shown a second, and with `--xhci-polled` (MSI and MSI-X off on QEMU's xHCI)
 polling and a working pointer.
+
+## D52. Графическая оболочка Lumi / The Lumi graphical shell
+
+**2026-11-28**
+
+**RU.** Lumi — одна программа (`/bin/lumi`, логика и рисование — crate
+`velora-lumi` в `lumi/`, проверяется на хосте с системой в памяти,
+`lumi::fake`). Она владеет экраном (`display`), рисует экран входа, окна,
+панель, меню приложений и встроенные приложения: Терминал, Файлы,
+Настройки, О системе, просмотр картинок. Внешние программы работают в
+окне терминала (vsh, Plume). Протокола для окон чужих графических
+программ пока нет (NOT IMPLEMENTED): экран отдаётся одному процессу
+(D47), а разделяемой памяти и передачи событий между процессами в ядре
+нет. Одна программа — меньше памяти и проще, чем сервер и клиенты.
+
+Как рисуется:
+- У каждого окна своя картинка (заголовок и содержимое); перерисовывается
+  только изменённая часть (`Ui::plan`, у терминала — изменённые строки).
+- Экран собирается только в изменённых областях: обои (нарисованы один
+  раз), тени (из кэша по девяти частям), картинки окон со скруглёнными
+  углами, панель и меню. Перемещение окна копирует его картинку.
+- Тест на хосте сравнивает кадры по областям с полной перерисовкой
+  попиксельно.
+- Указатель — отдельный слой (`Screen`, D51).
+- Кадры идут 60 раз в секунду, пока что-то движется; в покое программа
+  спит в `input_wait` до ввода, вывода терминала или таймера (часы,
+  курсор).
+- Анимации: окна появляются с масштабом и прозрачностью, закрываются,
+  сворачиваются к значку на панели, разворачиваются и прилипают к краям
+  плавно; меню приложений растёт из 94% и проявляется; тема меняется
+  переходом всего экрана (`Transition`, D49).
+
+Запуск: ядро запускает Lumi на установленной системе и в Live-режиме,
+если в стартовом меню выбран рабочий стол (пункт 3; клавиша 4 — Live в
+консоли, её используют тесты). Lumi завершается с кодом 2 без экрана,
+без шрифтов или при `session=console` в `/etc/velora/desktop.conf`
+(`velora-setup --console`, вопрос в интерактивной установке), и тогда
+ядро запускает консольный `login`. `velora.text` в командной строке тоже
+выбирает консоль. Выход из сеанса — код 0, ядро снова запускает Lumi.
+
+Вход: Lumi работает от root до входа, проверяет пароль (PBKDF2, как
+`login`) и делает `setuid` в пользователя; дальше окна, файлы и программы
+терминала принадлежат ему. Выключать и перезагружать может процесс,
+которому принадлежит экран (человек перед ним, как с кнопкой питания), а
+не только root.
+
+Настройки: системные — `/etc/velora/desktop.conf` (пишет установщик),
+регион — `locale.conf`; изменения из Настроек пишутся в
+`~/.config/velora/desktop.conf` (у пользователя нет прав на `/etc`).
+Часовой пояс — по региону: смещение и правило летнего времени (ЕС, США).
+
+Отличия от концептов: значка почты из первого концепта нет (почтовой
+программы нет); значок громкости сообщает, что звукового устройства нет
+(NOT IMPLEMENTED: драйвера звука нет); значок сети показывает проводное
+подключение (Wi-Fi нет). Масштаб интерфейса — ступени установщика по
+высоте экрана: 1x при 720 строках, 1.25x при 1080, 1.5x при 1440, 2.5x
+при 2160.
+
+**EN.** Lumi is one program (`/bin/lumi`; its logic and drawing are the
+`velora-lumi` crate in `lumi/`, tested on the host with an in-memory system,
+`lumi::fake`). It owns the screen (`display`) and draws the login screen,
+windows, the panel, the app menu and the built-in apps: Terminal, Files,
+Settings, About and a picture viewer. Other programs run in a terminal
+window (vsh, Plume). There is no protocol for windows of other graphical
+programs yet (NOT IMPLEMENTED): the screen goes to one process (D47) and the
+kernel has no shared memory or event passing between processes. One program
+uses less memory and is simpler than a server with clients.
+
+How it draws:
+- Each window has its own picture (title bar and content); only the part
+  that changed is drawn again (`Ui::plan`; the terminal draws changed rows).
+- The screen is put together only in the changed areas: the wallpaper
+  (drawn once), shadows (from a cached nine-part picture), the window
+  pictures with rounded corners, the panel and the menus. Moving a window
+  copies its picture.
+- A host test compares frames drawn by areas with a full redraw, pixel by
+  pixel.
+- The pointer is a separate layer (`Screen`, D51).
+- Frames come 60 times a second while something moves; at rest the program
+  sleeps in `input_wait` until input, terminal output or a timer (the clock,
+  the cursor).
+- Animations: windows open with scale and opacity, close, minimize to their
+  panel icon, maximize and snap to the screen edges smoothly; the app menu
+  grows from 94% and fades in; a theme changes with a transition of the
+  whole screen (`Transition`, D49).
+
+Start: the kernel starts Lumi on an installed system, and on the Live system
+when the start menu chooses the desktop (item 3; key 4 is the Live system on
+the console, which the tests use). Lumi ends with status 2 without a screen,
+without fonts or with `session=console` in `/etc/velora/desktop.conf`
+(`velora-setup --console`, a question in the interactive installation), and
+the kernel then starts the console `login`. `velora.text` on the command
+line also chooses the console. Logging out is status 0, and the kernel
+starts Lumi again.
+
+Login: Lumi runs as root until someone logs in, checks the password (PBKDF2,
+as `login`) and calls `setuid` to become that user; windows, files and
+terminal programs then belong to them. The process that owns the screen (the
+person in front of it, as with the power button) may power off and restart,
+not only root.
+
+Settings: the system's in `/etc/velora/desktop.conf` (written by the
+installer), the region in `locale.conf`; changes made in Settings go to
+`~/.config/velora/desktop.conf` (users cannot write `/etc`). The time zone
+follows the region: an offset and a daylight saving rule (EU, US).
+
+Differences from the concepts: no mail icon from the first concept (there is
+no mail program); the volume icon tells that there is no sound device (NOT
+IMPLEMENTED: no sound driver); the network icon shows the wired connection
+(no Wi-Fi). The interface scale uses the installer's steps by screen height:
+1x at 720 lines, 1.25x at 1080, 1.5x at 1440, 2.5x at 2160.
+
+## D53. Псевдотерминалы / Pseudo-terminals
+
+**2026-11-28**
+
+**RU.** vsh и Plume работают с консолью ядра: режим строки, сырые
+клавиши, размер, процесс на переднем плане. Чтобы они шли в окне Lumi без
+изменений, в ядре есть псевдотерминалы: вызов `pty` (53) создаёт пару
+дескрипторов. Мастер (терминал Lumi) пишет набранные байты и читает вывод
+без ожидания (`EAGAIN` — пусто, 0 — программа закрыла свою сторону).
+Подчинённая сторона для программы выглядит как консоль (`fstat` —
+символьное устройство), а вызовы `tty` процесса, у которого дескриптор 0 —
+подчинённая сторона, действуют на его псевдотерминал. Дисциплина линии
+(эхо, Backspace по символам UTF-8, Ctrl+C и Ctrl+D, сырой режим) вынесена
+в crate `velora-tty` с тестами на хосте. Новый вывод будит программу в
+`input_wait`, поэтому Lumi не опрашивает терминалы в покое. Изображений
+по протоколу Kitty в псевдотерминале нет (`CELL_SIZE` — `ENODEV`):
+velofetch показывает логотип текстом. Сигналов нет, поэтому о новом
+размере программа узнаёт, только спросив его снова (Plume — при запуске).
+
+**EN.** vsh and Plume work with the kernel console: line mode, raw keys, the
+size, the foreground process. To run them unchanged in a Lumi window, the
+kernel has pseudo-terminals: the `pty` call (53) makes a pair of
+descriptors. The master (the Lumi terminal) writes typed bytes and reads
+output without waiting (`EAGAIN`: nothing yet; 0: the program closed its
+side). The slave side looks like the console to the program (`fstat` gives a
+character device), and the `tty` calls of a process whose descriptor 0 is a
+slave act on its pseudo-terminal. The line discipline (echo, Backspace by
+UTF-8 characters, Ctrl+C and Ctrl+D, raw mode) is the `velora-tty` crate,
+tested on the host. New output wakes the program waiting in `input_wait`,
+so Lumi does not poll terminals at rest. There are no Kitty graphics in a
+pseudo-terminal (`CELL_SIZE` gives `ENODEV`): velofetch shows its logo as
+text. There are no signals, so a program learns about a new size only when
+it asks again (Plume, at start).
+
+## D54. Клавиши для графических программ / Keys for graphical programs
+
+**2026-11-28**
+
+**RU.** `/dev/keyboard` теперь сообщает клавишу Super (флаг `SUPER`), сами
+клавиши-модификаторы (нажатие и отпускание: `SHIFT_KEY`, `CTRL_KEY`,
+`ALT_KEY`, `SUPER_KEY`), Insert и Ctrl+буква как букву с флагом Ctrl (на
+консоли это управляющий символ). Без отпускания Alt нельзя сделать
+Alt+Tab, без Super — меню по клавише Super. В velora-ui клавиши с Ctrl, Alt
+или Super приходят как `Event::Chord` (элементы их не берут, поэтому Ctrl+C
+не печатает «c» в поле установщика); модификаторы и правая кнопка мыши —
+только если программа попросит (`Screen::extended_input`).
+
+**EN.** `/dev/keyboard` now reports the Super key (the `SUPER` flag), the
+modifier keys themselves (presses and releases: `SHIFT_KEY`, `CTRL_KEY`,
+`ALT_KEY`, `SUPER_KEY`), Insert, and Ctrl+letter as the letter with the Ctrl
+flag (on the console it is a control character). Alt+Tab needs the release
+of Alt, and the app menu on the Super key needs Super. In velora-ui keys
+with Ctrl, Alt or Super come as `Event::Chord` (widgets do not take them, so
+Ctrl+C does not type "c" into an installer field); modifiers and the right
+mouse button only when the program asks (`Screen::extended_input`).
+
+## D55. Память графических программ / Memory of graphical programs
+
+**2026-11-28**
+
+**RU.** Первый замер Lumi в 1920x1080 с открытым терминалом — 95 МиБ
+(система — 105 МиБ при цели меньше 64 МиБ). Причины и что сделано:
+- Куча программ не отдаёт память ядру, поэтому временные картинки
+  (размытие обоев, переходы, файлы шрифтов) оставались занятыми. Теперь
+  блоки от 256 КиБ отображаются отдельно (`mmap`) и освобождаются
+  `munmap`; это помогает и установщику.
+- fontdue разбирает контуры всех глифов шрифта при загрузке: Inter —
+  8,4 МиБ на начертание. `tools/fontsubset` при сборке оставляет глифы
+  латиницы с европейскими расширениями, кириллицы, пунктуации, стрелок и
+  (для терминала) псевдографики; остальные контуры пустые, номера глифов
+  те же (таблицы символов, кернинга и замен остаются верными). Стало
+  2,1 МиБ на начертание. Шрифты под OFL 1.1, изменённые версии
+  разрешены, зарезервированных имён у них нет.
+- Размытая копия обоев хранится в 1/8 разрешения и растягивается при
+  выводе (130 КиБ вместо 8 МиБ).
+
+После: Lumi — 47 МиБ с открытым терминалом, система — 56,4 МиБ (QEMU,
+WHPX, `qemu_run.py lumi`). Основное — три картинки во весь экран по 8 МиБ
+(задний буфер, копия видимого, обои) и шрифты (7,5 МиБ). В 4K буферы
+вчетверо больше.
+
+**EN.** The first measurement of Lumi at 1920x1080 with a terminal open was
+95 MiB (the system 105 MiB against the goal of less than 64 MiB). Causes and
+what was done:
+- A program's heap does not give memory back to the kernel, so temporary
+  pictures (the wallpaper blur, transitions, font files) stayed taken.
+  Blocks from 256 KiB now get their own mapping (`mmap`) and are freed with
+  `munmap`; this helps the installer too.
+- fontdue turns the outlines of all glyphs into segments on loading: Inter
+  took 8.4 MiB per face. `tools/fontsubset` keeps, at build time, the
+  glyphs of Latin with its European extensions, Cyrillic, punctuation,
+  arrows and (for the terminal) box drawing; the other outlines are emptied
+  and glyph numbers stay (the character map, kerning and substitution
+  tables stay valid). Now 2.1 MiB per face. The fonts are under the OFL 1.1,
+  which allows modified versions; they have no Reserved Font Names.
+- The blurred copy of the wallpaper is kept at 1/8 of the resolution and
+  scaled up when drawn (130 KiB instead of 8 MiB).
+
+After: Lumi takes 47 MiB with a terminal open, the system 56.4 MiB (QEMU,
+WHPX, `qemu_run.py lumi`). Most of it is three full-screen pictures of 8 MiB
+(the back buffer, the copy of what is shown, the wallpaper) and the fonts
+(7.5 MiB). At 4K the buffers are four times larger.
+
+## D56. Обои кодом / Wallpapers drawn by code
+
+**2026-11-28**
+
+**RU.** Встроенные обои («Волны» как на концепте, «Графит», «Сияние»,
+«Угли») рисуются кодом сразу в разрешении экрана: большие круги-листы со
+светлым краем на градиенте и мелкое зерно против полос. В 1080p это около
+100 мс на хосте и 90–300 мс в QEMU, один раз при входе или смене обоев.
+Готовые PNG в высоком разрешении весили бы мегабайты в образе, 4K-картинка
+при распаковке занимает 33 МиБ памяти, а на экранах другого размера такие
+картинки масштабировались бы с потерей чёткости. PNG из `assets/wallpapers`
+попадают в `/usr/share/wallpapers` (и с ним на установленную систему) и
+появляются в выборе вместе с `~/Pictures`. Они масштабируются с
+заполнением: середина сохраняется, лишние края обрезаются; уменьшение —
+усреднением площади, увеличение — билинейно.
+
+**EN.** The built-in wallpapers (Waves as in the concept, Graphite, Aurora,
+Ember) are drawn by code right in the screen's resolution: large sheet-like
+circles with light rims on a gradient and a fine grain against banding. At
+1080p this takes about 100 ms on the host and 90–300 ms in QEMU, once at
+login or when the wallpaper changes. Ready PNGs in a high resolution would
+take megabytes in the image, a 4K picture takes 33 MiB of memory while it is
+decoded, and on screens of another size such pictures would be scaled and
+lose sharpness. PNGs from `assets/wallpapers` go to `/usr/share/wallpapers`
+(and with it to the installed system) and appear in the choice together with
+`~/Pictures`. They are scaled to fill: the middle is kept, the extra edges
+are cut; down by area averaging, up bilinearly.

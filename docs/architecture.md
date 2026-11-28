@@ -42,13 +42,18 @@
 На этапе 1 есть только прообраз `Display`: `console::framebuffer::Framebuffer`.
 Остальные трейты появятся на своих этапах.
 
-### Место для Lumi
+### Lumi
 
-- Консоль ядра — лишь один из клиентов framebuffer. Lumi станет процессом
-  пользователя, который получит framebuffer через системный вызов
-  (отображение памяти) и будет сам рисовать окна.
-- Ввод идёт через очередь событий (`/dev/input/*`), а не напрямую в консоль.
-  Поэтому графическая оболочка сможет забрать ввод без изменения драйверов.
+- Консоль ядра — лишь один из клиентов framebuffer. Lumi (`/bin/lumi`,
+  crate `velora-lumi` в `lumi/`) — процесс пользователя: получает экран
+  вызовом `display`, ввод — из `/dev/keyboard` и `/dev/pointer`, и сам
+  рисует экран входа, окна, панель, меню приложений и приложения (D52).
+- Программы терминала (vsh, Plume) работают в окне через псевдотерминалы
+  (`pty`, D53). Окон для внешних графических программ пока нет.
+- Ядро запускает Lumi вместо консольного входа; без экрана, без шрифтов или
+  при `session=console` Lumi завершается и запускается `login`.
+- Рисование: картинка у каждого окна, сборка экрана только в изменённых
+  областях, указатель отдельным слоем; память — D55.
 
 ### Место для .exe
 
@@ -297,13 +302,19 @@ the rest of the kernel only through traits (`BlockDevice`, `FileSystem`,
 Stage 1 only has the first form of `Display`:
 `console::framebuffer::Framebuffer`.
 
-### Room for Lumi
+### Lumi
 
-- The kernel console is just one framebuffer client. Lumi will be a user
-  process that maps the framebuffer through a system call and draws windows
-  itself.
-- Input goes through an event queue (`/dev/input/*`), not straight into the
-  console, so a graphical shell can take over input without driver changes.
+- The kernel console is just one framebuffer client. Lumi (`/bin/lumi`, the
+  `velora-lumi` crate in `lumi/`) is a user process: it takes the screen
+  with the `display` call and input from `/dev/keyboard` and `/dev/pointer`,
+  and draws the login screen, windows, the panel, the app menu and the apps
+  itself (D52).
+- Terminal programs (vsh, Plume) run in a window through pseudo-terminals
+  (`pty`, D53). There are no windows for other graphical programs yet.
+- The kernel starts Lumi instead of the console login; without a screen,
+  without fonts or with `session=console` Lumi ends and `login` runs.
+- Drawing: a picture per window, the screen put together only in changed
+  areas, the pointer as a separate layer; memory: D55.
 
 ### Room for .exe
 

@@ -6,9 +6,8 @@
 
 Velora OS — операционная система для x86_64, написанная с нуля: своё ядро,
 свои драйверы, своё пользовательское окружение. Это не дистрибутив Linux и не
-форк. Сейчас система работает только в текстовом режиме. Позже появятся
-графическая оболочка **Lumi** и запуск программ Windows (.exe) через
-Win32-слой. Архитектура уже оставляет для них место: personality процесса,
+форк. Есть графическая оболочка **Lumi** (ветка `lumi`, D52) и текстовая
+консоль. Позже — запуск программ Windows (.exe) через Win32-слой. Архитектура уже оставляет для них место: personality процесса,
 интерфейс `ExecFormat` с заготовкой PE, абстракция framebuffer.
 
 Цели производительности: в простое меньше 64 МиБ ОЗУ (сейчас 8,6 МиБ);
@@ -77,9 +76,10 @@ Live-образ сначала запускает `/bin/velora-start` (граф�
 `installer/core` (`velora-install`), экраны — `installer/gui`. Тест `gui`
 проходит все экраны и ставит систему; снимки экранов —
 `docs/design/installer-screens/` (4K — отрисовка на хосте: OVMF в QEMU не
-даёт режимов больше 2560x1440). Все тесты Live-образа выбирают в меню «3»
-(`choose_live`). Выбор оформления пока только сохраняется в
-`/etc/velora/*.conf` (NOT IMPLEMENTED: система их не читает).
+даёт режимов больше 2560x1440). Все тесты Live-образа выбирают в меню «4»
+(Live в консоли, `choose_live`). Выбор оформления пишется в `/etc/velora/*.conf`;
+Lumi читает desktop.conf и регион из locale.conf (NOT IMPLEMENTED:
+keyboard.conf и язык системы не читаются).
 Доводка установщика (ветка `installer-polish`, D49): масштаб ступенями
 1x…4x в родном разрешении, текст в линейном свете с привязкой к пикселям,
 акцентный цвет (янтарный по умолчанию), тема и акцент применяются сразу с
@@ -102,6 +102,27 @@ Midnight (контраст текста не ниже 4.5:1 проверяет �
 обработчик прерывания, на конечной точке восемь передач, очередь мыши
 складывает движения. Указатель рисуется раз за кадр по последней позиции.
 `qemu_run.py fps --xhci-polled` проверяет запасной путь.
+Графическая оболочка Lumi (ветка `lumi`, D52–D56): crate `velora-lumi`
+(`lumi/`: обои, оконный менеджер, композитор по изменённым областям,
+панель, меню приложений, вход, приложения Терминал, Файлы, Настройки,
+О системе; тесты на хосте с системой в памяти `lumi::fake`, в том числе
+попиксельное сравнение с полной перерисовкой) и программа `/bin/lumi`
+(`userland/lumi`). Ядро запускает Lumi вместо консольного входа на
+установленной системе и в Live-режиме по пункту 3 стартового меню
+(клавиша 4 — Live в консоли, её нажимает `choose_live`); код 2 (нет экрана,
+шрифтов, `session=console`) — консольный `login`, `velora.text` — тоже
+консоль. Псевдотерминалы — вызов `pty` (53), логика линии в
+`kernel/tty` (`velora-tty`). Клавиши Super, модификаторы и Ctrl+буква в
+`/dev/keyboard`; в velora-ui — `Event::Chord`, `Event::Modifier`,
+`Event::RightButton` (`Screen::extended_input`). Владелец экрана может
+выключать и перезагружать. Шрифт терминала — JetBrains Mono; в образ
+идут подмножества шрифтов (`tools/fontsubset`), крупные блоки кучи vlibc
+отображаются отдельно — Lumi в 1080p занимает 47 МиБ, система 56,4 МиБ
+(D55). Снимки экранов на хосте:
+`cargo run --release -p velora-lumi --example screens -- OUT 1920x1080 dark`
+(PPM; `light`, `gamers`), снимки — `docs/design/lumi-screens/`; обои —
+пример `wallpapers`, память по частям — пример `memory`. Настройки
+пользователя — `~/.config/velora/desktop.conf`.
 
 Известные ограничения, которые стоит закрыть в первую очередь (подробно —
 в известных проблемах `docs/releases/v0.10.0.md` и прошлых версий):
@@ -125,7 +146,10 @@ ping, TCP с хостом), `usb` (загрузка `velora-usb.img` как USB-
 наведение, смена экранов; проверяет MSI-X и частоту чтения указателя,
 `--xhci-polled` — опрос без MSI).
 ktest после каждой загрузки читает на хосте журнал паники
-(`velora-fsck --cat`). Решения D1–D51. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
+(`velora-fsck --cat`). Решения D1–D56. Тест `lumi` (Live-образ, пункт 3:
+вход, меню по Super, терминал, Plume, кнопка питания; снимки в
+`build/logs/lumi-*.png`, вывод команд терминала проверяется через
+`> /dev/console`); тест `gui` после установки входит через экран Lumi. Тест `net` идёт на e1000 (`VELORA_NET_NIC=e1000e` — 82574L) с DNS- и HTTP-серверами на хосте. ktest подключает qemu-xhci с usb-kbd, usb-mouse и usb-storage (образ флешки собирает `mkusb`); после каждой загрузки хост читает `usb.txt` с флешки. Все тесты QEMU идут с `-smp 4` (`VELORA_SMP` меняет число). В тестовой сборке BKL ведёт журнал операций и сторож: процессор, ждущий её больше 30 с, печатает журнал всех процессоров и где был владелец (через NMI).
 
 Особенности SMP, найденные после v0.16.0: ждущий BKL процессор поднимает
 приоритет задач через CR8 (не через регистр TPR в APIC: под WHPX такая
@@ -235,8 +259,9 @@ VELORA_QEMU_EXTRA="-cpu qemu64"`.
   `kernel/mm` (velora-mm). LGPL совместима с GPL, поэтому ядро, которое их
   использует, остаётся под GPL.
 - Сторонние компоненты: Limine (BSD-2, скачивается при сборке с проверкой
-  SHA-256), шрифт Spleen (BSD-2), шрифт Inter (OFL 1.1, скачивается при сборке
-  с проверкой SHA-256) и crate fontdue с зависимостями (MIT/Zlib, D47). Список — `docs/third-party.md`, тексты
+  SHA-256), шрифт Spleen (BSD-2), шрифты Inter и JetBrains Mono (OFL 1.1,
+  скачиваются при сборке с проверкой SHA-256, в образ идут подмножества) и
+  crate fontdue с зависимостями (MIT/Zlib, D47). Список — `docs/third-party.md`, тексты
   лицензий — `docs/licenses/` и `/licenses` в ISO. Новый сторонний код
   добавляется только с совместимой лицензией и записью в этих местах.
 - В репозиторий не попадают ключи, пароли, собранные образы и прочие бинарные
@@ -324,8 +349,9 @@ cargo clippy -p velora-kernel --target x86_64-unknown-none --features ktest -- -
 ```
 boot/        конфигурация Limine
 kernel/      ядро (arch, boot, console, mm, sched, syscall, drivers, exec, ...)
-kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net, kernel/gfx   библиотеки ядра с тестами на хосте
-assets/      логотип Velora (velofetch встраивает его при сборке), указатели мыши (assets/cursors)
+kernel/mm, kernel/acpi, kernel/abi, kernel/exe, kernel/net, kernel/gfx, kernel/tty   библиотеки ядра с тестами на хосте
+assets/      логотип Velora (velofetch встраивает его при сборке), указатели мыши (assets/cursors), картинки обоев (assets/wallpapers)
+lumi/        velora-lumi: графическая оболочка Lumi (тесты и снимки на хосте)
 kernel/src/fs  VFS в ядре: монтирование, tarfs, devfs, каналы, дескрипторы
 drivers/     аппаратно-независимые части драйверов (input, pci, rtc, usb)
 fs/          vfs (интерфейс, монтирование, MemFs, conformance), velorafs,
@@ -336,11 +362,11 @@ libc/shell   язык vsh и редактор строки (тесты на хо
 libc/editor  логика редактора Plume: клавиши, буфер, команды, кадры (тесты на хосте)
 libc/dns     запросы и ответы DNS (LGPL, входит в vlibc), libc/http — URL и HTTP для fetch
 libc/ui      velora-ui: графика, шрифты, элементы, ввод (тесты на хосте; screen — feature velora)
-userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo, start), свои флаги сборки
-tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fetch-fonts.sh, run-qemu.sh
+userland/    отдельный workspace программ (login, vsh, plume, coreutils, hello, vtest, uidemo, start, lumi), свои флаги сборки
+tools/       mkiso, mkusb (velora-usb.img), mkinitrd, mkpasswd, kstrip, fsck (velora-fsck, --cat), fontgen, fontsubset, fetch-fonts.sh, run-qemu.sh
 installer/   core (velora-install: логика установки), gui (экраны и меню), velora-setup (терминал)
 tests/       qemu_run.py, uiclick.py (тест clicks)
-docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D51),
+docs/        архитектура, карта памяти, системные вызовы, формат VeloraFS, сеть, железо (hardware.md), решения (D1–D56),
              план, сторонние компоненты, заметки к релизам
 ```
 

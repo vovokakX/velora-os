@@ -136,27 +136,36 @@ fn main() {
     r.wait(300);
     // Windows.
     r.d.launch(AppId::Files, &mut r.h, &mut r.f);
-    r.wait(300);
+    r.wait(400);
+    r.shot("06-files");
     r.d.launch(AppId::Terminal, &mut r.h, &mut r.f);
     r.wait(400);
-    r.shot("06-terminal-and-files");
+    r.shot("07-terminal");
     r.d.launch(AppId::Settings, &mut r.h, &mut r.f);
     r.wait(400);
-    r.shot("07-settings");
+    r.shot("08-settings");
     r.d.launch(AppId::About, &mut r.h, &mut r.f);
     r.wait(400);
-    r.shot("08-about");
+    r.shot("09-about");
     // Alt+Tab.
     r.step(&[Event::Chord {
         key: Key::Tab,
         mods: mods::ALT,
     }]);
     r.wait(200);
-    r.shot("09-alt-tab");
+    r.shot("10-alt-tab");
     r.step(&[Event::Modifier {
         key: Modifier::Alt,
         down: false,
         mods: 0,
     }]);
     r.wait(300);
+    // The clock's small window: a click on the clock.
+    let p = r.d.panel_rect();
+    let (x, y) = (p.right() - p.h * 3 / 4, p.center_y());
+    r.step(&[Event::MouseMove { x, y }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    r.step(&[Event::MouseButton { down: false }]);
+    r.wait(400);
+    r.shot("11-clock");
 }
