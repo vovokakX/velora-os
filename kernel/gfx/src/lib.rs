@@ -5,6 +5,7 @@
 //!   side ([`kitty::transmit`], [`kitty::QUERY`]).
 //! - [`base64`]: the payload encoding of the protocol.
 //! - [`image`]: premultiplied RGBA images, area-average scaling, blending.
+//! - [`logo`]: the Velora mark drawn from its geometry at any size.
 //! - [`png`] and [`inflate`]: PNG decoding for programs that ship images.
 
 #![cfg_attr(not(test), no_std)]
@@ -15,4 +16,5 @@ pub mod base64;
 pub mod image;
 pub mod inflate;
 pub mod kitty;
+pub mod logo;
 pub mod png;
