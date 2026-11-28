@@ -168,4 +168,80 @@ fn main() {
     r.step(&[Event::MouseButton { down: false }]);
     r.wait(400);
     r.shot("11-clock");
+    r.key(Key::Escape);
+    r.wait(300);
+    // Settings, page by page (a click on each row of the side bar).
+    r.d.launch(AppId::Settings, &mut r.h, &mut r.f);
+    r.wait(400);
+    let win = r.d.window_rect_of("Настройки").unwrap();
+    let sc = r.d.scale;
+    let s = |d: i32| ((d as i64 * sc + 128) >> 8) as i32;
+    let top = win.y + s(40);
+    let row_h = ((win.bottom() - top - s(24)) / 10).min(s(42));
+    let pages = [
+        (0, "12-settings-appearance"),
+        (1, "13-settings-wallpaper"),
+        (2, "14-settings-panel"),
+        (3, "15-settings-windows"),
+        (4, "16-settings-input"),
+        (5, "17-settings-display"),
+        (6, "18-settings-time"),
+        (8, "19-settings-user"),
+    ];
+    for (i, name) in pages {
+        let (x, y) = (win.x + s(100), top + s(12) + i * row_h + row_h / 2);
+        r.step(&[Event::MouseMove { x, y }]);
+        r.step(&[Event::MouseButton { down: true }]);
+        r.step(&[Event::MouseButton { down: false }]);
+        r.step(&[Event::MouseMove {
+            x: win.right() - s(20),
+            y: win.bottom() - s(20),
+        }]);
+        r.wait(400);
+        r.shot(name);
+    }
+    // A window maximized: smart hiding takes the panel away; the pointer
+    // at the bottom edge brings it back.
+    r.d.launch(AppId::Terminal, &mut r.h, &mut r.f);
+    r.wait(300);
+    r.step(&[Event::Chord {
+        key: Key::Up,
+        mods: mods::SUPER,
+    }]);
+    r.step(&[Event::MouseMove { x: w / 2, y: h / 3 }]);
+    r.wait(1200);
+    r.shot("20-panel-hidden");
+    r.step(&[Event::MouseMove { x: w / 2, y: h - 3 }]);
+    r.wait(500);
+    r.shot("21-panel-shown-at-the-edge");
+    r.step(&[Event::MouseMove { x: w / 2, y: h / 3 }]);
+    while !r.d.window_titles().is_empty() {
+        r.step(&[Event::Chord {
+            key: Key::F(4),
+            mods: mods::ALT,
+        }]);
+        r.wait(300);
+    }
+    r.d.launch(AppId::Files, &mut r.h, &mut r.f);
+    r.wait(600);
+    // Ctrl+Alt+D: every area drawn again is tinted (here a window moved
+    // by its title bar and the pointer over the panel).
+    r.step(&[Event::Chord {
+        key: Key::Char('d'),
+        mods: mods::CTRL | mods::ALT,
+    }]);
+    r.wait(100);
+    let t = r.d.window_rect_of("Домашняя папка").unwrap();
+    let (x, y) = (t.x + t.w / 2, t.y + s(14));
+    r.step(&[Event::MouseMove { x, y }]);
+    r.step(&[Event::MouseButton { down: true }]);
+    for i in 1..8 {
+        r.step(&[Event::MouseMove {
+            x: x + i * s(14),
+            y: y + i * s(6),
+        }]);
+    }
+    r.step(&[Event::MouseButton { down: false }]);
+    r.wait(300);
+    r.shot("22-damage-debug");
 }

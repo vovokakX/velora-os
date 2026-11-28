@@ -588,6 +588,8 @@ impl App for Settings {
                 col,
             );
             if resp.activated && !here {
+                // The rows above were drawn for the old page: all again.
+                cx.ui.request_redraw();
                 self.page = *p;
                 self.scroll = 0;
                 self.note = None;
@@ -1620,7 +1622,11 @@ impl Settings {
             let big = if cfg.clock_24h {
                 l.hhmm()
             } else {
-                let h12 = if l.hour.is_multiple_of(12) { 12 } else { l.hour % 12 };
+                let h12 = if l.hour.is_multiple_of(12) {
+                    12
+                } else {
+                    l.hour % 12
+                };
                 format!(
                     "{}:{:02} {}",
                     h12,
