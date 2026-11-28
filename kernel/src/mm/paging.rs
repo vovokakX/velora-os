@@ -406,6 +406,9 @@ pub enum UserKind {
     ReadOnly,
     /// Readable and writable, not executable.
     Data,
+    /// The frame buffer of a graphical program: writable, write-combining,
+    /// and borrowed (the frames are never freed with the mapping).
+    Framebuffer,
 }
 
 fn user_flags(kind: UserKind) -> u64 {
@@ -414,6 +417,14 @@ fn user_flags(kind: UserKind) -> u64 {
         UserKind::Code => base,
         UserKind::ReadOnly => base | nx(),
         UserKind::Data => base | WRITABLE | nx(),
+        UserKind::Framebuffer => {
+            let cache = if PAT_AVAILABLE.load(Ordering::Relaxed) {
+                PAT_4K | PWT
+            } else {
+                PCD
+            };
+            base | WRITABLE | nx() | cache | BORROWED
+        }
     }
 }
 

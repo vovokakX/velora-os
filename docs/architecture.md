@@ -42,13 +42,18 @@
 На этапе 1 есть только прообраз `Display`: `console::framebuffer::Framebuffer`.
 Остальные трейты появятся на своих этапах.
 
-### Место для Lumi
+### Lumi
 
-- Консоль ядра — лишь один из клиентов framebuffer. Lumi станет процессом
-  пользователя, который получит framebuffer через системный вызов
-  (отображение памяти) и будет сам рисовать окна.
-- Ввод идёт через очередь событий (`/dev/input/*`), а не напрямую в консоль.
-  Поэтому графическая оболочка сможет забрать ввод без изменения драйверов.
+- Консоль ядра — лишь один из клиентов framebuffer. Lumi (`/bin/lumi`,
+  crate `velora-lumi` в `lumi/`) — процесс пользователя: получает экран
+  вызовом `display`, ввод — из `/dev/keyboard` и `/dev/pointer`, и сам
+  рисует экран входа, окна, панель, меню приложений и приложения (D52).
+- Программы терминала (vsh, Plume) работают в окне через псевдотерминалы
+  (`pty`, D53). Окон для внешних графических программ пока нет.
+- Ядро запускает Lumi вместо консольного входа; без экрана, без шрифтов или
+  при `session=console` Lumi завершается и запускается `login`.
+- Рисование: картинка у каждого окна, сборка экрана только в изменённых
+  областях, указатель отдельным слоем; память — D55.
 
 ### Место для .exe
 
@@ -297,13 +302,19 @@ the rest of the kernel only through traits (`BlockDevice`, `FileSystem`,
 Stage 1 only has the first form of `Display`:
 `console::framebuffer::Framebuffer`.
 
-### Room for Lumi
+### Lumi
 
-- The kernel console is just one framebuffer client. Lumi will be a user
-  process that maps the framebuffer through a system call and draws windows
-  itself.
-- Input goes through an event queue (`/dev/input/*`), not straight into the
-  console, so a graphical shell can take over input without driver changes.
+- The kernel console is just one framebuffer client. Lumi (`/bin/lumi`, the
+  `velora-lumi` crate in `lumi/`) is a user process: it takes the screen
+  with the `display` call and input from `/dev/keyboard` and `/dev/pointer`,
+  and draws the login screen, windows, the panel, the app menu and the apps
+  itself (D52).
+- Terminal programs (vsh, Plume) run in a window through pseudo-terminals
+  (`pty`, D53). There are no windows for other graphical programs yet.
+- The kernel starts Lumi instead of the console login; without a screen,
+  without fonts or with `session=console` Lumi ends and `login` runs.
+- Drawing: a picture per window, the screen put together only in changed
+  areas, the pointer as a separate layer; memory: D55.
 
 ### Room for .exe
 
@@ -507,9 +518,11 @@ mapped). A panic or a fatal exception stops the other CPUs with an NMI.
   раскладки EN/RU), CBW/CSW и команды SCSI для флешек.
 - `kernel/src/drivers/xhci.rs`: передача контроллера от BIOS, сброс,
   кольца команд и событий, сброс портов, Enable Slot / Address Device /
-  Configure Endpoint, управляющие, массовые и прерывающие передачи. Всё
-  опросом (D21, D44): команды и передачи флешки ждут своего события, поток
-  `usb` раз в тик читает отчёты клавиатуры и мыши.
+  Configure Endpoint, управляющие, массовые и прерывающие передачи.
+  Команды и передачи флешки ждут своего события опросом (D21, D44).
+  Отчёты клавиатуры и мыши читает обработчик прерывания MSI-X или MSI
+  (D51); без них поток `usb` читает их раз в тик. На каждой конечной
+  точке стоят восемь передач.
 - Флешка — блочное устройство `usbN`; разделы (`usbNp1`) и FAT32
   монтируются как у других дисков, на разделе EFI Velora хранится журнал
   паники. Мышь — `/dev/mouse` (пакеты по 4 байта).
@@ -519,9 +532,187 @@ boot protocol keyboard and mouse reports, HID key to PS/2 set 1 scancode
 translation (a USB keyboard uses the same decoder and EN/RU layouts) and
 CBW/CSW plus SCSI commands for flash drives. `kernel/src/drivers/xhci.rs` does
 the BIOS handoff, reset, command and event rings, port reset, Enable Slot /
-Address Device / Configure Endpoint and control, bulk and interrupt transfers,
-all polled (D21, D44): commands and drive transfers wait for their event, and
-the `usb` thread reads keyboard and mouse reports every tick. A flash drive is
+Address Device / Configure Endpoint and control, bulk and interrupt transfers.
+Commands and drive transfers wait for their event by polling (D21, D44).
+Keyboard and mouse reports are read by the MSI-X or MSI interrupt handler
+(D51); without those, the `usb` thread reads them every tick. Each endpoint
+has eight transfers queued. A flash drive is
 block device `usbN`; its partitions (`usbNp1`) and FAT32 are mounted like any
 disk's, and a Velora EFI partition keeps the panic log. The mouse is
 `/dev/mouse` (4-byte packets).
+
+### Изображения в терминале / Images in the terminal
+
+- `kernel/gfx` (`velora-gfx`, тесты на хосте): протокол Kitty (разбор
+  команд по байту, склейка частей `m=1`, ответы, запрос поддержки, фильтр
+  строк APC), base64, изображения RGBA с предумноженной альфой,
+  масштабирование усреднением по площади, декодер PNG и inflate для
+  программ.
+- `kernel/src/console/text.rs`: состояние APC в разборе escape-
+  последовательностей; изображение рисуется в ячейках у курсора, экран
+  прокручивается, если оно не помещается; ответы на запросы копятся и
+  через `tty::write` становятся вводом программы. COM1 и `dmesg` получают
+  текст без изображений (D46).
+- `velofetch` проверяет, что ввод и вывод — консоль, есть экран
+  (`tty(3)`) и терминал отвечает на запрос, и тогда показывает
+  `assets/velora-logo.png`: фон картинки становится прозрачным и
+  обрезается, знак занимает высоту сводки (13 строк вместе с палитрой
+  цветов). Иначе — ASCII-логотип
+  (также `velofetch --ascii` и вывод в канал).
+
+`kernel/gfx` (`velora-gfx`, host-tested) has the Kitty protocol (byte-by-byte
+command parsing, joining `m=1` chunks, answers, the support query, an APC
+filter), base64, premultiplied RGBA images, area-average scaling, and a PNG
+decoder with inflate for programs. `kernel/src/console/text.rs` has an APC
+state in its escape parser; an image is drawn in cells at the cursor, and the
+screen scrolls first if it does not fit; answers to queries are collected and
+become program input through `tty::write`. COM1 and `dmesg` get the text
+without images (D46). `velofetch` checks that input and output are the
+console, there is a screen (`tty(3)`) and the terminal answers the query, and
+then shows `assets/velora-logo.png`: the picture's background is made
+transparent and cut away, and the mark takes the height of the summary (13
+rows with the colour palette). Otherwise it prints the ASCII logo (also with
+`velofetch --ascii` and into a pipe).
+
+### Графическая основа velora-ui / Graphical toolkit velora-ui
+
+- `libc/ui` (`velora-ui`, тесты на хосте): холст с альфа-смешиванием,
+  скруглённые прямоугольники, круги, дуги, линии и мягкие тени через
+  функции расстояния в фиксированной точке (1/256 пикселя, без плавающей
+  точки), градиенты с упорядоченным дизерингом; текст Inter через fontdue с
+  кешем глифов; значки из примитивов; картинки PNG (`velora-gfx`); указатели
+  мыши из `assets/cursors`; темы (графитовая и светлая), фон с волнами и
+  окна (`decor`). Элементы в немедленном режиме (`Ui`, `Ctx`): кнопка,
+  переключатель, радиокнопки, выпадающий список, список выбора, поле ввода,
+  полоса и кольцо прогресса. Фокус — Tab/Shift+Tab по порядку рисования,
+  Enter/Пробел, стрелки, Escape. Клавиши подаются по одной на кадр.
+- Модуль `screen` (feature `velora`): `display` отображает framebuffer,
+  программа рисует в холст (двойная буферизация) и копирует изменённую
+  часть; указатель мыши рисуется только при копировании. Ввод —
+  `/dev/keyboard` и `/dev/mouse`.
+- Ядро: `display.rs` (владелец экрана, отображение с write-combining,
+  возврат экрана консоли после выхода владельца); консоль в это время
+  рисует только в копию в памяти. Мышь PS/2 на втором порту 8042 (с
+  колесом), разбор пакетов — `velora-input::ps2mouse`.
+- `/bin/uidemo` показывает все элементы; тест `boot` запускает его, снимает
+  экран (`build/logs/uidemo-*.png`), нажимает клавиши, двигает мышь и
+  проверяет, что консоль вернулась. `cargo run -p velora-ui --example render`
+  рисует ту же галерею на хосте.
+
+`libc/ui` (`velora-ui`, host-tested) has a canvas with alpha blending; rounded
+rectangles, circles, arcs, lines and soft shadows from fixed-point distance
+functions (1/256 pixel, no floating point); gradients with ordered dithering;
+Inter text through fontdue with a glyph cache; icons built from primitives;
+PNG pictures (`velora-gfx`); mouse pointers from `assets/cursors`; themes
+(graphite and light), the wavy backdrop and windows (`decor`). Widgets are
+immediate-mode (`Ui`, `Ctx`): button, switch, radio buttons, drop-down list,
+choice list, text field, progress bar and ring. Focus moves with Tab/Shift+Tab
+in drawing order; Enter/Space, arrows and Escape work; keys are fed one per
+frame. The `screen` module (feature `velora`) maps the frame buffer with
+`display`; the program draws into the canvas (double buffering) and copies the
+changed part; the mouse pointer is drawn only on the way to the screen. Input
+comes from `/dev/keyboard` and `/dev/mouse`. In the kernel, `display.rs` keeps
+the screen's owner, maps the frame buffer write-combining and gives the screen
+back to the console after the owner exits; meanwhile the console draws only
+into its RAM copy. A PS/2 mouse on the 8042's second port (with a wheel) is
+supported; packets are decoded by `velora-input::ps2mouse`. `/bin/uidemo`
+shows every widget; the `boot` test runs it, takes screenshots
+(`build/logs/uidemo-*.png`), presses keys, moves the mouse and checks that the
+console comes back. `cargo run -p velora-ui --example render` draws the same
+gallery on the host.
+
+### Стартовое меню и установщик / Start menu and installer
+
+- `installer/core` (`velora-install`, тесты на хосте): план установки,
+  проверки, разметка GPT (автоматическая и с заданными размерами), FAT32 с
+  Limine и ядром, VeloraFS с программами и шрифтами, пользователи,
+  `/etc/velora/*.conf`. Прогресс — этапы «Копирование файлов», «Установка
+  загрузчика», «Настройка системы», «Завершение». Модуль `live` (feature
+  `velora`): диски `/dev` с моделью (`diskinfo`) и файлы Live-системы.
+- `installer/gui` (`velora-installer-gui`, тесты на хосте): экраны
+  установщика и меню как функции состояния (`App`, `Chooser`).
+- `userland/start` (`/bin/velora-start`): ядро запускает его в
+  Live-режиме перед `login`; меню, графический установщик (`--install`
+  открывает его сразу), запуск `velora-setup`, текстовое меню без экрана.
+  Строки `velora-start: ...` на последовательном порту отмечают экраны.
+- Тест `gui` в `tests/qemu_run.py`: меню, все экраны клавиатурой, режим
+  «Эксперт» с EFI 128 МиБ, установка на образ, загрузка с диска и проверка
+  настроек; снимки каждого экрана (`--screens`, `--resolution`,
+  `--screens-only`). Остальные тесты Live-образа выбирают в меню «3».
+
+`installer/core` (`velora-install`, host-tested) holds the plan, its checks,
+GPT partitioning (automatic or with given sizes), FAT32 with Limine and the
+kernel, VeloraFS with the programs and fonts, users and `/etc/velora/*.conf`;
+progress comes in the phases "copying files", "installing the bootloader",
+"setting up the system", "finishing". Its `live` module (feature `velora`)
+lists `/dev` disks with their model (`diskinfo`) and reads the Live system's
+files. `installer/gui` (`velora-installer-gui`, host-tested) has the
+installer and menu screens as functions of their state (`App`, `Chooser`).
+`userland/start` (`/bin/velora-start`) is run by the kernel in the Live
+system before `login`: the menu, the graphical installer (`--install` opens
+it directly), `velora-setup`, and a text menu without a screen; lines
+`velora-start: ...` on the serial port mark the screens. The `gui` test in
+`tests/qemu_run.py` goes through the menu and every screen with the keyboard,
+picks Expert mode with a 128 MiB EFI partition, installs onto an image, boots
+from it and checks the settings, saving a screenshot of every screen
+(`--screens`, `--resolution`, `--screens-only`). The other tests of the Live
+image choose "3" in the menu.
+
+### Чёткость, акцент, анимации / Sharpness, accent, animations
+
+- Масштаб окна установщика — ступени 1x…4x (`installer/gui::SCALES`),
+  кадр рисуется в родном разрешении экрана (D49). Текст — смешивание в
+  линейном свете и привязка высоты строчных букв к пикселям
+  (`Fonts::snapped_size`).
+- Темы: тёмная, светлая и Velora Gamers, у каждой акцентный цвет
+  (`Theme::with_accent`, по умолчанию `theme::AMBER`, у Gamers
+  `theme::NEON_VIOLET`) и цвет деталей (`Theme::detail`); `Theme::mix`
+  смешивает две темы.
+- `libc/ui/src/anim.rs`: кривые ease-in-out, `Tweens` (значения, которые
+  плавно доходят до новой цели) и `Transition` (затухание или сдвиг между
+  последним показанным кадром и новыми). Элементы анимируют наведение,
+  нажатие, фокус, положение переключателя, раскрытие списков;
+  `Ui::animating` просит у программы следующий кадр.
+- `Screen::present` пишет в видеопамять только изменившиеся участки строк
+  (хранится копия показанного). Ввод указателя — `/dev/pointer`.
+- Ядро: `velora-usb::report` разбирает report descriptor; xHCI читает
+  планшеты и мыши, которые не являются boot-устройствами, в report
+  protocol (`Function::Pointer`). `/dev/pointer` отдаёт пакеты по 8 байт.
+- `tools/run-qemu.sh`: ручной запуск с usb-tablet и окном без растяжения в
+  Windows. Тест `clicks` (`velora-uitest.iso`, `tests/uiclick.py`) щёлкает
+  каждый элемент установщика.
+- Кадры по изменениям (D50): `Ui::plan` решает, пропустить кадр,
+  перерисовать часть (`Canvas::set_frame`) или весь экран; `velora-start`
+  держит не больше 60 кадров в секунду и ждёт ввод вызовом `input_wait`.
+  Смешивание и заливки идут по два пикселя (`canvas::blend_span`). F12 —
+  счётчик кадров; `qemu_run.py fps` меряет его в 1920x1080.
+- Диски для установки: `live::disks` (шина, подключён ли, диск загрузки),
+  `live::release` отключает разделы (`umount`). Ядро узнаёт диск загрузки
+  по GUID раздела от Limine (`block::boot_disk`).
+
+The installer window is drawn at a scale step from 1x to 4x
+(`installer/gui::SCALES`) in the screen's own resolution (D49). Text is
+blended in linear light and the x-height is snapped to whole pixels
+(`Fonts::snapped_size`). The dark, light and Velora Gamers themes each have an
+accent colour (`Theme::with_accent`, `theme::AMBER` by default); `Theme::mix`
+blends two themes. `libc/ui/src/anim.rs` has ease-in-out curves, `Tweens`
+(values that move smoothly to a new target) and `Transition` (a fade or a
+slide between the last frame shown and the new ones); widgets animate hover,
+press, focus, a switch's knob and a list opening, and `Ui::animating` asks the
+program for another frame. `Screen::present` writes only the row spans that
+changed (a copy of what is shown is kept); pointer input comes from
+`/dev/pointer`. In the kernel, `velora-usb::report` reads report descriptors,
+and xHCI reads tablets and mice that are not boot devices in report protocol
+(`Function::Pointer`); `/dev/pointer` gives 8-byte packets.
+`tools/run-qemu.sh` runs QEMU by hand with a USB tablet and, on Windows, a
+window that is not stretched. The `clicks` test (`velora-uitest.iso`,
+`tests/uiclick.py`) clicks every element of the installer. Frames follow
+changes (D50): `Ui::plan` decides whether a frame is skipped, drawn in part
+(`Canvas::set_frame`) or whole; `velora-start` draws at most 60 frames a
+second and waits for input with `input_wait`. Blending and fills work on two
+pixels at a time (`canvas::blend_span`). F12 shows a frame counter, and
+`qemu_run.py fps` measures it at 1920x1080. The third theme is Velora Gamers
+(`theme::GAMERS`, accent `NEON_VIOLET`, details `Theme::detail`). Disks for
+installing: `live::disks` (bus, mounted or not, boot disk) and
+`live::release`, which unmounts the partitions (`umount`); the kernel finds
+the boot disk from the partition GUID Limine reports (`block::boot_disk`).

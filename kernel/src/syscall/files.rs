@@ -50,7 +50,11 @@ fn file(fd: u64) -> Result<FileRef, i64> {
 fn node_of(f: &OpenFile) -> Result<(Node, Kind), i64> {
     match &f.handle {
         Handle::File { node, kind, .. } => Ok((*node, *kind)),
-        Handle::Console | Handle::Pipe { .. } | Handle::Socket { .. } => Err(-errno::ESPIPE),
+        Handle::Console
+        | Handle::Pipe { .. }
+        | Handle::Socket { .. }
+        | Handle::PtyMaster(_)
+        | Handle::PtySlave(_) => Err(-errno::ESPIPE),
     }
 }
 
@@ -373,7 +377,7 @@ pub fn fstat(fd: u64, out: u64) -> i64 {
     };
     let of = f.lock();
     let st = match &of.handle {
-        Handle::Console => console_stat(),
+        Handle::Console | Handle::PtyMaster(_) | Handle::PtySlave(_) => console_stat(),
         Handle::Socket { .. } => Stat {
             mode: velora_abi::mode::SOCKET | 0o600,
             nlink: 1,
@@ -520,6 +524,21 @@ pub fn ftruncate(fd: u64, size: u64) -> i64 {
 
 pub fn sync() -> i64 {
     match fs::with(|v| v.sync_all()) {
+        Ok(()) => 0,
+        Err(e) => err(e),
+    }
+}
+
+/// Unmounts a disk mounted at boot under /mnt (root only).
+pub fn umount(ptr: u64, len: u64) -> i64 {
+    let p = match user_path(ptr, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    if sched::current_cred().uid != 0 {
+        return -errno::EPERM;
+    }
+    match fs::umount(&p) {
         Ok(()) => 0,
         Err(e) => err(e),
     }

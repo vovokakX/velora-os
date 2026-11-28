@@ -65,7 +65,7 @@
 | Сеть | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (проверены в QEMU), I217/I218/I219 (встроены во многие платы Intel; на железе не проверены). Realtek и Wi-Fi не поддерживаются |
 | Процессоры | все ядра (до 64): программы работают параллельно, код ядра — под общей блокировкой |
 | Питание | выключение и перезагрузка через ACPI; кнопка питания на ПК, где она фиксированное событие ACPI (обычно настольные ПК). У многих ноутбуков кнопка — метод AML, она не работает: выключайте командой `shutdown` |
-| USB | контроллеры xHCI: клавиатура, мышь (`/dev/mouse`), флешки (разделы, FAT32). Только устройства на корневых портах, подключённые при загрузке: хабы и горячее подключение не поддерживаются |
+| USB | контроллеры xHCI: клавиатура, мышь (`/dev/mouse`, `/dev/pointer`), планшеты и мыши в report protocol (по report descriptor), флешки (разделы, FAT32). Только устройства на корневых портах, подключённые при загрузке: хабы и горячее подключение не поддерживаются |
 
 ### Если что-то пошло не так
 
@@ -87,6 +87,7 @@
 |---|---|
 | `velora.fontscale=1` (`2`, `3`) | размер шрифта консоли; без параметра выбирается сам |
 | `velora.root=PARTUUID=<GUID>` | корневой раздел VeloraFS (ставит установщик) |
+| `velora.xhci_poll` | не использовать прерывания xHCI (MSI-X, MSI): клавиатура и мышь USB читаются раз в тик |
 
 Сообщения о проблемах — в issues репозитория. Приложите `velora-panic.log`
 или вывод `dmesg` и укажите модель компьютера.
@@ -155,7 +156,7 @@ example to edit `boot/limine.conf`.
 | Network | virtio-net; Intel e1000/e1000e: 82540EM, 82545EM, 82574L (tested in QEMU), I217/I218/I219 (built into many Intel boards; untested on hardware). No Realtek, no Wi-Fi |
 | Processors | all cores (up to 64): programs run in parallel, kernel code under one lock |
 | Power | ACPI power off and restart; the power button on PCs where it is a fixed ACPI event (usually desktops). On many laptops the button is an AML method and does not work: use `shutdown` |
-| USB | xHCI controllers: keyboard, mouse (`/dev/mouse`), flash drives (partitions, FAT32). Only devices on root ports present at boot: no hubs, no hot plugging |
+| USB | xHCI controllers: keyboard, mouse (`/dev/mouse`, `/dev/pointer`), tablets and mice in report protocol (from the report descriptor), flash drives (partitions, FAT32). Only devices on root ports present at boot: no hubs, no hot plugging |
 
 ### When something goes wrong
 
@@ -175,6 +176,7 @@ example to edit `boot/limine.conf`.
 |---|---|
 | `velora.fontscale=1` (`2`, `3`) | console font size; chosen automatically when absent |
 | `velora.root=PARTUUID=<GUID>` | VeloraFS root partition (set by the installer) |
+| `velora.xhci_poll` | no xHCI interrupts (MSI-X, MSI): USB keyboards and mice are read every tick |
 
 Report problems in the repository's issues; attach `velora-panic.log` or the
 `dmesg` output and name the computer model.

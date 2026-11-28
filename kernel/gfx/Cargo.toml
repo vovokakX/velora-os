@@ -1,0 +1,8 @@
+[package]
+name = "velora-gfx"
+description = "Images for the terminal: Kitty graphics protocol, base64, PNG decoding, scaling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

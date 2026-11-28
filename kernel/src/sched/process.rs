@@ -254,6 +254,7 @@ fn become_zombie(s: &mut Sched, pid: Pid, status: i64) {
         return;
     }
     p.state = ProcState::Zombie(status);
+    crate::display::process_exited(pid);
     // Its files are closed after the next switch, outside the lock.
     let files = core::mem::take(&mut p.files);
     let waiters = core::mem::take(&mut p.exit_waiters);
@@ -350,6 +351,7 @@ pub fn wait_pid(pid: Pid) -> Option<i64> {
         drop(aspace);
     }
     cpu::irq_restore(was);
+    crate::display::poll();
     status
 }
 

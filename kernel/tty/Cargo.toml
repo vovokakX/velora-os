@@ -1,0 +1,11 @@
+[package]
+name = "velora-tty"
+description = "Terminal line discipline for pseudo-terminals: line mode, echo, raw mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+velora-abi = { path = "../abi" }

@@ -2,20 +2,26 @@
 //! keyboards and mice (HID) and flash drives (mass storage, bulk-only
 //! transport, SCSI).
 //!
-//! - Polling, like the disk drivers (D21): commands and control/bulk
-//!   transfers wait for their event; the `usb` kernel thread looks at the
-//!   event ring every tick for keyboard and mouse reports.
+//! - Commands and control/bulk transfers wait for their event by polling,
+//!   like the disk drivers (D21).
+//! - Keyboard and mouse reports: with MSI-X or MSI the interrupt handler
+//!   reads the event ring, so a mouse is read at its own rate. Without
+//!   them (or with `velora.xhci_poll` on the command line) the `usb`
+//!   kernel thread reads it every timer tick (100 Hz). D51.
 //! - Devices on root hub ports that are connected at boot are set up.
 //! - Descriptor parsing, HID reports and SCSI commands are in
 //!   `velora-usb` (tested on the host).
 //!
 //! NOT IMPLEMENTED: USB hubs (devices behind a hub are not seen), hot
 //! plugging (devices connected after boot), keyboard LEDs, isochronous
-//! transfers, interrupts (MSI) instead of polling.
+//! transfers, legacy INTx interrupts (without MSI the controller is
+//! polled).
 
 use super::block::{self, BlockDevice, BlockError};
 use super::dma::DmaBuffer;
+use super::msix::{self, MsiX};
 use super::pci;
+use crate::arch::x86_64::{idt::InterruptFrame, irq};
 use crate::mm::mmio;
 use crate::sched::{self, Priority, WaitQueue};
 use crate::sync::SpinLock;
@@ -24,9 +30,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use velora_input::{Keyboard as Decoder, Layout};
 use velora_usb::desc::{self, Endpoint, Setup};
-use velora_usb::{hid, msc};
+use velora_usb::{hid, msc, report};
 
 // Capability registers.
 const CAP_HCSPARAMS1: u64 = 0x04;
@@ -43,7 +50,9 @@ const OP_CONFIG: u64 = 0x38;
 const OP_PORTS: u64 = 0x400;
 const CMD_RUN: u32 = 1;
 const CMD_RESET: u32 = 1 << 1;
+const CMD_INTERRUPTS: u32 = 1 << 2;
 const STS_HALTED: u32 = 1;
+const STS_EVENT_INTERRUPT: u32 = 1 << 3;
 const STS_NOT_READY: u32 = 1 << 11;
 // PORTSC bits.
 const PORT_CONNECTED: u32 = 1;
@@ -78,6 +87,14 @@ const EP_CONTROL: u32 = 4;
 const EP_BULK_OUT: u32 = 2;
 const EP_BULK_IN: u32 = 6;
 const EP_INTERRUPT_IN: u32 = 7;
+
+// Interrupter 0 registers (offsets in its register set).
+const IR_MANAGEMENT: u64 = 0x00;
+const IR_MODERATION: u64 = 0x04;
+const IMAN_PENDING: u32 = 1;
+const IMAN_ENABLE: u32 = 1 << 1;
+/// At most one interrupt a millisecond (in units of 250 ns).
+const MODERATION_250NS: u32 = 4000;
 
 const RING_TRBS: usize = 256;
 const TIMEOUT_MS: u64 = 2000;
@@ -171,16 +188,79 @@ enum Function {
     Keyboard {
         dci: u8,
         ring: Ring,
-        buf: DmaBuffer,
+        reports: Reports,
         report: hid::Keyboard,
         decoder: Decoder,
     },
     Mouse {
         dci: u8,
         ring: Ring,
-        buf: DmaBuffer,
+        reports: Reports,
+    },
+    /// A pointer in report protocol (a tablet such as QEMU's usb-tablet,
+    /// or a mouse that is not a boot device), read with its report
+    /// descriptor.
+    Pointer {
+        dci: u8,
+        ring: Ring,
+        reports: Reports,
+        format: report::Pointer,
     },
     Storage,
+}
+
+/// Transfers queued at once on a keyboard or mouse endpoint.
+const REPORTS_QUEUED: usize = 8;
+
+/// Report buffers of an interrupt IN endpoint. Several transfers stay
+/// queued, so the controller can deliver more than one report before the
+/// driver looks at the event ring again (a polled controller is read
+/// once a tick, and a device may report more often).
+struct Reports {
+    bufs: Vec<DmaBuffer>,
+    /// Queued transfers, oldest first: TRB address and buffer.
+    queued: Vec<(u64, usize)>,
+    len: u32,
+}
+
+impl Reports {
+    /// Buffers for reports of `len` bytes, all queued on `ring`.
+    fn new(ring: &mut Ring, len: u32) -> Option<Self> {
+        let mut r = Reports {
+            bufs: Vec::new(),
+            queued: Vec::new(),
+            len,
+        };
+        for i in 0..REPORTS_QUEUED {
+            r.bufs.push(DmaBuffer::new(64)?);
+            r.queue(ring, i);
+        }
+        Some(r)
+    }
+
+    fn queue(&mut self, ring: &mut Ring, i: usize) {
+        let p = self.bufs[i].phys();
+        let trb = ring.push([
+            p as u32,
+            (p >> 32) as u32,
+            self.len,
+            TRB_NORMAL << 10 | TRB_IOC | 1 << 2,
+        ]);
+        self.queued.push((trb, i));
+    }
+
+    /// The buffer of the transfer at TRB `trb`, which has completed.
+    fn complete(&mut self, trb: u64) -> Option<usize> {
+        let at = self.queued.iter().position(|&(t, _)| t == trb)?;
+        Some(self.queued.remove(at).1)
+    }
+
+    /// Copies the start of buffer `i` into `out`.
+    fn read(&self, i: usize, out: &mut [u8]) {
+        for (k, b) in out.iter_mut().enumerate() {
+            *b = self.bufs[i].read::<u8>(k);
+        }
+    }
 }
 
 struct Slot {
@@ -208,6 +288,24 @@ struct Controller {
     contexts: Vec<DmaBuffer>,
     _scratch: Vec<DmaBuffer>,
     slots: Vec<Slot>,
+    irq: Irq,
+}
+
+/// How the controller tells the `usb` thread about events.
+enum Irq {
+    MsiX(MsiX),
+    Msi,
+    Polled,
+}
+
+impl Irq {
+    fn name(&self) -> &'static str {
+        match self {
+            Irq::MsiX(_) => "MSI-X",
+            Irq::Msi => "MSI",
+            Irq::Polled => "polled",
+        }
+    }
 }
 
 fn r32(addr: u64) -> u32 {
@@ -392,18 +490,8 @@ impl Controller {
         Ok(len.saturating_sub(residue))
     }
 
-    /// Queues a read of one report on an interrupt IN endpoint.
-    fn queue_report(ring: &mut Ring, buf: &DmaBuffer, len: u32) {
-        let p = buf.phys();
-        ring.push([
-            p as u32,
-            (p >> 32) as u32,
-            len,
-            TRB_NORMAL << 10 | TRB_IOC | 1 << 2,
-        ]);
-    }
-
     /// A keyboard or mouse report arrived (or another unexpected event).
+    /// Its buffer is read and queued again.
     fn handle_async(&mut self, e: &Event) {
         if e.kind() != TRB_TRANSFER_EVENT {
             return;
@@ -413,17 +501,30 @@ impl Controller {
             return;
         };
         let ok = e.code() == CC_SUCCESS || e.code() == CC_SHORT_PACKET;
-        let mut ring_bell = None;
-        match &mut s.function {
-            Some(Function::Keyboard {
-                dci,
-                ring,
-                buf,
-                report,
-                decoder,
-            }) if *dci == ep => {
-                if ok {
-                    let r: [u8; 8] = core::array::from_fn(|i| buf.read::<u8>(i));
+        let (dci, ring, reports) = match &mut s.function {
+            Some(
+                Function::Keyboard {
+                    dci, ring, reports, ..
+                }
+                | Function::Mouse { dci, ring, reports }
+                | Function::Pointer {
+                    dci, ring, reports, ..
+                },
+            ) if *dci == ep => (*dci, ring, reports),
+            _ => return,
+        };
+        let Some(i) = reports.complete(e.pointer()) else {
+            return;
+        };
+        let mut r = [0u8; 64];
+        reports.read(i, &mut r[..reports.len as usize]);
+        reports.queue(ring, i);
+        if ok {
+            match &mut s.function {
+                Some(Function::Keyboard {
+                    report, decoder, ..
+                }) => {
+                    let r: [u8; 8] = core::array::from_fn(|k| r[k]);
                     for byte in report.report(&r) {
                         let (ev, _) = decoder.feed(byte);
                         if let Some(ev) = ev {
@@ -431,29 +532,35 @@ impl Controller {
                         }
                     }
                 }
-                Self::queue_report(ring, buf, 8);
-                ring_bell = Some(*dci);
-            }
-            Some(Function::Mouse { dci, ring, buf }) if *dci == ep => {
-                if ok {
-                    let r: [u8; 4] = core::array::from_fn(|i| buf.read::<u8>(i));
+                Some(Function::Mouse { .. }) => {
+                    let r: [u8; 4] = core::array::from_fn(|k| r[k]);
                     if let Some(m) = hid::parse_mouse(&r) {
                         input::push_mouse(input::MouseEvent {
                             buttons: m.buttons,
                             dx: m.dx,
                             dy: m.dy,
                             wheel: m.wheel,
+                            abs: None,
                         });
                     }
                 }
-                Self::queue_report(ring, buf, 4);
-                ring_bell = Some(*dci);
+                Some(Function::Pointer { format, .. }) => {
+                    let len = format.bytes.min(64);
+                    if let Some(p) = format.parse(&r[..len]) {
+                        let rel = |v: i32| v.clamp(-127, 127) as i8;
+                        input::push_mouse(input::MouseEvent {
+                            buttons: p.buttons,
+                            dx: if p.absolute { 0 } else { rel(p.x) },
+                            dy: if p.absolute { 0 } else { rel(p.y) },
+                            wheel: p.wheel,
+                            abs: p.absolute.then_some((p.x as u16, p.y as u16)),
+                        });
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
-        if let Some(dci) = ring_bell {
-            self.ring_doorbell(slot, dci);
-        }
+        self.ring_doorbell(slot, dci);
     }
 
     // --- device set-up ----------------------------------------------------
@@ -625,7 +732,93 @@ impl Controller {
 static CONTROLLERS: SpinLock<Vec<Arc<SpinLock<Controller>>>> = SpinLock::new(Vec::new());
 static WAKE: WaitQueue = WaitQueue::new();
 
-fn start(d: &velora_pci::Device) -> Result<Controller, &'static str> {
+/// Controllers that can have an interrupt vector of their own.
+const MAX_IRQ_CONTROLLERS: usize = 4;
+/// Operational and interrupter register addresses of each controller
+/// with an interrupt, by vector (0 when unused): the interrupt handler
+/// must not take the controller lock.
+static IRQ_OP: [AtomicU64; MAX_IRQ_CONTROLLERS] =
+    [const { AtomicU64::new(0) }; MAX_IRQ_CONTROLLERS];
+static IRQ_IR: [AtomicU64; MAX_IRQ_CONTROLLERS] =
+    [const { AtomicU64::new(0) }; MAX_IRQ_CONTROLLERS];
+/// An interrupt came since the `usb` thread last looked at the rings.
+static PENDING: AtomicBool = AtomicBool::new(false);
+static INTERRUPTS: AtomicU64 = AtomicU64::new(0);
+
+fn on_interrupt(frame: &mut InterruptFrame) {
+    let i = (frame.vector as u8).wrapping_sub(irq::VECTOR_XHCI) as usize;
+    if i < MAX_IRQ_CONTROLLERS {
+        let op = IRQ_OP[i].load(Ordering::Acquire);
+        let ir = IRQ_IR[i].load(Ordering::Acquire);
+        if op != 0 {
+            // Both bits are cleared by writing 1.
+            w32(op + OP_USBSTS, STS_EVENT_INTERRUPT);
+            w32(ir + IR_MANAGEMENT, IMAN_ENABLE | IMAN_PENDING);
+        }
+    }
+    INTERRUPTS.fetch_add(1, Ordering::Relaxed);
+    // The reports are handled here, on the interrupted thread: waking the
+    // `usb` thread would switch threads (and address spaces, flushing the
+    // TLB of a program that draws) for every report. The controller lock
+    // turns interrupts off while held, so on this CPU it is free; another
+    // CPU may hold it for storage I/O, which handles reports itself.
+    let ctl = CONTROLLERS.lock().get(i).cloned();
+    match ctl.as_ref().map(|c| c.try_lock()) {
+        Some(Some(mut c)) => {
+            while let Some(e) = c.next_event() {
+                c.handle_async(&e);
+            }
+        }
+        // Still being set up: its waits read the event ring.
+        None => {}
+        // Busy: the `usb` thread looks again shortly.
+        Some(None) => {
+            PENDING.store(true, Ordering::Release);
+            if sched::is_running() {
+                WAKE.wake_all();
+            }
+        }
+    }
+}
+
+/// Interrupts taken from xHCI controllers since boot.
+pub fn interrupt_count() -> u64 {
+    INTERRUPTS.load(Ordering::Relaxed)
+}
+
+/// How each controller signals events: "MSI-X", "MSI" or "polled".
+pub fn irq_modes() -> Vec<&'static str> {
+    CONTROLLERS
+        .lock()
+        .iter()
+        .map(|c| c.lock().irq.name())
+        .collect()
+}
+
+/// Gives controller `index` an interrupt: MSI-X, else MSI, else none.
+fn setup_irq(d: &velora_pci::Device, index: usize, op: u64, ir: u64) -> Irq {
+    if index >= MAX_IRQ_CONTROLLERS || crate::boot::cmdline_has("velora.xhci_poll") {
+        return Irq::Polled;
+    }
+    let vector = irq::VECTOR_XHCI + index as u8;
+    IRQ_OP[index].store(op, Ordering::Release);
+    IRQ_IR[index].store(ir, Ordering::Release);
+    irq::set_handler(vector, on_interrupt);
+    if let Ok(m) = MsiX::enable(d)
+        && m.route(0, vector).is_ok()
+    {
+        return Irq::MsiX(m);
+    }
+    if msix::enable_msi(d, vector) {
+        return Irq::Msi;
+    }
+    irq::clear_handler(vector);
+    IRQ_OP[index].store(0, Ordering::Release);
+    IRQ_IR[index].store(0, Ordering::Release);
+    Irq::Polled
+}
+
+fn start(d: &velora_pci::Device, index: usize) -> Result<Controller, &'static str> {
     let cfg = pci::config();
     velora_pci::enable_device(cfg, d.addr);
     let (bar, size) = d.bars[0].memory().ok_or("BAR0 missing")?;
@@ -694,8 +887,15 @@ fn start(d: &velora_pci::Device) -> Result<Controller, &'static str> {
     w32(ir + 0x08, 1); // ERSTSZ
     w64(ir + 0x18, events.phys());
     w64(ir + 0x10, erst.phys());
-    w32(ir, 0); // no interrupts: polled
-    w32(op + OP_USBCMD, CMD_RUN);
+    let irq = setup_irq(d, index, op, ir);
+    if matches!(irq, Irq::Polled) {
+        w32(ir + IR_MANAGEMENT, 0);
+        w32(op + OP_USBCMD, CMD_RUN);
+    } else {
+        w32(ir + IR_MODERATION, MODERATION_250NS);
+        w32(ir + IR_MANAGEMENT, IMAN_ENABLE | IMAN_PENDING);
+        w32(op + OP_USBCMD, CMD_RUN | CMD_INTERRUPTS);
+    }
     wait(100, || r32(op + OP_USBSTS) & STS_HALTED == 0).map_err(|_| "controller did not start")?;
 
     Ok(Controller {
@@ -714,6 +914,7 @@ fn start(d: &velora_pci::Device) -> Result<Controller, &'static str> {
         contexts: Vec::new(),
         _scratch: scratch,
         slots: Vec::new(),
+        irq,
     })
 }
 
@@ -775,6 +976,12 @@ impl BlockDevice for UsbDisk {
     }
     fn description(&self) -> String {
         format!("USB mass storage, {}", self.model)
+    }
+    fn model(&self) -> String {
+        self.model.clone()
+    }
+    fn kind(&self) -> u32 {
+        velora_abi::disk_kind::USB
     }
     fn sector_size(&self) -> usize {
         self.sector_size
@@ -867,17 +1074,38 @@ fn setup_port(
             .endpoints
             .iter()
             .find(|e| e.is_interrupt() && e.is_in());
-        if iface.class == desc::CLASS_HID && iface.subclass == hid::SUBCLASS_BOOT {
+        if iface.class == desc::CLASS_HID {
             let Some(&ep) = int_in else { continue };
-            let keyboard = iface.protocol == hid::PROTOCOL_KEYBOARD;
-            if !keyboard && iface.protocol != hid::PROTOCOL_MOUSE {
+            let boot = iface.subclass == hid::SUBCLASS_BOOT;
+            let keyboard = boot && iface.protocol == hid::PROTOCOL_KEYBOARD;
+            let boot_mouse = boot && iface.protocol == hid::PROTOCOL_MOUSE;
+            c.control(slot, Setup::set_configuration(config.value), None)?;
+            // Other pointers (tablets above all) describe their reports;
+            // a boot mouse keeps the boot protocol unless it is absolute.
+            let mut format = None;
+            if !keyboard {
+                let mut d = DmaBuffer::new(512).ok_or(UsbError::NoMemory)?;
+                let req = Setup::get_interface_descriptor(0x22, iface.number, 512);
+                if let Ok(n) = c.control(slot, req, Some(&mut d)) {
+                    let bytes: Vec<u8> = (0..n.min(512)).map(|i| d.read::<u8>(i)).collect();
+                    format = report::parse_pointer(&bytes)
+                        .filter(|p| (p.absolute() || !boot_mouse) && p.bytes <= 64);
+                }
+            }
+            if !keyboard && !boot_mouse && format.is_none() {
                 continue;
             }
-            c.control(slot, Setup::set_configuration(config.value), None)?;
-            // Boot protocol, reports only on change.
+            // Boot protocol for keyboards and boot mice, report protocol
+            // for the others; reports only on change.
             let _ = c.control(
                 slot,
-                Setup::class_interface(hid::REQ_SET_PROTOCOL, 0, iface.number, 0, false),
+                Setup::class_interface(
+                    hid::REQ_SET_PROTOCOL,
+                    format.is_some() as u16,
+                    iface.number,
+                    0,
+                    false,
+                ),
                 None,
             );
             let _ = c.control(
@@ -890,26 +1118,37 @@ fn setup_port(
             let s = c.slot_mut(slot);
             let i = s.rings.iter().position(|(d, _)| *d == dci).expect("ring");
             let (_, mut ring) = s.rings.remove(i);
-            let buf = DmaBuffer::new(64).ok_or(UsbError::NoMemory)?;
-            Controller::queue_report(&mut ring, &buf, if keyboard { 8 } else { 4 });
+            let len = match &format {
+                Some(f) => f.bytes as u32,
+                None if keyboard => 8,
+                None => 4,
+            };
+            let reports = Reports::new(&mut ring, len).ok_or(UsbError::NoMemory)?;
+            let what = match &format {
+                Some(f) if f.absolute() => "tablet",
+                _ if keyboard => "keyboard",
+                _ => "mouse",
+            };
             s.function = Some(if keyboard {
                 Function::Keyboard {
                     dci,
                     ring,
-                    buf,
+                    reports,
                     report: hid::Keyboard::new(),
                     decoder: Decoder::new(Layout::Us, Layout::Russian),
                 }
+            } else if let Some(format) = format {
+                Function::Pointer {
+                    dci,
+                    ring,
+                    reports,
+                    format,
+                }
             } else {
-                Function::Mouse { dci, ring, buf }
+                Function::Mouse { dci, ring, reports }
             });
             c.ring_doorbell(slot, dci);
-            return Ok(format!(
-                "{} ({}) on port {}",
-                if keyboard { "keyboard" } else { "mouse" },
-                id,
-                port
-            ));
+            return Ok(format!("{} ({}) on port {}", what, id, port));
         }
         if iface.class == desc::CLASS_MASS_STORAGE
             && iface.subclass == msc::SUBCLASS_SCSI
@@ -980,19 +1219,34 @@ fn setup_port(
     Err(UsbError::Descriptor)
 }
 
+/// Reads the event rings of polled controllers every tick. With
+/// interrupts the handler reads them, and the thread only takes over when
+/// the handler found a controller busy: it runs on CPU 0, which takes the
+/// interrupts, and checks `PENDING` with interrupts off before it blocks,
+/// so no wake-up is missed. A controller that was busy is looked at again
+/// on the next tick.
 extern "C" fn usb_thread(_: u64) -> u64 {
+    let ctls = CONTROLLERS.lock().clone();
+    let polled = ctls.iter().any(|c| matches!(c.lock().irq, Irq::Polled));
     loop {
-        let ctls = CONTROLLERS.lock().clone();
-        for ctl in ctls {
-            // Storage I/O may hold the controller; try again next tick.
+        PENDING.store(false, Ordering::Release);
+        let mut busy = false;
+        for ctl in &ctls {
+            // Storage I/O may hold the controller (it handles reports
+            // that arrive meanwhile); try again next tick.
             if let Some(mut c) = ctl.try_lock() {
                 while let Some(e) = c.next_event() {
                     c.handle_async(&e);
                 }
+            } else {
+                busy = true;
             }
         }
         crate::arch::cpu::disable_interrupts();
-        WAKE.wait(Some(time::ticks() + 1));
+        if !PENDING.load(Ordering::Acquire) {
+            let ticks = if polled || busy { 1 } else { time::TICK_HZ };
+            WAKE.wait(Some(time::ticks() + ticks));
+        }
         crate::arch::cpu::enable_interrupts();
     }
 }
@@ -1007,15 +1261,19 @@ pub fn probe_all() -> usize {
     let mut devices = 0;
     let mut disks = 0;
     for d in pci::devices().iter().filter(|d| d.is(0x0c, 0x03, 0x30)) {
-        let ctl = match start(d) {
+        let index = CONTROLLERS.lock().len();
+        let ctl = match start(d, index) {
             Ok(c) => Arc::new(SpinLock::new(c)),
             Err(e) => {
                 kwarn!("xhci at {}: {}", d.addr, e);
                 continue;
             }
         };
-        let ports = ctl.lock().ports;
-        kok!("xhci at {}: {} ports", d.addr, ports);
+        let (ports, mode) = {
+            let c = ctl.lock();
+            (c.ports, c.irq.name())
+        };
+        kok!("xhci at {}: {} ports, {}", d.addr, ports, mode);
         // Give connected devices time to report themselves.
         time::delay_us(50_000);
         for port in 1..=ports {
@@ -1046,7 +1304,7 @@ pub fn hid_devices() -> (usize, usize) {
         for s in &ctl.lock().slots {
             match s.function {
                 Some(Function::Keyboard { .. }) => k += 1,
-                Some(Function::Mouse { .. }) => m += 1,
+                Some(Function::Mouse { .. } | Function::Pointer { .. }) => m += 1,
                 _ => {}
             }
         }
@@ -1056,8 +1314,16 @@ pub fn hid_devices() -> (usize, usize) {
 
 /// Starts the thread that reads keyboard and mouse reports.
 pub fn start_thread() {
-    if !CONTROLLERS.lock().is_empty() {
-        sched::spawn_kernel("usb", usb_thread, 0, Priority::High)
-            .expect("cannot start the usb thread");
+    let ctls = CONTROLLERS.lock().clone();
+    if ctls.is_empty() {
+        return;
     }
+    // Interrupts go to the CPU that set them up (CPU 0, see `usb_thread`).
+    let irqs = ctls.iter().all(|c| !matches!(c.lock().irq, Irq::Polled));
+    let tid = if irqs {
+        sched::spawn_kernel_on("usb", usb_thread, 0, Priority::High, 0)
+    } else {
+        sched::spawn_kernel("usb", usb_thread, 0, Priority::High)
+    };
+    tid.expect("cannot start the usb thread");
 }

@@ -1,0 +1,8 @@
+[package]
+name = "fontsubset"
+description = "Keeps only the glyphs Velora shows in a TrueType font"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

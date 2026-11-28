@@ -238,8 +238,11 @@ fn incomplete_tail(b: &[u8]) -> usize {
 
 /// Writes program output to the console. Invalid UTF-8 is shown as
 /// U+FFFD; a character split between two writes is kept until the rest
-/// arrives.
+/// arrives. The terminal's answers to queries (Kitty graphics, device
+/// attributes, sizes) become input for the next read, as with any
+/// terminal.
 pub fn write(bytes: &[u8]) {
+    crate::display::poll();
     let mut data = Vec::with_capacity(bytes.len() + 4);
     {
         let mut p = PARTIAL.lock();
@@ -256,15 +259,24 @@ pub fn write(bytes: &[u8]) {
         p.1 = keep;
         data.truncate(start);
     }
+    let mut replies = Vec::new();
     for chunk in data.utf8_chunks() {
-        kprint!("{}", chunk.valid());
+        replies.extend(crate::console::program_output(chunk.valid()));
         if !chunk.invalid().is_empty() {
-            kprint!("\u{fffd}");
+            replies.extend(crate::console::program_output("\u{fffd}"));
         }
+    }
+    if !replies.is_empty() {
+        TTY.lock().pending.extend(replies);
     }
 }
 
 /// Console size in characters.
 pub fn size() -> (u64, u64) {
     crate::console::screen_size().map_or((80, 25), |(c, r)| (c as u64, r as u64))
+}
+
+/// Cell size in pixels; `None` without a framebuffer (serial only).
+pub fn cell_size() -> Option<(u64, u64)> {
+    crate::console::cell_size().map(|(w, h)| (w as u64, h as u64))
 }

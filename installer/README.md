@@ -8,6 +8,33 @@
 устанавливает систему на диск. Программа: `/bin/velora-setup`, код:
 `installer/velora-setup` (собирается вместе с программами из `userland/`).
 
+### Стартовое меню и графический установщик
+
+При загрузке с ISO или флешки сначала открывается меню (`/bin/velora-start`):
+1. Графическая установка (по умолчанию, начинается через 10 с).
+2. Установка в терминале — `velora-setup` (ниже).
+3. Live-режим — вход в систему (пароль `velora`) и терминал vsh.
+
+Графический установщик: приветствие и язык установщика, язык и регион,
+клавиатура и курсор, оформление, разметка диска (автоматическая, ручная,
+«Эксперт»), пользователь, подтверждение, установка, готово. Управление
+мышью и клавиатурой (Tab, стрелки, Enter, Esc — назад). Из Live-системы его
+можно открыть командой `velora-start --install` (от root). Обе программы
+используют одно ядро установщика (`installer/core`, crate `velora-install`);
+экраны — `installer/gui`. Выбор оформления, языка и раскладки записывается в
+`/etc/velora/desktop.conf`, `locale.conf` и `keyboard.conf` для будущей
+оболочки; система эти файлы пока не читает. Тема (тёмная, светлая,
+Velora Gamers) и акцентный цвет применяются к установщику сразу, с плавным
+переходом; переключатель «Эффекты анимации» выключает анимации. Мыши и
+планшеты USB работают, в том числе usb-tablet в QEMU (`tools/run-qemu.sh`).
+На экране «Разметка диска» видны модель, размер, имя и шина диска
+(virtio, SATA, NVMe, USB). Диск, разделы которого ядро подключило при
+загрузке (например, с прошлой установкой), показывается с
+предупреждением: перед записью установщик отключает их (`umount`). Диск, с
+которого запущена система, не предлагается. Если дисков нет, экран
+объясняет почему; «Обновить» перечитывает список. Новые диски ядро ищет
+только при загрузке.
+
 ### Запуск
 
 ```
@@ -56,6 +83,29 @@ The Velora OS installer. It runs as root in the Live system (booted from the
 ISO) and installs the system onto a disk. Program: `/bin/velora-setup`; code:
 `installer/velora-setup` (built with the programs in `userland/`).
 
+Booting the ISO or a USB drive first opens a menu (`/bin/velora-start`):
+1) graphical installation (the default, starts after 10 s), 2) installation in
+the terminal (`velora-setup`, below), 3) the Live system (log in with the
+password `velora`, the vsh terminal). The graphical installer has the steps
+welcome and installer language, language and region, keyboard and pointer,
+appearance, disk (automatic, manual, expert), user, confirmation,
+installation and done; it works with the mouse and the keyboard (Tab, arrows,
+Enter, Escape goes back) and can be opened from the Live system with
+`velora-start --install` (as root). Both installers use one core
+(`installer/core`, crate `velora-install`); the screens are in
+`installer/gui`. Appearance, language and layout choices are written to
+`/etc/velora/desktop.conf`, `locale.conf` and `keyboard.conf` for the future
+shell; the system does not read them yet. The theme (dark, light, Velora
+Gamers) and the accent colour apply to the installer at once, with a smooth
+transition; the "Animations" switch turns animations off. USB mice and tablets
+work, QEMU's usb-tablet included (`tools/run-qemu.sh`). The Disk screen shows
+the disk's model, size, name and bus (virtio, SATA, NVMe, USB). A disk whose
+partitions the kernel mounted at boot (one with an earlier installation, for
+example) is offered with a warning; the installer unmounts them (`umount`)
+before writing. The disk the system was started from is not offered. Without
+disks the screen says why; Refresh reads the list again. The kernel looks for
+disks only at boot.
+
 Run `velora-setup`: it lists the disks and asks for the target disk, the name
 of the new user (lowercase letters, digits, `_`, `-`), the user's and root's
 passwords (twice, without echo) and a confirmation (type `yes`, anything else
@@ -75,5 +125,7 @@ formats the root (VeloraFS) and copies the programs from `/bin` (except
 home directory; (5) checks the new file system (fsck) and syncs.
 
 The file systems are written through `/dev/<disk>` with the same libraries the
-kernel uses (`velora-gpt`, `velora-fat`, `velorafs`); nothing is mounted. A disk
-mounted under `/mnt` is refused. Requirements: at least 128 MiB, UEFI boot.
+kernel uses (`velora-gpt`, `velora-fat`, `velorafs`); nothing is mounted. The
+partitions of the target disk that are mounted under `/mnt` are unmounted
+first; the disk the system was started from is refused. Requirements: at least
+128 MiB, UEFI boot.

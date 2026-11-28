@@ -930,3 +930,734 @@ server without changing the DHCP settings; the `net` test uses it to reach a
 DNS server on the host and does not depend on the Internet. HTTPS is not
 supported: there is no TLS implementation of our own, and the project does not
 take third-party libraries.
+
+## D46. Изображения в терминале: Kitty graphics protocol / Images in the terminal: the Kitty graphics protocol
+
+**2026-11-27**
+
+**RU.** Консоль ядра показывает изображения по протоколу Kitty, а не Sixel.
+Причины:
+- Kitty передаёт пиксели как есть (RGB или RGBA с прозрачностью, 24 бита
+  на цвет). Sixel — палитра до 256 цветов и полосы по 6 пикселей; логотип
+  пришлось бы квантовать, а края сглаживания теряются.
+- Размер на экране задаётся в ячейках (`c`, `r`), поэтому изображение
+  естественно привязано к шрифту, а масштаб 1–4 консоли учитывается сам.
+- Разбор проще и легко проверяется на хосте: пары `ключ=значение` и base64,
+  а не отдельный язык команд с повторами и сменой палитры.
+- Есть стандартная проверка поддержки: запрос `a=q` с идентификатором и
+  следом DA1 (`CSI c`). Программа читает ответы до ответа DA1, поэтому не
+  зависает, если графики нет.
+- Протокол поддерживают kitty, WezTerm, Konsole, Ghostty, так что
+  программы Velora с той же логикой работают и в этих терминалах.
+Sixel остаётся возможным позже: изображение и масштабирование
+(`velora-gfx::image`) не зависят от протокола.
+
+Изображение рисуется прямо в текстовый экран (в буфер кадра), а не
+отдельным слоем. Так оно прокручивается вместе с текстом и не требует
+повторной отрисовки, но удалить уже показанное изображение командой `a=d`
+нельзя: оно исчезает, когда поверх пишется текст или экран прокручивается.
+Хранимые изображения (`a=t`, `a=p`) ограничены 16 МиБ, одно изображение —
+8 МиБ. Ядро не разбирает PNG (`f=100`) и сжатие (`o=z`): это лишний разбор
+сложных данных в ядре и рост кучи ядра, которая не возвращает страницы.
+Программы декодируют PNG сами (`velora-gfx::png`) и шлют RGBA ровно в
+размере ячеек, поэтому терминалу не нужно масштабировать.
+
+Последовательный порт и журнал ядра получают вывод программ без строк
+APC: base64 изображения там бесполезен и занял бы журнал. Ответы
+терминала (графика, DA1, размеры `CSI 14/16/18 t`) попадают во ввод
+программы, как в любом терминале. Размер ячейки в пикселях программа
+узнаёт вызовом `tty(3)` (`ENODEV` без экрана — графики нет).
+
+**EN.** The kernel console shows images with the Kitty protocol, not Sixel.
+Reasons:
+- Kitty carries pixels as they are (RGB or RGBA with transparency, 24-bit
+  colour). Sixel is a palette of at most 256 colours in 6-pixel bands; the
+  logo would have to be quantised and its anti-aliased edges would suffer.
+- The size on screen is given in cells (`c`, `r`), so an image is tied to
+  the font, and the console's scale 1-4 is taken into account by itself.
+- Parsing is simpler and easy to test on the host: `key=value` pairs and
+  base64, not a command language with repeats and palette changes.
+- There is a standard support check: an `a=q` query with an id followed by
+  DA1 (`CSI c`). A program reads answers up to the DA1 answer, so it does
+  not hang when there are no graphics.
+- kitty, WezTerm, Konsole and Ghostty support the protocol, so Velora
+  programs with the same logic also work in those terminals.
+Sixel stays possible later: images and scaling (`velora-gfx::image`) do not
+depend on the protocol.
+
+An image is drawn straight into the text screen (the frame buffer), not as a
+separate layer. It scrolls with the text and needs no redrawing, but an image
+already shown cannot be removed with `a=d`: it goes away when text is written
+over it or the screen scrolls. Stored images (`a=t`, `a=p`) are limited to
+16 MiB, one image to 8 MiB. The kernel does not decode PNG (`f=100`) or
+compression (`o=z`): that would be more parsing of complex data in the kernel
+and growth of the kernel heap, which does not give pages back. Programs decode
+PNG themselves (`velora-gfx::png`) and send RGBA in the exact size of the
+cells, so the terminal does not have to scale.
+
+The serial port and the kernel log get program output without APC strings:
+image base64 is useless there and would fill the log. The terminal's answers
+(graphics, DA1, sizes `CSI 14/16/18 t`) become the program's input, as in any
+terminal. A program learns the cell size in pixels with `tty(3)` (`ENODEV`
+without a screen: no graphics).
+
+## D47. Графическая основа: velora-ui, Inter и fontdue / Graphical toolkit: velora-ui, Inter and fontdue
+
+**2026-11-27**
+
+**RU.** Графический установщик и будущая оболочка Lumi рисуются в
+программе, а не в ядре. Ядро отдаёт framebuffer одному процессу
+(`display`), даёт события клавиш (`/dev/keyboard`) и мыши (`/dev/mouse`,
+теперь и PS/2). Причины: сложный разбор шрифтов и картинок остаётся вне
+ядра; ошибка программы не роняет систему; консоль сохраняет свой текст и
+возвращается, когда программа завершается, в том числе аварийно.
+
+Шрифт — Inter (OFL 1.1, есть кириллица), растеризация — fontdue (MIT). Это
+первые внешние crate проекта (D42), добавлены с согласия владельца
+репозитория. Свой растеризатор TrueType писался бы дольше и был бы хуже
+проверен. fontdue собирается без std (с hashbrown) и работает без SSE:
+программы собираются без плавающей точки в регистрах, она эмулируется.
+Поэтому загрузка трёх начертаний под TCG занимает около 2 с; глифы
+кешируются. Остальное рисование целочисленное: функции расстояния в 1/256
+пикселя дают сглаживание, тени и дуги без плавающей точки.
+
+Элементы — в немедленном режиме: программа каждый кадр рисует экран
+заново из своего состояния, а `Ui` помнит только фокус, открытый список и
+прокрутку. Так экраны установщика остаются простыми функциями от
+состояния, и их можно отрисовать на хосте и сравнить. Клавиши подаются по
+одной на кадр, чтобы их порядок не терялся между элементами. Масштаб
+дробный (пикселей на единицу дизайна), поэтому один макет работает в
+1280x720, 1920x1080 и 4K.
+
+**EN.** The graphical installer and the future Lumi shell draw in a program,
+not in the kernel. The kernel gives the frame buffer to one process
+(`display`), key events (`/dev/keyboard`) and mouse events (`/dev/mouse`, now
+from PS/2 too). Reasons: complex font and image parsing stays out of the
+kernel; a crashing program does not bring the system down; the console keeps
+its text and comes back when the program exits, also when it crashes.
+
+The font is Inter (OFL 1.1, with Cyrillic) and rasterisation is fontdue
+(MIT). They are the project's first external crates (D42), added with the
+repository owner's consent. An own TrueType rasteriser would take longer and
+be less proven. fontdue builds without std (with hashbrown) and works without
+SSE: programs are built without floating point in registers, so it is
+emulated. Loading three faces therefore takes about 2 s under TCG; glyphs are
+cached. All other drawing is integer: distance functions in 1/256 pixel give
+anti-aliasing, shadows and arcs without floating point.
+
+Widgets are immediate-mode: every frame the program draws the screen again
+from its state, and `Ui` only remembers the focus, the open list and scroll
+positions. Installer screens thus stay plain functions of the state and can
+be drawn on the host and compared. Keys are fed one per frame so their order
+is not lost between widgets. The scale is fractional (pixels per design unit),
+so one layout works at 1280x720, 1920x1080 and 4K.
+
+## D48. Стартовое меню и графический установщик / Start menu and graphical installer
+
+**2026-11-27**
+
+**RU.** Live-образ сначала показывает меню (`/bin/velora-start`, его
+запускает ядро, если корень — initramfs): графическая установка (по
+умолчанию, через 10 с), установка в терминале (`velora-setup`) и
+Live-режим (дальше обычный вход). Меню — программа, а не пункты Limine:
+оно нарисовано в стиле установщика, выбирается мышью и клавиатурой и без
+экрана показывает текстовый вариант. Меню и установщик — одна программа,
+поэтому шрифты загружаются один раз. `velora.nomenu` в командной строке
+отключает меню.
+
+Логика установки одна: crate `velora-install` (разметка, файловые
+системы, загрузчик, пользователи, настройки) с прогрессом по четырём
+этапам. `velora-setup` и графический установщик только собирают план.
+Источник файлов — интерфейс `Source`, поэтому вся установка проверяется
+тестом на хосте на диске в памяти.
+
+Отличия от концепта (`docs/design/installer-concept.png`):
+- Шаг «Пользователь» (имя, пароль, пароль root) и отдельный экран
+  подтверждения: без них установить систему нельзя, в концепте их нет.
+- Ручная разметка и «Эксперт» открывают экран разделов с настоящими
+  параметрами (размер EFI, размер корня, метка, таблица GPT), а не
+  заглушку.
+- Три стиля курсора, а не четыре: в `assets/cursors` три картинки.
+- Список языков без японского: в Inter нет иероглифов.
+- Язык установщика — русский или английский (переводов больше нет).
+- Выбор оформления, языка, региона и раскладки пишется в
+  `/etc/velora/*.conf`. NOT IMPLEMENTED: система их пока не читает
+  (оболочки Lumi нет, раскладки по-прежнему EN/RU с Alt+Shift).
+
+Неизменные части экрана (фон, окно, волны, панель) рисуются один раз и
+копируются в каждый кадр: программы собраны без SSE, и большие мягкие
+фигуры — самое медленное. Под TCG это ускорило кадр примерно в 10 раз.
+
+QEMU с OVMF не даёт режимов больше 2560x1440, поэтому тест в QEMU снимает
+1280x720, 1920x1080 и 2560x1440, а 3840x2160 проверяется отрисовкой тех
+же экранов на хосте (`cargo run -p velora-installer-gui --example
+screens`).
+
+**EN.** The Live image first shows a menu (`/bin/velora-start`, run by the
+kernel when the root is the initramfs): graphical installation (the default,
+after 10 s), installation in the terminal (`velora-setup`) and the Live
+system (the usual login follows). The menu is a program, not Limine entries:
+it has the installer's look, works with the mouse and the keyboard and falls
+back to text without a screen. Menu and installer are one program, so the
+fonts load once. `velora.nomenu` on the command line turns the menu off.
+
+There is one installation logic: the `velora-install` crate (partitions,
+file systems, bootloader, users, settings) with progress in four phases.
+`velora-setup` and the graphical installer only build the plan. Files come
+through the `Source` interface, so the whole installation is tested on the
+host on a disk in memory.
+
+Differences from the concept (`docs/design/installer-concept.png`):
+- A "User" step (name, password, root password) and a separate
+  confirmation screen: the system cannot be installed without them, and the
+  concept has neither.
+- Manual partitioning and Expert mode open a partitions screen with real
+  settings (EFI size, root size, label, the GPT table), not a placeholder.
+- Three pointer styles, not four: `assets/cursors` has three pictures.
+- No Japanese in the language list: Inter has no CJK glyphs.
+- The installer speaks Russian or English (no other translations yet).
+- Appearance, language, region and layout choices are written to
+  `/etc/velora/*.conf`. NOT IMPLEMENTED: the system does not read them yet
+  (there is no Lumi shell; layouts are still EN/RU with Alt+Shift).
+
+The parts of a screen that do not change (backdrop, window, waves, panel)
+are drawn once and copied into each frame: programs are built without SSE and
+large soft shapes are the slowest thing to draw. Under TCG this made a frame
+about 10 times faster.
+
+QEMU with OVMF offers no modes above 2560x1440, so the QEMU test captures
+1280x720, 1920x1080 and 2560x1440, and 3840x2160 is checked by drawing the
+same screens on the host (`cargo run -p velora-installer-gui --example
+screens`).
+
+## D49. Чёткость, акцент и анимации установщика; абсолютный указатель / Installer sharpness, accent and animations; absolute pointer
+
+**2026-11-27**
+
+**RU.** Режим экрана берётся из EDID монитора: его выбирает Limine, это
+родное разрешение. Окно рисуется сразу в нём, в одном из масштабов 1x,
+1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x, 3.5x, 4x (самый большой, который
+помещается с полями): 1280x720 — 1.5x, 1920x1080 — 2x, 2560x1440 — 3x,
+3840x2160 — 4x. Готовый кадр никогда не растягивается. Текст смешивается
+в линейном свете (гамма 2) с небольшим усилением контраста. Размер шрифта
+меняется не больше чем на 6%, чтобы высота строчных букв была целой в
+пикселях: это лёгкая замена хинтингу, которого в fontdue нет. Картинки
+уменьшаются усреднением площади.
+
+Размытость, которую было видно в окне QEMU, давала Windows: при
+масштабе экрана 125% окно QEMU без поддержки DPI растягивается системой
+(окно для кадра 1280x720 занимало 1620x949 пикселей). `tools/run-qemu.sh`
+задаёт процессу QEMU `SDL_WINDOWS_DPI_AWARENESS=permonitorv2`, и пиксели
+выводятся 1:1.
+
+Акцентный цвет темы (по умолчанию янтарный #FFB547) используется для
+включённых переключателей, выделения, кольца фокуса, прогресса и отметок
+шагов. Тема и акцент, выбранные на экране «Оформление» или переключателем
+в боковой панели, применяются к установщику сразу, через плавный переход
+(260 мс, ease-in-out). Переход сделан смешиванием последнего показанного
+кадра с новыми: так меняются все цвета разом, а фон с волнами не нужно
+перерисовывать в каждом кадре. Шаги сменяются сдвигом с затуханием.
+Состояния элементов (наведение, нажатие, фокус, неактивное) анимируются
+значениями `Tweens` с часами программы. Переключатель «Эффекты анимации»
+выключает анимации и в самом установщике. Кадры анимации идут примерно 60
+раз в секунду. Таймер ядра тикает 100 раз в секунду, поэтому последние
+миллисекунды до кадра программа ждёт через `yield`. На экран пишутся
+только пиксели, которые отличаются от показанных.
+
+Абсолютный указатель: USB-устройства HID, которые не являются
+boot-мышью (планшеты, в том числе `usb-tablet` в QEMU), читаются в report
+protocol по их report descriptor (`velora-usb::report`). События с
+позицией идут в `/dev/pointer` (пакеты по 8 байт); `/dev/mouse` остаётся
+для относительных. С планшетом мышь в окне QEMU работает без захвата, а
+тест `clicks` щёлкает в точные пиксели через QMP.
+
+Тест «каждый элемент реагирует»: образ `velora-uitest.iso`
+(`velora.uitest` в командной строке) печатает после каждого изменения
+дайджест состояния, фокус, открытый список, последний сработавший элемент
+и области всех интерактивных элементов. `tests/uiclick.py` проходит все
+экраны и щёлкает каждый элемент, а для списков ещё крутит колесо.
+Проверяется, что состояние изменилось.
+
+NOT IMPLEMENTED: синхронизации с кадровой развёрткой нет (у GOP её нет),
+поэтому разрывы изображения возможны, хотя кадр всегда выводится целиком
+из заднего буфера. Пока кадр рисуется, указатель мыши не двигается.
+Хинтинга по командам шрифта нет.
+
+**EN.** The display mode comes from the monitor's EDID: Limine picks it,
+and it is the native resolution. The window is drawn in it directly at one
+of the scales 1x, 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x, 3.5x, 4x (the largest
+that fits with margins): 1280x720 gets 1.5x, 1920x1080 2x, 2560x1440 3x,
+3840x2160 4x. A finished frame is never stretched. Text is blended in linear
+light (gamma 2) with a slight contrast boost. Font sizes change by at most 6%
+so that the x-height is a whole number of pixels, a light stand-in for the
+hinting fontdue does not have. Pictures are scaled down by area averaging.
+
+The blur seen in the QEMU window came from Windows: with 125% display scaling
+it stretches a QEMU window that is not DPI-aware (the window for a 1280x720
+frame took 1620x949 pixels). `tools/run-qemu.sh` sets
+`SDL_WINDOWS_DPI_AWARENESS=permonitorv2` for the QEMU process, and pixels
+are shown 1:1.
+
+A theme's accent colour (warm amber #FFB547 by default) is used for switches
+that are on, selections, the focus ring, progress and the step marks. The
+theme and accent picked on the Appearance screen or with the switch in the
+sidebar apply to the installer at once, with a smooth transition (260 ms,
+ease-in-out). The transition mixes the last frame shown with the new frames:
+every colour changes together, and the backdrop with its waves need not be
+drawn again for each frame. Steps change with a slide and a fade. Widget
+states (hover, press, focus, disabled) are animated with `Tweens` on the
+program's clock. The "Animations" switch also turns the installer's own
+animations off. Animation frames come about 60 times a second; the kernel
+timer ticks 100 times a second, so the program waits the last milliseconds
+before a frame with `yield`. Only pixels that differ from what is shown are
+written to the screen.
+
+Absolute pointer: USB HID devices that are not boot mice (tablets, QEMU's
+`usb-tablet` among them) are read in report protocol using their report
+descriptor (`velora-usb::report`). Events with a position go to
+`/dev/pointer` (8-byte packets); `/dev/mouse` keeps the relative ones. With
+the tablet the mouse works in a QEMU window without being grabbed, and the
+`clicks` test clicks exact pixels through QMP.
+
+The "every element reacts" test: `velora-uitest.iso` (`velora.uitest` on the
+command line) prints, after every change, a digest of the state, the focus,
+the open list, the widget that last took input and the areas of all
+interactive widgets. `tests/uiclick.py` goes through every screen, clicks
+each element (and turns the wheel over the lists) and checks that the state
+changed.
+
+NOT IMPLEMENTED: there is no synchronisation with the display refresh (GOP
+has none), so tearing is possible, although a frame is always shown whole
+from the back buffer. The pointer does not move while a frame is being drawn.
+There is no hinting from the font's instructions.
+
+## D50. Кадры установщика по изменениям, ожидание ввода, освобождение диска, тема Velora Gamers / Installer frames by changes, waiting for input, freeing a disk, the Velora Gamers theme
+
+**2026-11-27**
+
+**RU.** Кадр рисуется только там, где что-то изменилось. Перед кадром
+`Ui::plan` смотрит на прошлый кадр: какие элементы указатель покинул
+или задел и у каких анимированных значений текущее значение по часам
+отличается от нарисованного. Результат: ничего (кадр пропускается, на
+экране двигается только указатель), часть экрана (объединение областей
+этих элементов с запасом под кольцо фокуса и тени) или весь экран (клавиши,
+щелчки, колесо, смена экрана, переходы и анимации без своего элемента).
+Часть рисуется с отсечением `Canvas::set_frame`: вложенные области
+отсечения не выходят за неё, фон копируется из кеша только в ней, на
+экран выводится только она. Тест на хосте рисует установщик двумя
+способами и после каждого шага сравнивает картинки попиксельно.
+
+Кадры идут не чаще 60 в секунду (16,7 мс от начала прошлого кадра), время
+анимаций берётся из часов, а не из числа кадров. Указатель рисуется
+отдельным слоем сразу при чтении его событий. Программа больше не спит по
+10 мс между опросами: новый вызов `input_wait(timeout_ms)` (52) будит её,
+как только ядро получило событие клавиатуры или указателя. Таймер ядра
+по-прежнему 100 Гц, поэтому последние миллисекунды до кадра ждутся через
+`yield`.
+
+Смешивание цветов считает красный и синий одним умножением, а заливки
+(прямоугольники, внутренность скруглённых фигур) — по два пикселя в `u64`.
+Результат побитово совпадает с прежней формулой. Скруглённые
+прямоугольники и обводки считают расстояние до края только у краёв:
+фигуры выпуклые, середина строки — один отрезок. Квадратный корень для
+текста берётся из таблицы, а не двоичным поиском.
+
+Счётчик кадров (F12) показывает кадры и перемещения указателя в секунду,
+среднее и самое долгое время кадра и интервал между кадрами анимации;
+каждую секунду строка уходит и в консоль. Режим `qemu_run.py fps` по
+этим строкам меряет установщик в 1920x1080.
+
+Диски. Ядро при загрузке подключает каждую известную ему файловую систему
+в `/mnt`. Раньше установщик прятал такие диски, и диск с прошлой
+установкой выглядел как «диск не найден». Теперь он показывает их с
+предупреждением, а перед записью отключает их разделы новым вызовом
+`umount(path)` (31, только root, только `/mnt/…`, `EBUSY`, пока открыты
+файлы). Журнал паники перестаёт писаться на отключённый раздел. Диск, с
+которого запущена система, не предлагается: Limine сообщает GUID раздела,
+с которого загружено ядро (запрос Executable File), и `diskinfo` ставит
+такому диску флаг `disk_kind::BOOT`. Кнопка «Обновить» перечитывает список.
+Новые диски после загрузки не появятся, потому что ядро ищет их только
+при загрузке.
+
+Тема Velora Gamers заменила Midnight: только цвета (фон #0B0A12, панели
+#15131F, обводки #2A2540, текст #F4F2FF и #A39DBD, акцент #A855F7, детали
+#38E1FF). Контраст текста не ниже 4.5:1, это проверяет тест. У темы свой
+акцент: если акцент не меняли, при выборе темы он становится её
+собственным. Цвет деталей (`Theme::detail`) — курсор ввода и значок
+текущего этапа установки. У тёмной и светлой тем он совпадает с акцентом.
+
+**EN.** A frame is drawn only where something changed. Before a frame
+`Ui::plan` looks at the last one: which widgets the pointer left or touched,
+and which animated values differ, on the clock, from the value drawn. The
+answer is nothing (the frame is skipped; only the pointer moves on the
+screen), a part of the screen (the union of those widgets' areas with a
+margin for focus rings and shadows) or the whole screen (keys, clicks, the
+wheel, a new screen, transitions and animations without a widget of their
+own). A part is drawn with the `Canvas::set_frame` clip: nested clips stay
+inside it, the background is copied from its cache only there, and only that
+part is shown. A host test draws the installer both ways and compares the
+pictures pixel by pixel after every step.
+
+Frames come at most 60 times a second (16.7 ms from the start of the last
+one); animations take their time from the clock, not from frame counts. The
+pointer is a layer of its own, drawn as soon as its events are read. The
+program no longer sleeps 10 ms between polls: the new call
+`input_wait(timeout_ms)` (52) wakes it as soon as the kernel has a key or
+pointer event. The kernel timer is still 100 Hz, so the last milliseconds
+before a frame are waited by yielding.
+
+Colour blending computes red and blue with one multiplication, and fills
+(rectangles, the inside of rounded shapes) blend two pixels per `u64`; the
+result is bit for bit that of the earlier formula. Rounded rectangles and
+outlines compute the distance to the edge only near the edges: the shapes are
+convex, the middle of a row is one span. The square root for text comes from
+a table instead of a binary search.
+
+The frame counter (F12) shows frames and pointer moves per second, the
+average and longest frame and the interval between frames of an animation;
+every second the line also goes to the console. `qemu_run.py fps` measures
+the installer at 1920x1080 from these lines.
+
+Disks. At boot the kernel mounts every file system it knows under `/mnt`. The
+installer used to hide such disks, so a disk with an earlier installation
+looked like "no disks found". It now offers them with a warning and, before
+writing, unmounts their partitions with the new call `umount(path)` (31, root
+only, only `/mnt/...`, `EBUSY` while files are open); the panic log stops
+using an unmounted partition. The disk the system was started from is not
+offered: Limine reports the GUID of the partition the kernel came from (the
+Executable File request), and `diskinfo` gives that disk the
+`disk_kind::BOOT` flag. Refresh reads the list again. Disks connected after
+boot do not appear, because the kernel looks for disks only at boot.
+
+The Velora Gamers theme replaced Midnight: colours only (backdrop #0B0A12,
+panels #15131F, borders #2A2540, text #F4F2FF and #A39DBD, accent #A855F7,
+details #38E1FF). Text contrast is at least 4.5:1, which a test checks. The
+theme has an accent of its own: when the accent was not changed, choosing the
+theme switches to it. The detail colour (`Theme::detail`) is used for the text
+cursor and the mark of the running installation step; in the dark and light
+themes it is the accent.
+
+## D51. Прерывания xHCI (MSI-X, MSI) и указатель по кадрам / xHCI interrupts (MSI-X, MSI) and the pointer by frames
+
+**2026-11-28**
+
+**RU.** Раньше поток `usb` читал кольцо событий xHCI раз в тик (100 Гц):
+мышь читалась 100 раз в секунду, а движения рывками ложились на кадры
+60 Гц (в один кадр то одно движение, то два). Теперь контроллер получает
+прерывание: сначала MSI-X, если его нет — MSI, если нет и его (или в
+командной строке `velora.xhci_poll`) — прежний опрос по тику. Вектор
+0x48 + номер контроллера (до четырёх), прерывание идёт на процессор,
+который настраивал контроллер (процессор 0). Модерация прерываний —
+не чаще раза в миллисекунду.
+
+Обработчик сам читает кольцо событий (как PS/2 — свои байты): если бы он
+только будил поток `usb`, каждый отчёт мыши переключал бы потоки и
+адресные пространства, сбрасывая TLB программы, которая рисует.
+Блокировка контроллера выключает прерывания, пока занята, поэтому на
+своём процессоре обработчик всегда её получает; если её держит другой
+процессор (ввод-вывод флешки, который сам разбирает пришедшие отчёты),
+поток `usb` смотрит кольцо на следующем тике. Поток закреплён за
+процессором 0 и проверяет флаг с выключенными прерываниями, поэтому
+пробуждение не теряется.
+
+На каждой конечной точке клавиатуры и мыши стоят восемь передач вместо
+одной: контроллер может отдать несколько отчётов, пока драйвер не
+посмотрел кольцо. При опросе раньше доходил один отчёт за тик, очередь
+планшета QEMU переполнялась, и терялись нажатия кнопок.
+
+Очередь мыши в ядре складывает движение с последним событием, если
+ничего не теряется (те же кнопки, нет колеса, сумма помещается; у
+планшета — последняя позиция), поэтому программа, которая читает раз в
+кадр, получает всё движение.
+
+Программа рисует указатель один раз за кадр, там, куда его поставил
+последний отчёт: чтение ввода только двигает позицию, все движения между
+кадрами складываются. Перед выводом кадра ввод читается ещё раз; кадр,
+в котором ничего не меняется, только показывает указатель. Указатель
+двигается не чаще 60 раз в секунду, без рывков от лишних отчётов.
+
+Проверка: тест ядра требует MSI-X у xHCI в QEMU и прерываний во время
+движения мыши; `qemu_run.py fps` требует больше 150 чтений указателя в
+секунду с прерываниями (QMP шлёт 250 позиций), не больше 62 показов
+указателя в секунду, а с `--xhci-polled` (у xHCI в QEMU выключены MSI и
+MSI-X) — опрос и работающий указатель.
+
+**EN.** The `usb` thread used to read the xHCI event ring every tick
+(100 Hz): the mouse was read 100 times a second, and its movements fell
+unevenly on 60 Hz frames (one movement in a frame, then two). The controller
+now gets an interrupt: MSI-X, else MSI, else (or with `velora.xhci_poll` on
+the command line) the old polling every tick. The vector is 0x48 plus the
+controller's number (up to four); the interrupt goes to the CPU that set the
+controller up (CPU 0). Interrupt moderation allows at most one a millisecond.
+
+The handler reads the event ring itself (as the PS/2 handler reads its
+bytes): if it only woke the `usb` thread, every mouse report would switch
+threads and address spaces and flush the TLB of the program that draws. The
+controller lock turns interrupts off while held, so on its own CPU the
+handler always gets it; if another CPU holds it (flash drive I/O, which
+handles the reports that arrive meanwhile), the `usb` thread looks at the
+ring on the next tick. That thread runs on CPU 0 and checks its flag with
+interrupts off, so no wake-up is lost.
+
+Each keyboard and mouse endpoint has eight transfers queued instead of one:
+the controller can deliver several reports before the driver looks at the
+ring. With polling only one report a tick got through, QEMU's tablet queue
+overflowed, and button presses were lost.
+
+The kernel's mouse queue joins a movement to the last event when nothing is
+lost (the same buttons, no wheel, the sum fits; for a tablet, the last
+position), so a program that reads once a frame gets the whole movement.
+
+The program draws the pointer once a frame, where the last report put it:
+reading input only moves the position, and all movements between frames add
+up. Input is read once more before a frame is shown; a frame in which nothing
+changes only shows the pointer. The pointer moves at most 60 times a second,
+without jumps from extra reports.
+
+Tests: the kernel test requires MSI-X on QEMU's xHCI and interrupts while
+the mouse moves; `qemu_run.py fps` requires more than 150 pointer reads a
+second with interrupts (QMP sends 250 positions), at most 62 pointer moves
+shown a second, and with `--xhci-polled` (MSI and MSI-X off on QEMU's xHCI)
+polling and a working pointer.
+
+## D52. Графическая оболочка Lumi / The Lumi graphical shell
+
+**2026-11-28**
+
+**RU.** Lumi — одна программа (`/bin/lumi`, логика и рисование — crate
+`velora-lumi` в `lumi/`, проверяется на хосте с системой в памяти,
+`lumi::fake`). Она владеет экраном (`display`), рисует экран входа, окна,
+панель, меню приложений и встроенные приложения: Терминал, Файлы,
+Настройки, О системе, просмотр картинок. Внешние программы работают в
+окне терминала (vsh, Plume). Протокола для окон чужих графических
+программ пока нет (NOT IMPLEMENTED): экран отдаётся одному процессу
+(D47), а разделяемой памяти и передачи событий между процессами в ядре
+нет. Одна программа — меньше памяти и проще, чем сервер и клиенты.
+
+Как рисуется:
+- У каждого окна своя картинка (заголовок и содержимое); перерисовывается
+  только изменённая часть (`Ui::plan`, у терминала — изменённые строки).
+- Экран собирается только в изменённых областях: обои (нарисованы один
+  раз), тени (из кэша по девяти частям), картинки окон со скруглёнными
+  углами, панель и меню. Перемещение окна копирует его картинку.
+- Тест на хосте сравнивает кадры по областям с полной перерисовкой
+  попиксельно.
+- Указатель — отдельный слой (`Screen`, D51).
+- Кадры идут 60 раз в секунду, пока что-то движется; в покое программа
+  спит в `input_wait` до ввода, вывода терминала или таймера (часы,
+  курсор).
+- Анимации: окна появляются с масштабом и прозрачностью, закрываются,
+  сворачиваются к значку на панели, разворачиваются и прилипают к краям
+  плавно; меню приложений растёт из 94% и проявляется; тема меняется
+  переходом всего экрана (`Transition`, D49).
+
+Запуск: ядро запускает Lumi на установленной системе и в Live-режиме,
+если в стартовом меню выбран рабочий стол (пункт 3; клавиша 4 — Live в
+консоли, её используют тесты). Lumi завершается с кодом 2 без экрана,
+без шрифтов или при `session=console` в `/etc/velora/desktop.conf`
+(`velora-setup --console`, вопрос в интерактивной установке), и тогда
+ядро запускает консольный `login`. `velora.text` в командной строке тоже
+выбирает консоль. Выход из сеанса — код 0, ядро снова запускает Lumi.
+
+Вход: Lumi работает от root до входа, проверяет пароль (PBKDF2, как
+`login`) и делает `setuid` в пользователя; дальше окна, файлы и программы
+терминала принадлежат ему. Выключать и перезагружать может процесс,
+которому принадлежит экран (человек перед ним, как с кнопкой питания), а
+не только root.
+
+Настройки: системные — `/etc/velora/desktop.conf` (пишет установщик),
+регион — `locale.conf`; изменения из Настроек пишутся в
+`~/.config/velora/desktop.conf` (у пользователя нет прав на `/etc`).
+Часовой пояс — по региону: смещение и правило летнего времени (ЕС, США).
+
+Отличия от концептов: значка почты из первого концепта нет (почтовой
+программы нет); значок громкости сообщает, что звукового устройства нет
+(NOT IMPLEMENTED: драйвера звука нет); значок сети показывает проводное
+подключение (Wi-Fi нет). Масштаб интерфейса — ступени установщика по
+высоте экрана: 1x при 720 строках, 1.25x при 1080, 1.5x при 1440, 2.5x
+при 2160.
+
+**EN.** Lumi is one program (`/bin/lumi`; its logic and drawing are the
+`velora-lumi` crate in `lumi/`, tested on the host with an in-memory system,
+`lumi::fake`). It owns the screen (`display`) and draws the login screen,
+windows, the panel, the app menu and the built-in apps: Terminal, Files,
+Settings, About and a picture viewer. Other programs run in a terminal
+window (vsh, Plume). There is no protocol for windows of other graphical
+programs yet (NOT IMPLEMENTED): the screen goes to one process (D47) and the
+kernel has no shared memory or event passing between processes. One program
+uses less memory and is simpler than a server with clients.
+
+How it draws:
+- Each window has its own picture (title bar and content); only the part
+  that changed is drawn again (`Ui::plan`; the terminal draws changed rows).
+- The screen is put together only in the changed areas: the wallpaper
+  (drawn once), shadows (from a cached nine-part picture), the window
+  pictures with rounded corners, the panel and the menus. Moving a window
+  copies its picture.
+- A host test compares frames drawn by areas with a full redraw, pixel by
+  pixel.
+- The pointer is a separate layer (`Screen`, D51).
+- Frames come 60 times a second while something moves; at rest the program
+  sleeps in `input_wait` until input, terminal output or a timer (the clock,
+  the cursor).
+- Animations: windows open with scale and opacity, close, minimize to their
+  panel icon, maximize and snap to the screen edges smoothly; the app menu
+  grows from 94% and fades in; a theme changes with a transition of the
+  whole screen (`Transition`, D49).
+
+Start: the kernel starts Lumi on an installed system, and on the Live system
+when the start menu chooses the desktop (item 3; key 4 is the Live system on
+the console, which the tests use). Lumi ends with status 2 without a screen,
+without fonts or with `session=console` in `/etc/velora/desktop.conf`
+(`velora-setup --console`, a question in the interactive installation), and
+the kernel then starts the console `login`. `velora.text` on the command
+line also chooses the console. Logging out is status 0, and the kernel
+starts Lumi again.
+
+Login: Lumi runs as root until someone logs in, checks the password (PBKDF2,
+as `login`) and calls `setuid` to become that user; windows, files and
+terminal programs then belong to them. The process that owns the screen (the
+person in front of it, as with the power button) may power off and restart,
+not only root.
+
+Settings: the system's in `/etc/velora/desktop.conf` (written by the
+installer), the region in `locale.conf`; changes made in Settings go to
+`~/.config/velora/desktop.conf` (users cannot write `/etc`). The time zone
+follows the region: an offset and a daylight saving rule (EU, US).
+
+Differences from the concepts: no mail icon from the first concept (there is
+no mail program); the volume icon tells that there is no sound device (NOT
+IMPLEMENTED: no sound driver); the network icon shows the wired connection
+(no Wi-Fi). The interface scale uses the installer's steps by screen height:
+1x at 720 lines, 1.25x at 1080, 1.5x at 1440, 2.5x at 2160.
+
+## D53. Псевдотерминалы / Pseudo-terminals
+
+**2026-11-28**
+
+**RU.** vsh и Plume работают с консолью ядра: режим строки, сырые
+клавиши, размер, процесс на переднем плане. Чтобы они шли в окне Lumi без
+изменений, в ядре есть псевдотерминалы: вызов `pty` (53) создаёт пару
+дескрипторов. Мастер (терминал Lumi) пишет набранные байты и читает вывод
+без ожидания (`EAGAIN` — пусто, 0 — программа закрыла свою сторону).
+Подчинённая сторона для программы выглядит как консоль (`fstat` —
+символьное устройство), а вызовы `tty` процесса, у которого дескриптор 0 —
+подчинённая сторона, действуют на его псевдотерминал. Дисциплина линии
+(эхо, Backspace по символам UTF-8, Ctrl+C и Ctrl+D, сырой режим) вынесена
+в crate `velora-tty` с тестами на хосте. Новый вывод будит программу в
+`input_wait`, поэтому Lumi не опрашивает терминалы в покое. Изображений
+по протоколу Kitty в псевдотерминале нет (`CELL_SIZE` — `ENODEV`):
+velofetch показывает логотип текстом. Сигналов нет, поэтому о новом
+размере программа узнаёт, только спросив его снова (Plume — при запуске).
+
+**EN.** vsh and Plume work with the kernel console: line mode, raw keys, the
+size, the foreground process. To run them unchanged in a Lumi window, the
+kernel has pseudo-terminals: the `pty` call (53) makes a pair of
+descriptors. The master (the Lumi terminal) writes typed bytes and reads
+output without waiting (`EAGAIN`: nothing yet; 0: the program closed its
+side). The slave side looks like the console to the program (`fstat` gives a
+character device), and the `tty` calls of a process whose descriptor 0 is a
+slave act on its pseudo-terminal. The line discipline (echo, Backspace by
+UTF-8 characters, Ctrl+C and Ctrl+D, raw mode) is the `velora-tty` crate,
+tested on the host. New output wakes the program waiting in `input_wait`,
+so Lumi does not poll terminals at rest. There are no Kitty graphics in a
+pseudo-terminal (`CELL_SIZE` gives `ENODEV`): velofetch shows its logo as
+text. There are no signals, so a program learns about a new size only when
+it asks again (Plume, at start).
+
+## D54. Клавиши для графических программ / Keys for graphical programs
+
+**2026-11-28**
+
+**RU.** `/dev/keyboard` теперь сообщает клавишу Super (флаг `SUPER`), сами
+клавиши-модификаторы (нажатие и отпускание: `SHIFT_KEY`, `CTRL_KEY`,
+`ALT_KEY`, `SUPER_KEY`), Insert и Ctrl+буква как букву с флагом Ctrl (на
+консоли это управляющий символ). Без отпускания Alt нельзя сделать
+Alt+Tab, без Super — меню по клавише Super. В velora-ui клавиши с Ctrl, Alt
+или Super приходят как `Event::Chord` (элементы их не берут, поэтому Ctrl+C
+не печатает «c» в поле установщика); модификаторы и правая кнопка мыши —
+только если программа попросит (`Screen::extended_input`).
+
+**EN.** `/dev/keyboard` now reports the Super key (the `SUPER` flag), the
+modifier keys themselves (presses and releases: `SHIFT_KEY`, `CTRL_KEY`,
+`ALT_KEY`, `SUPER_KEY`), Insert, and Ctrl+letter as the letter with the Ctrl
+flag (on the console it is a control character). Alt+Tab needs the release
+of Alt, and the app menu on the Super key needs Super. In velora-ui keys
+with Ctrl, Alt or Super come as `Event::Chord` (widgets do not take them, so
+Ctrl+C does not type "c" into an installer field); modifiers and the right
+mouse button only when the program asks (`Screen::extended_input`).
+
+## D55. Память графических программ / Memory of graphical programs
+
+**2026-11-28**
+
+**RU.** Первый замер Lumi в 1920x1080 с открытым терминалом — 95 МиБ
+(система — 105 МиБ при цели меньше 64 МиБ). Причины и что сделано:
+- Куча программ не отдаёт память ядру, поэтому временные картинки
+  (размытие обоев, переходы, файлы шрифтов) оставались занятыми. Теперь
+  блоки от 256 КиБ отображаются отдельно (`mmap`) и освобождаются
+  `munmap`; это помогает и установщику.
+- fontdue разбирает контуры всех глифов шрифта при загрузке: Inter —
+  8,4 МиБ на начертание. `tools/fontsubset` при сборке оставляет глифы
+  латиницы с европейскими расширениями, кириллицы, пунктуации, стрелок и
+  (для терминала) псевдографики; остальные контуры пустые, номера глифов
+  те же (таблицы символов, кернинга и замен остаются верными). Стало
+  2,1 МиБ на начертание. Шрифты под OFL 1.1, изменённые версии
+  разрешены, зарезервированных имён у них нет.
+- Размытая копия обоев хранится в 1/8 разрешения и растягивается при
+  выводе (130 КиБ вместо 8 МиБ).
+
+После: Lumi — 47 МиБ с открытым терминалом, система — 56,4 МиБ (QEMU,
+WHPX, `qemu_run.py lumi`). Основное — три картинки во весь экран по 8 МиБ
+(задний буфер, копия видимого, обои) и шрифты (7,5 МиБ). В 4K буферы
+вчетверо больше.
+
+**EN.** The first measurement of Lumi at 1920x1080 with a terminal open was
+95 MiB (the system 105 MiB against the goal of less than 64 MiB). Causes and
+what was done:
+- A program's heap does not give memory back to the kernel, so temporary
+  pictures (the wallpaper blur, transitions, font files) stayed taken.
+  Blocks from 256 KiB now get their own mapping (`mmap`) and are freed with
+  `munmap`; this helps the installer too.
+- fontdue turns the outlines of all glyphs into segments on loading: Inter
+  took 8.4 MiB per face. `tools/fontsubset` keeps, at build time, the
+  glyphs of Latin with its European extensions, Cyrillic, punctuation,
+  arrows and (for the terminal) box drawing; the other outlines are emptied
+  and glyph numbers stay (the character map, kerning and substitution
+  tables stay valid). Now 2.1 MiB per face. The fonts are under the OFL 1.1,
+  which allows modified versions; they have no Reserved Font Names.
+- The blurred copy of the wallpaper is kept at 1/8 of the resolution and
+  scaled up when drawn (130 KiB instead of 8 MiB).
+
+After: Lumi takes 47 MiB with a terminal open, the system 56.4 MiB (QEMU,
+WHPX, `qemu_run.py lumi`). Most of it is three full-screen pictures of 8 MiB
+(the back buffer, the copy of what is shown, the wallpaper) and the fonts
+(7.5 MiB). At 4K the buffers are four times larger.
+
+## D56. Обои кодом / Wallpapers drawn by code
+
+**2026-11-28**
+
+**RU.** Встроенные обои («Волны» как на концепте, «Графит», «Сияние»,
+«Угли») рисуются кодом сразу в разрешении экрана: большие круги-листы со
+светлым краем на градиенте и мелкое зерно против полос. В 1080p это около
+100 мс на хосте и 90–300 мс в QEMU, один раз при входе или смене обоев.
+Готовые PNG в высоком разрешении весили бы мегабайты в образе, 4K-картинка
+при распаковке занимает 33 МиБ памяти, а на экранах другого размера такие
+картинки масштабировались бы с потерей чёткости. PNG из `assets/wallpapers`
+попадают в `/usr/share/wallpapers` (и с ним на установленную систему) и
+появляются в выборе вместе с `~/Pictures`. Они масштабируются с
+заполнением: середина сохраняется, лишние края обрезаются; уменьшение —
+усреднением площади, увеличение — билинейно.
+
+**EN.** The built-in wallpapers (Waves as in the concept, Graphite, Aurora,
+Ember) are drawn by code right in the screen's resolution: large sheet-like
+circles with light rims on a gradient and a fine grain against banding. At
+1080p this takes about 100 ms on the host and 90–300 ms in QEMU, once at
+login or when the wallpaper changes. Ready PNGs in a high resolution would
+take megabytes in the image, a 4K picture takes 33 MiB of memory while it is
+decoded, and on screens of another size such pictures would be scaled and
+lose sharpness. PNGs from `assets/wallpapers` go to `/usr/share/wallpapers`
+(and with it to the installed system) and appear in the choice together with
+`~/Pictures`. They are scaled to fill: the middle is kept, the extra edges
+are cut; down by area averaging, up bilinearly.

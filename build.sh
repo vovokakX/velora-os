@@ -3,6 +3,8 @@
 #
 #   ./build.sh           -> velora.iso       (normal kernel)
 #   ./build.sh --test    -> velora-test.iso  (kernel with the in-kernel test runner)
+#   ./build.sh --uitest  -> velora-uitest.iso (normal kernel; the installer
+#                           reports its widgets for tests/qemu_run.py clicks)
 #
 # Works on Linux and on Windows (Git Bash). Needs: cargo/rustup, curl,
 # unzip, sha256sum. The Rust toolchain is pinned in rust-toolchain.toml.
@@ -21,7 +23,8 @@ CMDLINE=""
 for arg in "$@"; do
     case "$arg" in
         --test) MODE="test"; OUT="velora-test.iso"; FEATURES="--features ktest"; CMDLINE="velora.test" ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        --uitest) OUT="velora-uitest.iso"; CMDLINE="velora.uitest" ;;
+        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "build.sh: unknown argument '$arg'" >&2; exit 2 ;;
     esac
 done
@@ -47,6 +50,17 @@ if [ ! -f "$LIMINE_DIR/BOOTX64.EFI" ]; then
     unzip -q -o "$zip" -d "$BUILD"
     mv "$BUILD/limine-binary" "$LIMINE_DIR"
 fi
+
+# Inter (the font of the graphical programs), verified by checksum.
+./tools/fetch-fonts.sh
+# Only the glyphs Velora shows: fontdue keeps every outline in memory.
+echo "==> subsetting fonts"
+mkdir -p build/fonts/subset
+for f in Inter-Regular Inter-Medium Inter-SemiBold; do
+    cargo run -q -p fontsubset --release -- "build/fonts/$f.ttf" "build/fonts/subset/$f.ttf"
+done
+cargo run -q -p fontsubset --release -- build/fonts/JetBrainsMono-Regular.ttf \
+    build/fonts/subset/JetBrainsMono-Regular.ttf --terminal
 
 # 2. Kernel.
 echo "==> building kernel ($MODE)"
@@ -80,10 +94,16 @@ cargo run -q -p mkpasswd --release -- --out "$SHADOW" \
 KSTRIP="$BUILD/velora-$MODE-stripped.elf"
 cargo run -q -p kstrip --release -- "$KCOPY" "$KSTRIP"
 
-PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc host fetch plume dmesg velora-setup"
+PROGRAMS="hello vtest login vsh ls cat cp mv rm mkdir touch echo clear ps kill mem uptime date whoami reboot shutdown help velofetch df passwd ip ping nc host fetch plume dmesg velora-setup velora-start uidemo lumi"
 FILES=()
 for p in $PROGRAMS; do
     FILES+=(--file "bin/$p=$UBIN/$p:755")
+done
+# Pictures in assets/wallpapers appear in Lumi's wallpaper choice (the
+# built-in wallpapers are drawn by Lumi itself).
+for f in assets/wallpapers/*.png; do
+    [ -f "$f" ] || continue
+    FILES+=(--file "usr/share/wallpapers/$(basename "$f")=$f:644")
 done
 cargo run -q -p mkinitrd --release -- \
     --out "$INITRD" \
@@ -94,10 +114,14 @@ cargo run -q -p mkinitrd --release -- \
     --file "etc/shadow=$SHADOW:600" \
     --file "usr/lib/velora/velora=$KSTRIP:644" \
     --file "usr/lib/velora/BOOTX64.EFI=$LIMINE_DIR/BOOTX64.EFI:644" \
-    --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
+    --file "usr/share/fonts/Inter-Regular.ttf=build/fonts/subset/Inter-Regular.ttf:644" \
+    --file "usr/share/fonts/Inter-Medium.ttf=build/fonts/subset/Inter-Medium.ttf:644" \
+    --file "usr/share/fonts/Inter-SemiBold.ttf=build/fonts/subset/Inter-SemiBold.ttf:644" \
+    --file "usr/share/fonts/JetBrainsMono-Regular.ttf=build/fonts/subset/JetBrainsMono-Regular.ttf:644" \
+    --dir "usr/share/wallpapers" --dir "dev" --dir "mnt" --dir "tmp:1777" --dir "home" --dir "root:700"
 
 # 4. Bootloader config.
-CONF="$BUILD/limine-$MODE.conf"
+CONF="$BUILD/limine-${OUT%.iso}.conf"
 sed "s|@CMDLINE@|$CMDLINE|" boot/limine.conf > "$CONF"
 
 # 5. ISO image.
@@ -111,10 +135,13 @@ cargo run -q -p mkiso --release -- \
     --file "boot/initramfs.tar=$INITRD" \
     --file "licenses/velora.txt=LICENSE" \
     --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
-    --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt"
+    --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
+    --file "licenses/inter.txt=docs/licenses/INTER.txt" \
+    --file "licenses/jetbrains.txt=docs/licenses/JETBRAINS-MONO.txt" \
+    --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 
 # 6. Image for USB drives (release build only): GPT + FAT32 EFI partition.
-if [ "$MODE" = "release" ]; then
+if [ "$OUT" = "velora.iso" ]; then
     echo "==> building velora-usb.img"
     cargo run -q -p mkusb --release -- \
         --out velora-usb.img \
@@ -125,7 +152,10 @@ if [ "$MODE" = "release" ]; then
         --file "boot/initramfs.tar=$INITRD" \
         --file "licenses/velora.txt=LICENSE" \
         --file "licenses/limine.txt=docs/licenses/LIMINE.txt" \
-        --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt"
+        --file "licenses/spleen.txt=docs/licenses/SPLEEN.txt" \
+        --file "licenses/inter.txt=docs/licenses/INTER.txt" \
+        --file "licenses/jetbrains.txt=docs/licenses/JETBRAINS-MONO.txt" \
+        --file "licenses/crates.txt=docs/licenses/RUST-CRATES.txt"
 fi
 
 echo "==> done: $OUT"

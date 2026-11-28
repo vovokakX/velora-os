@@ -48,6 +48,16 @@ fn main() -> i32 {
             Some("yes") => 0,
             _ => 1,
         },
+        Some("child-tty") => {
+            // On a pseudo-terminal: descriptor 0 is a terminal of 100x30.
+            if !vlibc::term::is_console(0) || vlibc::term::size() != (100, 30) {
+                return 2;
+            }
+            let mut buf = [0u8; 64];
+            let n = io::read(0, &mut buf).unwrap_or(0);
+            println!("got:{}", String::from_utf8_lossy(&buf[..n]).trim_end());
+            0
+        }
         Some("child-echo") => {
             println!("{}", args.get(2).unwrap_or(""));
             0
@@ -137,6 +147,7 @@ fn run_all() -> i32 {
     r.check("pipes: data, end of input, EPIPE", pipe_basics());
     r.check("pipe to a child's standard output", pipe_to_child());
     r.check("dup and dup2", dup_and_dup2());
+    r.check("pseudo-terminal: line mode, echo, end", pseudo_terminal());
     r.check("working directory and relative paths", working_directory());
     r.check(
         "users: setuid, permissions, chmod, chown",
@@ -712,6 +723,55 @@ fn pipe_to_child() -> Result<(), String> {
     let (_, status) = child_output(&[SELF, "child-fds"])?;
     drop(extra);
     ensure!(status == 0, "child saw {} extra descriptors", status);
+    Ok(())
+}
+
+fn pseudo_terminal() -> Result<(), String> {
+    let (master, slave) = vlibc::term::pty_open(100, 30).map_err(e)?;
+    let saved: Vec<u64> = (0..3)
+        .map(|fd| io::dup(fd).map_err(e))
+        .collect::<Result<_, _>>()?;
+    for fd in 0..3 {
+        io::dup2(slave, fd).map_err(e)?;
+    }
+    let pid = process::spawn(SELF, &[SELF, "child-tty"], &[]);
+    for (fd, s) in saved.iter().enumerate() {
+        io::dup2(*s, fd as u64).map_err(e)?;
+        fs::close(*s).map_err(e)?;
+    }
+    fs::close(slave).map_err(e)?;
+    let pid = pid.map_err(e)?;
+    io::write_all(
+        master, b"abc
+",
+    )
+    .map_err(e)?;
+    let mut out = Vec::new();
+    let mut buf = [0u8; 256];
+    let end = vlibc::time::monotonic().map_err(e)?.as_millis() + 5000;
+    loop {
+        match io::read(master, &mut buf) {
+            Ok(0) => break,
+            Ok(n) => out.extend_from_slice(&buf[..n]),
+            Err(Errno(11)) => vlibc::time::sleep_ms(10),
+            Err(x) => return Err(format!("master read: {:?}", x)),
+        }
+        ensure!(
+            vlibc::time::monotonic().map_err(e)?.as_millis() < end,
+            "no end of output: {:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
+    let status = process::wait(pid).map_err(e)?;
+    fs::close(master).map_err(e)?;
+    ensure!(status == 0, "child status {}", status);
+    ensure!(
+        out == b"abc
+got:abc
+",
+        "terminal showed {:?}",
+        String::from_utf8_lossy(&out)
+    );
     Ok(())
 }
 

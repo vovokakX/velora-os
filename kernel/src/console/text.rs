@@ -3,9 +3,21 @@
 //! visibility `?25h`/`?25l`) so that the same byte stream looks the same
 //! on the screen and on the serial terminal. The cursor is an underline
 //! drawn by inverting the bottom of its cell after each write.
+//!
+//! Images arrive through the Kitty graphics protocol (see
+//! `velora_gfx::kitty` for what is supported). An image is drawn into the
+//! text screen at the cursor, so it scrolls with the text and text
+//! written over it replaces it. Answers to queries (graphics commands,
+//! device attributes `CSI c`, sizes `CSI 14/16/18 t`) are collected for
+//! [`TextConsole::take_replies`]; the terminal layer gives them to the
+//! reading program as input.
 
 use super::font;
 use super::framebuffer::Framebuffer;
+use alloc::format;
+use alloc::vec::Vec;
+use velora_gfx::image::{self, Image};
+use velora_gfx::kitty::{self, Event};
 
 pub const DEFAULT_FG: u32 = 0xc0caf5;
 pub const DEFAULT_BG: u32 = 0x0b0e14;
@@ -23,7 +35,17 @@ enum State {
     Normal,
     Escape,
     Csi,
+    /// Inside an APC string (`ESC _`), which ends with `ESC \`.
+    Apc,
+    ApcEscape,
 }
+
+/// Largest image payload accepted, in decoded bytes (about 1400x1400
+/// RGBA).
+const MAX_IMAGE_BYTES: usize = 8 << 20;
+/// Stored images (`a=t`, or `a=T` with an id) may use this much memory;
+/// the oldest are forgotten first.
+const MAX_STORED_BYTES: usize = 16 << 20;
 
 pub struct TextConsole {
     fb: Framebuffer,
@@ -45,6 +67,13 @@ pub struct TextConsole {
     nparams: usize,
     /// The CSI sequence started with '?' (private mode).
     private: bool,
+    /// The CSI sequence started with '>', '=' or '<': not supported.
+    ignored: bool,
+    kitty: kitty::Parser,
+    /// Stored images by id.
+    images: Vec<(u32, Image)>,
+    /// Answers for the program reading the terminal.
+    replies: Vec<u8>,
     cursor_visible: bool,
     /// Cell where the cursor is currently drawn.
     cursor_drawn: Option<(usize, usize)>,
@@ -78,6 +107,10 @@ impl TextConsole {
             params: [0; MAX_PARAMS],
             nparams: 0,
             private: false,
+            ignored: false,
+            kitty: kitty::Parser::new(MAX_IMAGE_BYTES),
+            images: Vec::new(),
+            replies: Vec::new(),
             cursor_visible: true,
             cursor_drawn: None,
         };
@@ -91,6 +124,16 @@ impl TextConsole {
 
     pub fn framebuffer_mut(&mut self) -> &mut Framebuffer {
         &mut self.fb
+    }
+
+    /// Cell size in pixels.
+    pub fn cell_size(&self) -> (usize, usize) {
+        (self.cw, self.ch)
+    }
+
+    /// Answers produced since the last call (see the module comment).
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.replies)
     }
 
     pub fn clear(&mut self) {
@@ -140,11 +183,35 @@ impl TextConsole {
                     self.params = [0; MAX_PARAMS];
                     self.nparams = 0;
                     self.private = false;
+                    self.ignored = false;
+                } else if c == '_' {
+                    self.state = State::Apc;
+                    self.kitty.begin();
                 } else {
                     self.state = State::Normal;
                 }
             }
             State::Csi => self.csi_char(c),
+            State::Apc => {
+                if c == '\x1b' {
+                    self.state = State::ApcEscape;
+                } else {
+                    self.kitty.push(if c.is_ascii() { c as u8 } else { 0xff });
+                }
+            }
+            State::ApcEscape => {
+                if c == '\\' {
+                    self.state = State::Normal;
+                    if let Some(ev) = self.kitty.end() {
+                        self.graphics(ev);
+                    }
+                } else {
+                    // Cut short: the ESC starts a new sequence.
+                    self.kitty.abort();
+                    self.state = State::Escape;
+                    self.write_char(c);
+                }
+            }
         }
     }
 
@@ -183,6 +250,7 @@ impl TextConsole {
                 }
             }
             '?' => self.private = true,
+            '>' | '=' | '<' => self.ignored = true,
             _ => {
                 self.state = State::Normal;
                 self.csi_final(c);
@@ -199,6 +267,9 @@ impl TextConsole {
     }
 
     fn csi_final(&mut self, c: char) {
+        if self.ignored {
+            return;
+        }
         if self.private {
             // Only cursor visibility (DECTCEM) is supported.
             if self.param(0, 0) == 25 {
@@ -236,7 +307,129 @@ impl TextConsole {
                 _ => {}
             },
             'K' => self.erase_line_end(),
+            // Primary device attributes: a VT220 with ANSI colour.
+            'c' if self.param(0, 0) == 0 => self.reply("\x1b[?62;22c"),
+            't' => match self.param(0, 0) {
+                14 => self.reply(&format!("\x1b[4;{};{}t", self.fb.height, self.fb.width)),
+                16 => self.reply(&format!("\x1b[6;{};{}t", self.ch, self.cw)),
+                18 => self.reply(&format!("\x1b[8;{};{}t", self.rows, self.cols)),
+                _ => {}
+            },
             _ => {}
+        }
+    }
+
+    fn reply(&mut self, s: &str) {
+        // Bounded, in case nobody reads the answers.
+        if self.replies.len() < 4096 {
+            self.replies.extend_from_slice(s.as_bytes());
+        }
+    }
+
+    /// Runs a finished graphics command and queues its answer.
+    fn graphics(&mut self, ev: Event) {
+        let (id, quiet, result) = match ev {
+            Event::Error { id, quiet, msg } => (id, quiet, Err(msg)),
+            Event::Command { cmd, data } => (cmd.id, cmd.quiet, self.graphics_command(&cmd, &data)),
+        };
+        if let Some(a) = kitty::answer(id, quiet, result) {
+            self.reply(&a);
+        }
+    }
+
+    fn graphics_command(&mut self, cmd: &kitty::Command, data: &[u8]) -> Result<(), &'static str> {
+        match cmd.action {
+            b'q' => kitty::image(cmd, data).map(drop),
+            b't' | b'T' => {
+                let img = kitty::image(cmd, data)?;
+                if cmd.action == b'T' {
+                    self.draw_image(&img, cmd);
+                }
+                if cmd.id != 0 {
+                    self.store_image(cmd.id, img);
+                }
+                Ok(())
+            }
+            b'p' => {
+                let i = self
+                    .images
+                    .iter()
+                    .position(|(id, _)| *id == cmd.id)
+                    .ok_or("ENOENT:no image with this id")?;
+                let img = self.images[i].1.clone();
+                self.draw_image(&img, cmd);
+                Ok(())
+            }
+            b'd' => {
+                match cmd.delete {
+                    b'i' | b'I' => self.images.retain(|(id, _)| *id != cmd.id),
+                    _ => self.images.clear(),
+                }
+                Ok(())
+            }
+            _ => Err("EINVAL:unsupported action"),
+        }
+    }
+
+    fn store_image(&mut self, id: u32, img: Image) {
+        self.images.retain(|(i, _)| *i != id);
+        if img.data.len() > MAX_STORED_BYTES {
+            return;
+        }
+        // Keep the newest images that fit together with this one.
+        let mut total = img.data.len();
+        let mut keep = self.images.len();
+        while keep > 0 && total + self.images[keep - 1].1.data.len() <= MAX_STORED_BYTES {
+            total += self.images[keep - 1].1.data.len();
+            keep -= 1;
+        }
+        self.images.drain(..keep);
+        self.images.push((id, img));
+    }
+
+    /// Draws an image at the cursor, scrolling first so that it fits
+    /// (as far as the screen allows). The cursor then moves past the
+    /// image, to its last row, unless the command says `C=1`.
+    fn draw_image(&mut self, img: &Image, cmd: &kitty::Command) {
+        if self.rows == 0 || self.cols == 0 {
+            return;
+        }
+        let (cols, rows, w, h) = kitty::placement(cmd, img.width, img.height, self.cw, self.ch);
+        let scaled;
+        let img = if (w, h) == (img.width, img.height) {
+            img
+        } else {
+            scaled = img.resize(w, h);
+            &scaled
+        };
+        let rows = rows.clamp(1, self.rows);
+        if self.row + rows > self.rows {
+            let n = self.row + rows - self.rows;
+            self.fb.scroll_up(n * self.ch, self.bg);
+            self.row -= n;
+        }
+        let (x0, y0) = (self.col.min(self.cols - 1) * self.cw, self.row * self.ch);
+        let w = w.min(self.fb.width - x0);
+        let h = h.min(self.fb.height - y0);
+        for y in 0..h {
+            for x in 0..w {
+                let px = img.pixel(x, y);
+                if px[3] == 0 {
+                    continue;
+                }
+                let under = if px[3] == 255 {
+                    0
+                } else {
+                    let n = self.fb.get_native(x0 + x, y0 + y).unwrap_or(0);
+                    self.fb.rgb(n)
+                };
+                let out = self.fb.native(image::blend(px, under));
+                self.fb.put_native(x0 + x, y0 + y, out);
+            }
+        }
+        if !cmd.keep_cursor {
+            self.row += rows - 1;
+            self.col = (self.col + cols).min(self.cols);
         }
     }
 

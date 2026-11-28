@@ -65,6 +65,16 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
         nr::NETINFO => socket::netinfo(a0),
         nr::PING => socket::ping(a0, a1, a2),
         nr::SHUTDOWN => socket::shutdown(a0),
+        nr::DISPLAY => match a0 {
+            velora_abi::display::INFO => crate::display::info(a1),
+            velora_abi::display::MAP => crate::display::map(),
+            velora_abi::display::RELEASE => crate::display::release(),
+            _ => -errno::EINVAL,
+        },
+        nr::DISKINFO => diskinfo(a0, a1, a2),
+        nr::INPUT_WAIT => crate::input::wait_any(a0.min(60_000)) as i64,
+        nr::PTY => process::pty(a0, a1, a2),
+        nr::UMOUNT => files::umount(a0, a1),
         nr::CLOCK_GETTIME => clock_gettime(a0, a1),
         nr::SLEEP_MS => {
             sched::sleep_ms(a0);
@@ -74,12 +84,12 @@ pub fn dispatch(f: &mut SyscallFrame) -> i64 {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
     Console,
     Pipe,
     File,
     Socket(u32),
+    Pty(alloc::sync::Arc<crate::pty::Pty>, bool),
 }
 
 fn target(f: &fs::FileRef) -> Target {
@@ -88,6 +98,8 @@ fn target(f: &fs::FileRef) -> Target {
         fs::Handle::Pipe { .. } => Target::Pipe,
         fs::Handle::File { .. } => Target::File,
         fs::Handle::Socket { id } => Target::Socket(id),
+        fs::Handle::PtyMaster(ref p) => Target::Pty(p.clone(), true),
+        fs::Handle::PtySlave(ref p) => Target::Pty(p.clone(), false),
     }
 }
 
@@ -99,14 +111,20 @@ fn write(fd: u64, buf: u64, len: u64) -> i64 {
         Target::File => return files::write_file(&f, buf, len),
         Target::Pipe => return files::write_pipe(&f, buf, len),
         Target::Socket(id) => return socket::sendto(id, buf, len, 0, 0),
-        Target::Console => {}
+        Target::Console | Target::Pty(..) => {}
     }
     let len = len.min(MAX_WRITE);
     let Some(bytes) = uaccess::read_slice(buf, len) else {
         return -errno::EFAULT;
     };
-    tty::write(bytes);
-    len as i64
+    match target(&f) {
+        Target::Pty(p, true) => p.master_write(bytes) as i64,
+        Target::Pty(p, false) => p.slave_write(bytes) as i64,
+        _ => {
+            tty::write(bytes);
+            len as i64
+        }
+    }
 }
 
 /// Reads a file, a pipe or the console terminal (see `tty`).
@@ -119,8 +137,17 @@ fn read(fd: u64, buf: u64, len: u64) -> i64 {
         Target::Pipe => return files::read_pipe(&f, buf, len),
         Target::Socket(id) => return socket::recvfrom(id, buf, len, 0, 0),
         Target::Console => {}
+        Target::Pty(..) => {}
     }
-    let data = tty::read(len.min(4096) as usize);
+    let max = len.min(4096) as usize;
+    let data = match target(&f) {
+        Target::Pty(p, true) => match p.master_read(max) {
+            Some(d) => d,
+            None => return -errno::EAGAIN,
+        },
+        Target::Pty(p, false) => p.slave_read(max),
+        _ => tty::read(max),
+    };
     if uaccess::write(buf, &data) {
         data.len() as i64
     } else {
@@ -213,6 +240,51 @@ fn wait(pid: u64, status_ptr: u64) -> i64 {
         return -errno::EFAULT;
     }
     pid as i64
+}
+
+/// Size, kind and model of a disk or partition (`/dev/NAME`).
+fn diskinfo(path: u64, len: u64, out: u64) -> i64 {
+    let path = match files::user_path(path, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let Some(d) = path
+        .strip_prefix("/dev/")
+        .and_then(crate::drivers::block::find)
+    else {
+        return -errno::ENODEV;
+    };
+    let mut info = velora_abi::DiskInfo {
+        size_bytes: d.size_bytes(),
+        sector_size: d.sector_size() as u32,
+        kind: d.kind()
+            | if crate::drivers::block::boot_disk().as_deref() == Some(d.disk_name().as_str()) {
+                velora_abi::disk_kind::BOOT
+            } else {
+                0
+            },
+        model: [0; 48],
+    };
+    let model = d.model();
+    let model = model.trim();
+    // Cut at a character boundary.
+    let mut n = model.len().min(48);
+    while !model.is_char_boundary(n) {
+        n -= 1;
+    }
+    info.model[..n].copy_from_slice(&model.as_bytes()[..n]);
+    // SAFETY: DiskInfo is plain data with no padding.
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            (&info as *const velora_abi::DiskInfo).cast::<u8>(),
+            core::mem::size_of::<velora_abi::DiskInfo>(),
+        )
+    };
+    if uaccess::write(out, bytes) {
+        0
+    } else {
+        -errno::EFAULT
+    }
 }
 
 /// Anonymous memory. Pages are zero-filled; W+X and PROT_NONE are refused.

@@ -17,6 +17,9 @@ pub struct Framebuffer {
     pub height: usize,
     /// Bytes per scan line.
     pub pitch: usize,
+    /// A graphical program owns the screen: draw into the back buffer
+    /// only (see `set_hidden`).
+    hidden: bool,
     r_shift: u8,
     g_shift: u8,
     b_shift: u8,
@@ -35,6 +38,7 @@ impl Framebuffer {
         Some(Self {
             base: fb.address,
             back: None,
+            hidden: false,
             width: fb.width as usize,
             height: fb.height as usize,
             pitch: fb.pitch as usize,
@@ -53,6 +57,7 @@ impl Framebuffer {
         Self {
             base,
             back: None,
+            hidden: false,
             width,
             height,
             pitch,
@@ -69,6 +74,15 @@ impl Framebuffer {
         let g = (rgb >> 8) & 0xff;
         let b = rgb & 0xff;
         (r << self.r_shift) | (g << self.g_shift) | (b << self.b_shift)
+    }
+
+    /// Converts a native pixel value back into 0xRRGGBB.
+    #[inline]
+    pub fn rgb(&self, native: u32) -> u32 {
+        let r = (native >> self.r_shift) & 0xff;
+        let g = (native >> self.g_shift) & 0xff;
+        let b = (native >> self.b_shift) & 0xff;
+        (r << 16) | (g << 8) | b
     }
 
     #[inline]
@@ -102,10 +116,49 @@ impl Framebuffer {
         self.back.is_some()
     }
 
+    /// The frame buffer's address (in the kernel's direct map).
+    pub fn base(&self) -> *mut u8 {
+        self.base
+    }
+
+    pub fn shifts(&self) -> (u8, u8, u8) {
+        (self.r_shift, self.g_shift, self.b_shift)
+    }
+
+    /// Stops (or resumes) writing to video memory. Needs the back buffer:
+    /// while hidden, drawing only changes the back buffer, and showing the
+    /// screen again copies it to video memory.
+    pub fn set_hidden(&mut self, hidden: bool) -> bool {
+        if self.back.is_none() || self.hidden == hidden {
+            return self.hidden == hidden;
+        }
+        self.hidden = hidden;
+        if !hidden && let Some(b) = self.back.as_ref() {
+            for y in 0..self.height {
+                // SAFETY: row `y` is inside both buffers.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        b[y * self.width..].as_ptr(),
+                        self.row_ptr(y),
+                        self.width,
+                    )
+                }
+            }
+        }
+        true
+    }
+
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
     #[inline]
     fn write_px(&mut self, x: usize, y: usize, px: u32) {
         if let Some(b) = self.back.as_mut() {
             b[y * self.width + x] = px;
+            if self.hidden {
+                return;
+            }
         }
         // SAFETY: callers keep (x, y) inside the framebuffer.
         unsafe { self.row_ptr(y).add(x).write_volatile(px) }
@@ -195,7 +248,7 @@ impl Framebuffer {
                 let w = self.width;
                 b.copy_within(lines * w.., 0);
                 // Present the moved rows: video memory is only written.
-                for y in 0..keep {
+                for y in 0..if self.hidden { 0 } else { keep } {
                     // SAFETY: row `y` is inside both buffers.
                     unsafe {
                         core::ptr::copy_nonoverlapping(

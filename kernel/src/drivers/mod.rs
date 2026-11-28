@@ -74,6 +74,9 @@ pub fn init() {
             );
         }
     }
+    if let Some(d) = block::boot_disk() {
+        crate::kok!("boot disk: {}", d);
+    }
     match rtc::read(acpi.fadt.century_register) {
         Some(t) => {
             crate::time::set_wall_clock(t.to_unix());

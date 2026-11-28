@@ -181,6 +181,14 @@ impl BlockDevice for AhciDisk {
         format!("AHCI SATA disk \"{}\"", self.model)
     }
 
+    fn model(&self) -> String {
+        self.model.clone()
+    }
+
+    fn kind(&self) -> u32 {
+        velora_abi::disk_kind::SATA
+    }
+
     fn sector_size(&self) -> usize {
         SECTOR
     }

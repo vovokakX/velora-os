@@ -56,8 +56,10 @@ pub fn sysinfo(out: u64) -> i64 {
     }
 }
 
+/// Restart or power off: root, or the program that owns the screen (the
+/// person in front of it, as with the power button; D52).
 pub fn reboot(what: u64) -> i64 {
-    if sched::current_cred().uid != 0 {
+    if sched::current_cred().uid != 0 && !crate::display::is_owner(sched::current_pid()) {
         return -errno::EPERM;
     }
     match what {
@@ -114,7 +116,32 @@ pub fn proclist(buf: u64, len: u64) -> i64 {
     }
 }
 
+/// The pseudo-terminal of the caller's descriptor 0, if it is one.
+fn own_pty() -> Option<alloc::sync::Arc<crate::pty::Pty>> {
+    let f = sched::fd_get(0)?;
+    match &f.lock().handle {
+        crate::fs::Handle::PtySlave(p) => Some(p.clone()),
+        _ => None,
+    }
+}
+
 pub fn tty(what: u64, arg: u64) -> i64 {
+    if let Some(p) = own_pty() {
+        return match what {
+            op::SET_MODE => p.set_mode(arg) as i64,
+            op::SET_FOREGROUND => {
+                p.set_foreground(arg);
+                0
+            }
+            op::SIZE => {
+                let (c, r) = p.size();
+                ((c << 32) | r) as i64
+            }
+            // No images in a pseudo-terminal: programs use text.
+            op::CELL_SIZE => -errno::ENODEV,
+            _ => -errno::EINVAL,
+        };
+    }
     match what {
         op::SET_MODE => tty::set_mode(arg) as i64,
         op::SET_FOREGROUND => {
@@ -124,6 +151,53 @@ pub fn tty(what: u64, arg: u64) -> i64 {
         op::SIZE => {
             let (c, r) = tty::size();
             ((c << 32) | r) as i64
+        }
+        op::CELL_SIZE => match tty::cell_size() {
+            Some((w, h)) => ((w << 32) | h) as i64,
+            None => -errno::ENODEV,
+        },
+        _ => -errno::EINVAL,
+    }
+}
+
+/// Pseudo-terminal operations (see `velora_abi::pty`).
+pub fn pty(what: u64, a: u64, b: u64) -> i64 {
+    use crate::sync::SpinLock;
+    use alloc::sync::Arc;
+    let (cols, rows) = ((b >> 32) as u32, b as u32);
+    match what {
+        velora_abi::pty::OPEN => {
+            if !uaccess::write(a, &[0u8; 16]) {
+                return -errno::EFAULT;
+            }
+            let (m, s) = crate::fs::new_pty(cols, rows);
+            let Some(mfd) = sched::fd_install(Arc::new(SpinLock::new(m))) else {
+                return -errno::EMFILE;
+            };
+            let Some(sfd) = sched::fd_install(Arc::new(SpinLock::new(s))) else {
+                drop(sched::fd_remove(mfd));
+                return -errno::EMFILE;
+            };
+            let mut out = [0u8; 16];
+            out[..8].copy_from_slice(&mfd.to_le_bytes());
+            out[8..].copy_from_slice(&sfd.to_le_bytes());
+            if uaccess::write(a, &out) {
+                0
+            } else {
+                -errno::EFAULT
+            }
+        }
+        velora_abi::pty::RESIZE => {
+            let Some(f) = sched::fd_get(a) else {
+                return -errno::EBADF;
+            };
+            match &f.lock().handle {
+                crate::fs::Handle::PtyMaster(p) => {
+                    p.resize(cols, rows);
+                    0
+                }
+                _ => -errno::EINVAL,
+            }
         }
         _ => -errno::EINVAL,
     }

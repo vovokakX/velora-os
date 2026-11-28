@@ -64,7 +64,7 @@
 | 35 | `chmod(path, path_len, mode)` | права файла; владелец или root | `EPERM`, `EROFS`, `ENOENT` |
 | 36 | `chown(path, path_len, uid, gid)` | владелец и группа; только root | `EPERM`, `EROFS`, `ENOENT` |
 | 37 | `dup(fd)` | новый наименьший дескриптор на тот же открытый файл | `EBADF`, `EMFILE` |
-| 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`) | `EINVAL` |
+| 38 | `tty(op, arg)` | консоль: `0` — режим (`RAW` 1, `NO_ECHO` 2), `1` — процесс, который завершает Ctrl+C, `2` — размер (`cols << 32 | rows`), `3` — размер ячейки в пикселях (`width << 32 | height`) | `EINVAL`, `ENODEV` (`3`: нет экрана) |
 | 39 | `getrandom(buf, len)` | до 256 случайных байт (RDRAND, если есть, вместе с TSC) | `EFAULT` |
 | 40 | `socket(kind)` | новый сокет: `1` — UDP, `2` — TCP; возвращает дескриптор | `EINVAL`, `ENETDOWN` (нет сети), `EMFILE` |
 | 41 | `bind(fd, port)` | UDP: занять порт (0 — любой свободный); TCP: порт для `listen` | `EADDRINUSE`, `EINVAL` |
@@ -76,6 +76,11 @@
 | 47 | `netinfo(out)` | пишет `NetInfo` (48 байт): флаги, адрес, маска, шлюз, DNS, MAC, счётчики кадров | `EFAULT` |
 | 48 | `ping(ip, seq, timeout_ms)` | эхо-запрос ICMP; возвращает время ответа в микросекундах | `ETIMEDOUT`, `ENETUNREACH`, `ENETDOWN` |
 | 49 | `shutdown(fd)` | TCP: закрыть передачу (FIN), приём продолжается | `ENOTCONN` |
+| 50 | `display(op, arg)` | экран для графических программ: `0` — пишет `DisplayInfo` (ширина, высота, байт в строке, бит на пиксель, сдвиги каналов) по адресу `arg`; `1` — отображает framebuffer в процесс (write-combining) и забирает экран у консоли, возвращает адрес; `2` — отдаёт экран консоли. Экран принадлежит одному процессу; после его выхода консоль показывается снова | `ENODEV` (нет экрана), `EBUSY` (экран у другого процесса), `EINVAL` |
+| 51 | `diskinfo(path, path_len, out)` | пишет `DiskInfo` (64 байта) о `/dev/ИМЯ`: размер, сектор, вид (virtio, SATA, NVMe, USB, раздел), модель. У диска, с которого запущена система, и его разделов к виду добавлен флаг `disk_kind::BOOT` (0x100) | `ENODEV`, `EFAULT` |
+| 52 | `input_wait(timeout_ms)` | ждёт события клавиатуры или указателя (в `/dev/keyboard`, `/dev/pointer`, `/dev/mouse`) или нового вывода псевдотерминала не дольше `timeout_ms` (до 60 с); 1 — событие есть, 0 — время вышло. Сразу возвращает 1, если событие уже ждёт | — |
+| 53 | `pty(op, a, b)` | псевдотерминалы (D53): `0` — создаёт пару, пишет дескрипторы мастера и подчинённой стороны (`[u64; 2]`) по адресу `a`, размер `b` = столбцы << 32 \| строки; `1` — новый размер `b` для мастера `a`. Мастер читает вывод без ожидания (`EAGAIN` — пусто, 0 — подчинённая сторона закрыта) и пишет набранные байты; подчинённая сторона работает как консоль, вызовы `tty` процесса с ней в дескрипторе 0 действуют на неё | `EFAULT`, `EMFILE`, `EBADF`, `EINVAL` |
+| 31 | `umount(path, path_len)` | только root: отключает файловую систему, подключённую при загрузке в `/mnt/…`, сначала записав её данные; журнал паники перестаёт писаться на неё | `EPERM`, `EBUSY` (открыты файлы), `EACCES` (не `/mnt/…`), `EINVAL` |
 
 Неизвестный номер возвращает `-ENOSYS` (38).
 
@@ -104,6 +109,16 @@
 - `RAW`: клавиши отдаются сразу, без эха; стрелки, Home, End, Delete —
   последовательности ANSI (`ESC [ A` и т. д.), Backspace — 0x7f. Так vsh
   сам редактирует строку.
+- `/dev/keyboard` — нажатия и отпускания клавиш пакетами по 8 байт
+  (`velora_abi::key`: код клавиши, флаги Shift/Ctrl/Alt/Super, символ), для
+  графических программ. Клавиши-модификаторы приходят сами по себе
+  (`SHIFT_KEY` … `SUPER_KEY`, 28–31), Insert — 32; Ctrl+буква — код `CHAR`
+  с буквой и флагом Ctrl (D54). Чтение не ждёт. Клавиши, прочитанные там, консоль
+  не получает. `/dev/mouse` — пакеты по 4 байта (кнопки, dx, dy, колесо:
+  положительное — от себя) от мышей USB и PS/2. `/dev/pointer` — все
+  события мышей и планшетов пакетами по 8 байт (`velora_abi::pointer`:
+  флаги, кнопки, колесо, x и y по `i16`; с флагом `ABSOLUTE` — позиция от
+  0 до 32767 по экрану). Чтение не ждёт.
 - Ctrl+C в строчном режиме при заданном процессе переднего плана
   завершает его со статусом 130 сразу, даже если он не читает клавиатуру.
 - Программы запускаются с любой файловой системы; нужен бит `x`
@@ -149,7 +164,6 @@ ESPIPE 29, EROFS 30, ENAMETOOLONG 36, ENOSYS 38, ENOTEMPTY 39, EUCLEAN 117`
 | № | Вызов | Этап |
 |---|---|---|
 | 30 | `mount(source, target, type)` | позже (установщику не понадобился, см. D34) |
-| 31 | `umount(target)` | позже |
 
 Изменения фиксируются здесь и в [decisions.md](decisions.md).
 
@@ -160,13 +174,44 @@ added the socket calls 40–49: `socket(kind)` (1 UDP, 2 TCP), `bind(fd, port)`,
 `connect(fd, ip, port)` (TCP waits for the handshake), `listen(fd)`,
 `accept(fd)`, `sendto(fd, buf, len, ip, port)`, `recvfrom(fd, buf, len, from)`
 (0 = the peer closed), `netinfo(out)` (48-byte `NetInfo`), `ping(ip, seq,
-timeout_ms)` (round trip in µs) and `shutdown(fd)` (TCP half-close). Sockets
+timeout_ms)` (round trip in µs) and `shutdown(fd)` (TCP half-close).
+`display(op, arg)` (50) is the screen for graphical programs: op 0 writes
+`DisplayInfo` (width, height, bytes per row, bits per pixel, channel shifts)
+to `arg`; op 1 maps the frame buffer into the process (write-combining), takes
+the screen from the console and returns the address; op 2 gives the screen
+back. One process owns the screen; the console shows again when it exits
+(`ENODEV` without a screen, `EBUSY` if another process owns it).
+`diskinfo(path, len, out)` (51) writes `DiskInfo` (64 bytes) about
+`/dev/NAME`: size, sector size, kind (virtio, SATA, NVMe, USB, partition) and
+model; the disk the system was started from and its partitions get the
+`disk_kind::BOOT` flag (0x100) added to the kind. `input_wait(timeout_ms)`
+(52) waits up to `timeout_ms` (at most 60 s) for a key or pointer event on
+`/dev/keyboard`, `/dev/pointer` or `/dev/mouse`, or new pseudo-terminal
+output, and returns 1 (an event is waiting, also at once) or 0 (time out).
+`pty(op, a, b)` (53, D53): op 0 makes a pseudo-terminal of `b` = columns <<
+32 | rows and writes the master and slave descriptors (`[u64; 2]`) to `a`;
+op 1 gives master `a` the new size `b`. The master reads output without
+waiting (`EAGAIN`: none yet; 0: the slave side is closed) and writes typed
+bytes; the slave side works like the console, and the `tty` calls of a
+process with a slave as descriptor 0 act on it. `umount(path, len)` (31, root only)
+unmounts a file system mounted at boot under `/mnt/...` after writing its
+data; the panic log stops using it (`EPERM`, `EBUSY` while files are open,
+`EACCES` outside `/mnt`). Key packets have codes F1 ... F12 (16 ... 27). `/dev/keyboard` gives key presses and releases as 8-byte packets
+(`velora_abi::key`: key code, Shift/Ctrl/Alt/Super flags, character)
+without waiting; the modifier keys come on their own (`SHIFT_KEY` ...
+`SUPER_KEY`, 28-31), Insert is 32, Ctrl+letter is `CHAR` with the letter and
+the Ctrl flag (D54); keys read there do not reach the console. `/dev/mouse` gives 4-byte
+packets (buttons, dx, dy, wheel: positive away from the user) from USB and
+PS/2 mice. `/dev/pointer` gives every mouse and tablet event as an 8-byte
+packet (`velora_abi::pointer`: flags, buttons, wheel, x and y as `i16`; with
+the `ABSOLUTE` flag a position from 0 to 32767 across the screen) without
+waiting. Sockets
 are file descriptors, so `read`, `write` and `close` work on them. New error
 numbers: ENOTSOCK 88, EDESTADDRREQ 89, EADDRINUSE 98, ENETDOWN 100,
 ENETUNREACH 101, ECONNRESET 104, EISCONN 106, ENOTCONN 107, ETIMEDOUT 110,
 ECONNREFUSED 111, EPIPE 32. Stage 9
 added 39 `getrandom(buf, len)` (up to 256 random bytes: RDRAND when present,
-mixed with the TSC). 30 `mount` and 31 `umount` stay reserved (decision D34). Numbers and
+mixed with the TSC). 30 `mount` stays reserved (decision D34); 31 `umount` exists since D50. Numbers and
 error codes are defined in the `velora-abi` crate (`kernel/abi`), shared by
 the kernel and the future vlibc.
 
@@ -219,7 +264,8 @@ file system data is synced first), 24 `setuid(uid, gid)` (root only, one
 way), 32 `getcwd(buf, len)`, 33 `getuid()` (`uid | gid << 32`), 34
 `proclist(buf, len)` (72-byte `ProcEntry` records), 35 `chmod`, 36 `chown`
 (root only), 37 `dup(fd)`, 38 `tty(op, arg)` (0 mode: `RAW` 1, `NO_ECHO` 2;
-1 the process Ctrl+C ends; 2 size `cols << 32 | rows`). The console has a
+1 the process Ctrl+C ends; 2 size `cols << 32 | rows`; 3 cell size in
+pixels `width << 32 | height`, `ENODEV` without a screen). The console has a
 line mode (echo, Backspace, Enter delivers the line, Ctrl+D on an empty line
 is the end of input), `NO_ECHO` for passwords, and a raw mode where keys
 arrive at once and special keys as ANSI sequences (Backspace as 0x7f). In

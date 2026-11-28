@@ -10,8 +10,9 @@
 
 Velora OS — операционная система для x86_64, написанная с нуля. Это не дистрибутив
 Linux и не форк: своё ядро, свои драйверы и своё пользовательское окружение.
-Сейчас система работает только в текстовом режиме. Графическая оболочка Lumi и
-запуск программ Windows (.exe) запланированы на следующие этапы.
+Есть графическая оболочка Lumi: экран входа, окна, панель, меню приложений,
+терминал, файлы, редактор Plume, настройки (снимки — `docs/design/lumi-screens`).
+Запуск программ Windows (.exe) запланирован на следующие этапы.
 
 ### Состояние
 
@@ -124,8 +125,7 @@ qemu-system-x86_64 -M q35 -m 256M \
 | 15 | USB: xHCI, клавиатура, мышь, флешки | v0.15.0 (готово) |
 | 16 | Сеть на реальном ПК: e1000, DNS, `fetch` | v0.16.0 (готово) |
 
-После этого: графическая оболочка Lumi (компоновщик в пространстве
-пользователя поверх framebuffer) и Win32-слой для запуска .exe (загрузчик
+После этого: окна внешних графических программ в Lumi, звук и Win32-слой для запуска .exe (загрузчик
 PE и перевод вызовов Win32 в системные вызовы Velora).
 
 ### Лицензия
@@ -141,8 +141,10 @@ crate, код которых в неё входит (`kernel/abi`, `kernel/mm`),
 
 Velora OS is an x86_64 operating system written from scratch. It is not a Linux
 distribution or a fork: it has its own kernel, drivers and userland. For now it
-is text-mode only. The Lumi graphical shell and running Windows programs (.exe)
-are planned for later stages.
+has the Lumi graphical shell: a login screen, windows, a panel, an app menu, a
+terminal, files, the Plume editor and settings (screenshots in
+`docs/design/lumi-screens`). Running Windows programs (.exe) is planned for
+later stages.
 
 ### Status
 
@@ -240,8 +242,8 @@ virtio-blk disks need QEMU 9.1 or newer (there is a known problem with 8.2,
 | 15 | USB: xHCI, keyboard, mouse, flash drives | v0.15.0 (done) |
 | 16 | Networking on a real PC: e1000, DNS, `fetch` | v0.16.0 (done) |
 
-After that: the Lumi graphical shell (a user-space compositor on top of the
-framebuffer) and a Win32 layer for .exe files (a PE loader plus translation
+After that: windows of other graphical programs in Lumi, sound and a Win32
+layer for .exe files (a PE loader plus translation
 of Win32 calls into Velora system calls).
 
 ### License

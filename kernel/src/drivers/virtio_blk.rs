@@ -328,6 +328,14 @@ impl BlockDevice for VirtioBlk {
         &self.name
     }
 
+    fn model(&self) -> String {
+        String::from("Virtio disk")
+    }
+
+    fn kind(&self) -> u32 {
+        velora_abi::disk_kind::VIRTIO
+    }
+
     fn description(&self) -> String {
         format!(
             "virtio-blk{}",

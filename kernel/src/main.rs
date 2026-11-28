@@ -12,6 +12,7 @@ mod arch;
 mod boot;
 mod console;
 mod crashlog;
+mod display;
 mod drivers;
 mod exec;
 mod fs;
@@ -23,6 +24,7 @@ mod mm;
 mod net;
 mod panic;
 mod power;
+mod pty;
 mod sched;
 mod smp;
 mod sync;
@@ -151,11 +153,56 @@ extern "C" fn kmain_on_kernel_stack() -> ! {
     }
 }
 
-/// Starts `/bin/login` on the console, again each time a session ends.
+/// The Live system first shows the start menu (`/bin/velora-start`:
+/// graphical installation, installation in the terminal or the Live
+/// system). Then the graphical shell `/bin/lumi` runs (on an installed
+/// system always, on the Live system when the menu chose the desktop),
+/// again each time its user logs out. When Lumi cannot run (no screen,
+/// no fonts, `session=console` in desktop.conf: it ends with another
+/// status) or `velora.text` is on the command line, `/bin/login` runs on
+/// the console instead, again each time a session ends. `velora.nomenu`
+/// skips the menu; `velora.uitest` (the menu reports its widgets for
+/// automatic tests) and `velora.noanim` (no animations) are passed to it.
 #[cfg(not(feature = "ktest"))]
 fn run_sessions() -> ! {
+    let mut desktop = !fs::is_live();
+    if fs::is_live() && !boot::cmdline_has("velora.nomenu") {
+        tty::reset();
+        let mut argv = alloc::vec!["/bin/velora-start"];
+        if boot::cmdline_has("velora.uitest") {
+            argv.push("--uitest");
+        }
+        if boot::cmdline_has("velora.noanim") {
+            argv.push("--no-animations");
+        }
+        match exec::spawn("/bin/velora-start", &argv, &["PATH=/bin"]) {
+            Ok(pid) => {
+                // Status 3: the Live system with the desktop.
+                desktop = sched::wait_pid(pid) == Some(3);
+            }
+            Err(e) => kwarn!("cannot start /bin/velora-start: {:?}", e),
+        }
+    }
+    if boot::cmdline_has("velora.text") {
+        desktop = false;
+    }
     loop {
         tty::reset();
+        if desktop {
+            match exec::spawn("/bin/lumi", &["/bin/lumi"], &["PATH=/bin"]) {
+                Ok(pid) => {
+                    let status = sched::wait_pid(pid);
+                    if status == Some(0) {
+                        // Logged out: the login screen again.
+                        continue;
+                    }
+                    kinfo!("lumi ended with {:?}; console login", status);
+                }
+                Err(e) => kwarn!("cannot start /bin/lumi: {:?}", e),
+            }
+            desktop = false;
+            tty::reset();
+        }
         match exec::spawn("/bin/login", &["/bin/login"], &["PATH=/bin"]) {
             Ok(pid) => {
                 sched::wait_pid(pid);
@@ -235,7 +282,10 @@ fn init_interrupts() {
         Err(e) => panic!("timer calibration: {}", e),
     }
     match drivers::ps2::init(madt) {
-        Ok(()) => kok!("PS/2 keyboard (layouts EN, RU; Alt+Shift switches)"),
+        Ok(mouse) => kok!(
+            "PS/2 keyboard (layouts EN, RU; Alt+Shift switches){}",
+            if mouse { ", PS/2 mouse" } else { "" }
+        ),
         Err(e) => kwarn!("PS/2 keyboard: {}", e),
     }
 }

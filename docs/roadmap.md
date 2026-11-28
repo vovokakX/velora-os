@@ -22,11 +22,18 @@ Each stage: its own branch, issue, pull request with green CI, tag and release.
 | 15 | `stage-15-usb` | xHCI, клавиатура и мышь USB HID, флешки (FAT32) / xHCI, USB HID keyboard and mouse, flash drives (FAT32) | Ввод и файлы через USB-устройства QEMU / input and files through QEMU USB devices | v0.15.0 |
 | 16 | `stage-16-net` | e1000, DHCP, DNS, `ping`, `fetch` (HTTP) / e1000, DHCP, DNS, `ping`, `fetch` (HTTP) | Скачивание по HTTP с хоста QEMU по имени / an HTTP download from the QEMU host by name | v0.16.0 |
 
-Дальше / Later: хабы и горячее подключение USB, сетевые карты Realtek, TLS
+Графическая оболочка Lumi (ветка `lumi`, D52–D56): экран входа, окна,
+панель, меню приложений, Терминал, Файлы, Plume, Настройки, О системе. /
+The Lumi graphical shell (branch `lumi`, D52–D56): login screen, windows,
+panel, app menu, Terminal, Files, Plume, Settings, About.
+
+Дальше / Later: окна внешних графических программ (протокол, разделяемая
+память), звук, хабы и горячее подключение USB, сетевые карты Realtek, TLS
 (HTTPS), параллельные системные вызовы (тонкие блокировки), загрузка через
-BIOS, Lumi, Win32-слой. / USB hubs and hot plugging, Realtek network cards,
-TLS (HTTPS), parallel system calls (fine-grained locks), BIOS boot, Lumi, the
-Win32 layer.
+BIOS, Win32-слой. / Windows of other graphical programs (a protocol, shared
+memory), sound, USB hubs and hot plugging, Realtek network cards, TLS
+(HTTPS), parallel system calls (fine-grained locks), BIOS boot, the Win32
+layer.
 
 ## Цели производительности / Performance targets
 

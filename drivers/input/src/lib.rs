@@ -9,6 +9,8 @@
 
 pub mod keycode;
 pub mod layout;
+pub mod mouse;
+pub mod ps2mouse;
 pub mod set1;
 
 pub use keycode::KeyCode;

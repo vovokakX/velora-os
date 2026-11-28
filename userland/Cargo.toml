@@ -3,7 +3,7 @@
 # lower-half addresses, static relocation model, linked by link.ld.
 [workspace]
 resolver = "3"
-members = ["hello", "vtest", "coreutils", "login", "vsh", "plume", "../installer/velora-setup"]
+members = ["hello", "vtest", "coreutils", "login", "vsh", "plume", "uidemo", "start", "lumi", "../installer/velora-setup"]
 
 [workspace.package]
 version = "0.16.0"

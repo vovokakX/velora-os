@@ -172,6 +172,14 @@ pub fn usb_storage_files() {
 /// The test runner moves the mouse and clicks through the QEMU monitor.
 pub fn usb_mouse_moves() {
     while crate::input::pop_mouse().is_some() {}
+    // QEMU's xHCI offers MSI-X: reports arrive by interrupt (D51).
+    let modes = crate::drivers::xhci::irq_modes();
+    assert!(
+        !modes.is_empty() && modes.iter().all(|&m| m == "MSI-X"),
+        "xhci interrupts: {:?}",
+        modes
+    );
+    let interrupts = crate::drivers::xhci::interrupt_count();
     crate::kprintln!();
     crate::kprintln!("ktest: mouse: waiting for movement");
     let start = crate::arch::cpu::rdtsc();
@@ -191,8 +199,15 @@ pub fn usb_mouse_moves() {
         );
         crate::sched::sleep_ms(10);
     }
-    kprint!("ktest: mouse: dx {} dy {} ", dx, dy);
+    let interrupts = crate::drivers::xhci::interrupt_count() - interrupts;
+    kprint!(
+        "ktest: mouse: dx {} dy {} interrupts {} ",
+        dx,
+        dy,
+        interrupts
+    );
     assert_eq!((dx, dy), (12, -7));
+    assert!(interrupts > 0, "the mouse reports came without interrupts");
 }
 
 pub fn rtc_matches_bootloader_time() {

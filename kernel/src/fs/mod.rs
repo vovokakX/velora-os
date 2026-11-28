@@ -55,6 +55,11 @@ pub fn now() -> u64 {
 
 static ROOT_DEVICE: SpinLock<Option<String>> = SpinLock::new(None);
 
+/// True when the root is the initramfs (the Live system), not a disk.
+pub fn is_live() -> bool {
+    ROOT_DEVICE.lock().is_none()
+}
+
 /// The partition named by `velora.root=PARTUUID=<guid>`, if any.
 fn root_partition() -> Option<Arc<dyn block::BlockDevice>> {
     let arg = crate::boot::cmdline()
@@ -199,6 +204,21 @@ pub fn automounted() -> Vec<AutoMount> {
     AUTOMOUNTED.lock().clone()
 }
 
+/// Unmounts a file system mounted at boot under /mnt (the installer frees
+/// a disk before erasing it). Its data is written first; it fails with
+/// `Busy` while files on it are open. The panic log stops using it.
+pub fn umount(at: &str) -> Result<(), FsError> {
+    let at = path::normalize(at)?;
+    if !at.starts_with("/mnt/") {
+        return Err(FsError::Access);
+    }
+    with(|v| v.unmount(&at))?;
+    crate::crashlog::forget_under(&at);
+    AUTOMOUNTED.lock().retain(|m| m.path != at);
+    kok!("{} unmounted", at);
+    Ok(())
+}
+
 /// Reads a program file: the caller needs execute permission.
 pub fn read_program(p: &str, cred: &Cred) -> Result<Vec<u8>, FsError> {
     with(|v| {
@@ -229,6 +249,10 @@ pub enum Handle {
     Pipe { pipe: Arc<pipe::Pipe>, write: bool },
     /// A network socket (see `net`).
     Socket { id: u32 },
+    /// The terminal side of a pseudo-terminal (see `pty`).
+    PtyMaster(Arc<crate::pty::Pty>),
+    /// The program side of a pseudo-terminal: works like the console.
+    PtySlave(Arc<crate::pty::Pty>),
 }
 
 pub struct OpenFile {
@@ -245,6 +269,8 @@ impl Drop for OpenFile {
             Handle::File { node, .. } => with(|v| v.close_ref(node.mount)),
             Handle::Pipe { pipe, write } => pipe.close_end(*write),
             Handle::Socket { id } => crate::net::close(*id),
+            Handle::PtyMaster(p) => p.close(true),
+            Handle::PtySlave(p) => p.close(false),
             Handle::Console => {}
         }
     }
@@ -405,6 +431,19 @@ pub fn new_pipe() -> (OpenFile, OpenFile) {
         append: false,
     };
     (end(false), end(true))
+}
+
+/// Creates a pseudo-terminal of `cols` x `rows`: (master, slave).
+pub fn new_pty(cols: u32, rows: u32) -> (OpenFile, OpenFile) {
+    let p = Arc::new(crate::pty::Pty::new(cols, rows));
+    let end = |h: Handle| OpenFile {
+        handle: h,
+        offset: 0,
+        readable: true,
+        writable: true,
+        append: false,
+    };
+    (end(Handle::PtyMaster(p.clone())), end(Handle::PtySlave(p)))
 }
 
 /// Mount id of `/dev` (for tests).

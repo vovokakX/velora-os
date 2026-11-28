@@ -278,6 +278,51 @@ pub fn enable_device<A: ConfigAccess>(a: &A, addr: Address) {
     );
 }
 
+/// Capability IDs of message-signalled interrupts.
+pub const CAP_MSI: u8 = 0x05;
+pub const CAP_MSIX: u8 = 0x11;
+
+const MSI_ENABLE: u16 = 1 << 0;
+const MSI_MULTIPLE_ENABLE: u16 = 0x70;
+const MSI_64BIT: u16 = 1 << 7;
+const MSI_PER_VECTOR_MASK: u16 = 1 << 8;
+
+/// The address and data a device writes for an interrupt on x86: fixed
+/// delivery of `vector` to the local APIC `apic_id`, edge triggered.
+pub fn msi_message(apic_id: u32, vector: u8) -> (u64, u32) {
+    (0xfee0_0000 | ((apic_id as u64 & 0xff) << 12), vector as u32)
+}
+
+/// Programs the MSI capability with one message (`address`, `data`),
+/// unmasks it and enables MSI (the function then stops using INTx).
+/// False when the function has no MSI capability.
+pub fn enable_msi<A: ConfigAccess>(a: &A, addr: Address, address: u64, data: u32) -> bool {
+    let Some(cap) = capabilities(a, addr)
+        .into_iter()
+        .find(|&(id, _)| id == CAP_MSI)
+        .map(|(_, off)| off as u16)
+    else {
+        return false;
+    };
+    let ctrl = a.read16(addr, cap + 2);
+    let wide = ctrl & MSI_64BIT != 0;
+    // Off while it is programmed; one message.
+    a.write16(addr, cap + 2, ctrl & !(MSI_ENABLE | MSI_MULTIPLE_ENABLE));
+    a.write32(addr, cap + 4, address as u32);
+    let data_at = if wide {
+        a.write32(addr, cap + 8, (address >> 32) as u32);
+        cap + 12
+    } else {
+        cap + 8
+    };
+    a.write16(addr, data_at, data as u16);
+    if ctrl & MSI_PER_VECTOR_MASK != 0 {
+        a.write32(addr, data_at + 4, 0);
+    }
+    a.write16(addr, cap + 2, (ctrl & !MSI_MULTIPLE_ENABLE) | MSI_ENABLE);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,5 +485,52 @@ mod tests {
             cmd & (CMD_MEMORY | CMD_BUS_MASTER),
             CMD_MEMORY | CMD_BUS_MASTER
         );
+    }
+
+    #[test]
+    fn msi_message_targets_the_local_apic() {
+        assert_eq!(msi_message(0, 0x48), (0xfee0_0000, 0x48));
+        assert_eq!(msi_message(3, 0x30), (0xfee0_3000, 0x30));
+    }
+
+    #[test]
+    fn msi_64bit_with_masking() {
+        let mut bus = FakeBus::default();
+        let d = a(0, 8, 0);
+        let s = bus.add(d, 0x1b36, 0x000d, 0x0c03_3000, 0);
+        s[1] = 1 << 20;
+        s[0x34 / 4] = 0x50;
+        // MSI, end of list; control: 64-bit, per-vector masking, MMC = 8
+        // messages, MME = 2 left by the firmware.
+        s[0x50 / 4] = ((1 << 7 | 1 << 8 | 3 << 1 | 1 << 4) as u32) << 16 | 0x05;
+        s[0x60 / 4] = 1; // mask bit set
+        assert!(enable_msi(&bus, d, 0xfee0_1000, 0x48));
+        let s = bus.space.borrow()[&d];
+        let ctrl = (s[0x50 / 4] >> 16) as u16;
+        assert_eq!(ctrl & 1, 1, "enabled");
+        assert_eq!(ctrl & 0x70, 0, "one message");
+        assert_eq!(ctrl & 0x0e, 3 << 1, "capable bits kept");
+        assert_eq!(s[0x54 / 4], 0xfee0_1000);
+        assert_eq!(s[0x58 / 4], 0);
+        assert_eq!(s[0x5c / 4] & 0xffff, 0x48);
+        assert_eq!(s[0x60 / 4], 0, "unmasked");
+    }
+
+    #[test]
+    fn msi_32bit_and_missing() {
+        let mut bus = FakeBus::default();
+        let d = a(0, 9, 0);
+        let s = bus.add(d, 1, 2, 0, 0);
+        s[1] = 1 << 20;
+        s[0x34 / 4] = 0x40;
+        s[0x40 / 4] = 0x05;
+        assert!(enable_msi(&bus, d, 0xfee0_0000, 0x49));
+        let s = bus.space.borrow()[&d];
+        assert_eq!((s[0x40 / 4] >> 16) & 1, 1);
+        assert_eq!(s[0x44 / 4], 0xfee0_0000);
+        assert_eq!(s[0x48 / 4] & 0xffff, 0x49);
+        let e = a(0, 10, 0);
+        bus.add(e, 1, 2, 0, 0);
+        assert!(!enable_msi(&bus, e, 0xfee0_0000, 0x49));
     }
 }
